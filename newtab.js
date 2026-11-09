@@ -360,7 +360,13 @@ LambdaData.ready.then(D => {
       const img = new Image(); img.crossOrigin = 'anonymous'; img.decoding = 'async';
       t = { img, ok: false, failed: false, used: performance.now() };
       img.onload = () => { t.ok = true; loads++; version++; listeners.forEach(f => f(kind, z, x, y, t)); };
-      img.onerror = () => { t.failed = true; failures++; };
+      // A tile can fail CORS when the browser or CDN cache holds a copy saved without the CORS header. Retry once with
+      // a cache-busting query so it's fetched fresh. Label tiles are an optional overlay: they don't count toward broken().
+      let retried = false;
+      img.onerror = () => {
+        if (!retried) { retried = true; img.src = `${url}${url.includes('?') ? '&' : '?'}r=${Date.now() % 1e6}`; return; }
+        t.failed = true; if (kind !== 'labels') failures++;
+      };
       img.src = url;
       cache.set(k, t);
       if (cache.size > 900) { // drop the least recently used tiles
