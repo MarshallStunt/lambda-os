@@ -1927,6 +1927,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     if (!h) return;
     if (h === 'brief') return historyReady.then(openBrief);
     const [k, v] = h.split('=');
+    if (k === 'view' && ['globe', 'graph', 'deploys'].includes(v)) return setView(v);
     if (k === 'dep' && D.deploymentByKey?.(v)) openEntity('deployment', D.deploymentByKey(v));
     if (k === 'ticket' && D.ticketByKey(v)) openEntity('ticket', D.ticketByKey(v));
     if (k === 'site' && D.siteById(v)) { setView('globe'); SiteCard.open(D.siteById(v)); }
