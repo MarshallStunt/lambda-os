@@ -92,3 +92,7 @@ tracked deployments and keys are kept. To release: bump `version` in `manifest.j
 - Claude: it needs an org-approved API path. The ⌘K answers are computed from the loaded data.
 - Slack only works while a Slack tab is open, because it reads through that tab's session.
 - Part names: most NetBox consumable types are bare P/Ns. The Rackside parts catalog could name them.
+
+## Help and ideas
+
+Questions, ideas or something not working? Message **Hadi Khodja** on Slack: https://lambda.slack.com/team/U0AAMLCUCUA
