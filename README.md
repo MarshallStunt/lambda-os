@@ -42,17 +42,18 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   Opens on your first new tab after the brief time (default 08:30 on weekdays). Can be summarized by your AI provider.
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
 
-## Install (unpacked)
-Works in Chrome (and Edge / Brave) on **Windows, macOS and Linux**. Easiest to keep up to date is a git copy:
-```bash
-git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
-```
-(Windows PowerShell: `git clone https://github.com/MarshallStunt/lambda-os.git $HOME\lambda-os`. No git? Download the ZIP from GitHub and unzip it.)
-1. Open `chrome://extensions` and turn on **Developer mode**.
-2. Click **Load unpacked** and pick the `lambda-os` folder. Keep the folder where it is: Chrome runs the extension from it.
-3. Data refreshes in the background every 10 minutes by default (Settings → Data → *Refresh data automatically*: 2 min … 1 h, or off).
-4. Sign in to Jira (lambda-inc.atlassian.net), NetBox (VPN on), NetSuite and Google, keep a Slack tab open, then open a new tab. The first load takes ~10 s; after that it opens instantly from cache and refreshes every 10 minutes in the background.
-4. The ⚙ button opens Settings: Jira site, the JQL for the dashboard and "My queue", NetBox address, optional NetBox token, live/demo.
+## Install (about 5 minutes, just Chrome)
+1. **[Download lambda-os.zip](https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing)** (Google Drive: click the download arrow ⬇ at the top right).
+2. **Unzip it.** Mac: double-click it in Downloads. Windows: right-click it → **Extract All…** → **Extract**.
+3. **Move the `lambda-os` folder into Documents** and keep it there: Chrome runs Lambda OS from it.
+4. In Chrome, go to `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`).
+5. Turn on **Developer mode** (top right).
+6. Click **Load unpacked** (top left) and pick the `lambda-os` folder in Documents.
+7. Open a new tab. If Chrome asks about the new tab page, click **Keep it**.
+8. In the **Sources** row under the top bar, click anything yellow (*allow*) or red (*sign in*) to connect it.
+
+Works on **Windows, macOS and Linux**. Technical users can `git clone https://github.com/MarshallStunt/lambda-os.git`
+instead and update with the one-line command in Settings → Updates.
 
 ## Using it
 - **⌘K** (Ctrl+K on Windows/Linux) or **/** opens search; **⌘J** / Ctrl+J opens the AI panel. Try `CMH01`, a hostname, `DC-33191`, `low stock at LAX01`, `203-000536`, `waiting parts on site`, `what breaches SLA today`, or start with `?` to force a question.
@@ -61,11 +62,14 @@ git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.
 
 ## Updates
-Like Lambda Rackside: every 2 hours Lambda OS reads the latest `manifest.json` from this repo on GitHub. When there's
-a newer version you get a
-**NEW** badge, one notification, and **⬆ Update** in the top bar. Settings → **Updates** has a one-line command that
-finds your folder and runs `git pull` (or downloads the ZIP for non-git copies), then **Reload extension**. Settings,
-tracked deployments and keys are kept. To release: bump `version` in `manifest.json` and push to `main`.
+Every 2 hours Lambda OS reads the latest `manifest.json` from this repo on GitHub. When there's a newer version you get
+a **NEW** badge, one notification and **⬆ Update** in the top bar. To update: download
+[lambda-os.zip](https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing) again, unzip it, replace the old `lambda-os` folder with the new one (same place, same name), then
+click ↻ on `chrome://extensions` (or Settings → Updates → **Reload extension**). Settings and tracked deployments are
+kept. Git copies: Settings → Updates has a one-line command.
+
+To release: bump `version` in `manifest.json`, push to `main`, and replace lambda-os.zip on Google Drive
+(Drive → right-click the file → **Manage versions** → upload, so the link stays the same).
 
 ## Files
 | File | What it is |

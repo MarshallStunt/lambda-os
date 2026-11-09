@@ -243,8 +243,8 @@ async function showUpdate(force) {
     : u.available ? `<b class="st-good">🆕 Version ${esc(u.latest)} is available</b> (you have ${esc(u.current)}).` : `✓ You have the latest version (${esc(u.current)}).`;
   $('updHow').hidden = !u.available; $('updLater').hidden = !u.available; $('updLater').dataset.version = u.latest || '';
 }
-$('updCmdLabel').textContent = `1. Get the new version: paste this in ${{ win: 'PowerShell', mac: 'Terminal', linux: 'a terminal', cros: 'the Linux terminal' }[window.LambdaPlatform?.os || 'linux']}. It finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder.`;
-$('updChanges').href = LambdaUpdates.LINKS.changes; $('updZip').href = LambdaUpdates.LINKS.zip; $('updCmd').value = LambdaUpdates.command();
+$('updCmdLabel').textContent = `Paste this in ${{ win: 'PowerShell', mac: 'Terminal', linux: 'a terminal', cros: 'the Linux terminal' }[window.LambdaPlatform?.os || 'linux']}. It finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder.`;
+$('updChanges').href = LambdaUpdates.LINKS.changes; $('updZip').href = LambdaUpdates.LINKS.zip; $('updDownload').href = LambdaUpdates.LINKS.download; $('updCmd').value = LambdaUpdates.command();
 $('updCheck').addEventListener('click', () => showUpdate(true));
 $('updCopy').addEventListener('click', async () => { await navigator.clipboard.writeText($('updCmd').value); $('updCopy').textContent = 'Copied ✓'; setTimeout(() => ($('updCopy').textContent = 'Copy'), 1500); });
 $('updReload').addEventListener('click', () => chrome.runtime.reload());
