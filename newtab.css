@@ -610,3 +610,8 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 .layout { height: calc(100vh - 64px - 30px); }
 :root[data-density="compact"] .layout { height: calc(100vh - 54px - 30px); }
 @media (max-width: 1000px) { .layout { height: auto; } }
+/* dark theme: define the glass/field tokens on :root too (they were only set for the stage and the light theme) */
+:root { --glass: rgba(5, 7, 13, 0.82); --glass-strong: rgba(10, 15, 28, 0.985); --field: rgba(20, 30, 52, 0.55); --track: rgba(255,255,255,.08); }
+:root[data-theme="light"] { --glass: rgba(255, 255, 255, 0.72); --glass-strong: rgba(255, 255, 255, 0.98); --field: rgba(255, 255, 255, 0.9); --track: rgba(10,20,40,.09); }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --glass: rgba(255, 255, 255, 0.72); --glass-strong: rgba(255, 255, 255, 0.98); --field: rgba(255, 255, 255, 0.9); --track: rgba(10,20,40,.09); } }
+.aipanel, .alertpop, .brief { backdrop-filter: blur(18px); }
