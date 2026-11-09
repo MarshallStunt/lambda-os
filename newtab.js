@@ -76,10 +76,11 @@ LambdaData.ready.then(D => {
   // Healthy sources are just dots (name on hover); only sources that need you get a labeled, clickable pill.
   const needsYou = s => s.access || s.state === 'error' || s.state === 'stale';
   const pillLabel = s => s.access ? `${s.name} · allow` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`;
-  $('#sources').innerHTML = `<span class="src-dots" aria-label="Connected sources">${D.SOURCES.filter(s => !needsYou(s)).map(s =>
-      `<span class="src-dot ${s.state}" title="${esc(`${s.name}: ${s.title}`)}" aria-label="${esc(s.name)} ${s.state}"></span>`).join('')}</span>`
-    + D.SOURCES.filter(needsYou).map(s =>
-      `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`).join('');
+  // Every data source by name in the status strip; the ones that need you say why and are clickable.
+  // (AI isn't listed here: its status lives in the ✨ Ask AI panel.)
+  $('#sources').innerHTML = D.SOURCES.filter(s => s.key !== 'claude').map(s => needsYou(s)
+    ? `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`
+    : `<span class="source-pill ${s.state}" title="${esc(s.title)}"><i></i>${esc(s.name)}${s.state === 'off' ? ' · off' : ''}</span>`).join('');
   $('#sources').addEventListener('click', async e => {
     const b = e.target.closest('.source-pill'); if (!b) return;
     const needs = D.SOURCES.filter(x => x.access).flatMap(x => x.access);

@@ -25,8 +25,6 @@
     <div class="top-right">
       <button class="updbtn" id="updBtn" hidden title="A new version of Lambda OS is available">⬆ Update</button>
       <button class="aibtn" id="aiBtn" title="Ask the AI assistant (⌘J)">✨ Ask AI</button>
-      <div class="sources" id="sources"></div>
-      <button class="updated" id="updated" hidden></button>
       <button class="bellbtn" id="bellBtn" aria-label="Alerts">🔔<b id="bellCount"></b></button>
       <div class="alertpop" id="alertPop" hidden></div>
       <button class="briefbtn" id="briefBtn" title="Daily brief">☀ Brief</button>
@@ -35,6 +33,13 @@
       <div class="clock"><span id="clockTime">--:--</span><small id="clockDate"></small></div>
     </div>
   </header>
+
+  <!-- Status strip: every source by name, plus when the data was last updated -->
+  <div class="statusbar" role="status" aria-label="Data sources">
+    <span class="sb-label">Sources</span>
+    <div class="sources" id="sources"></div>
+    <button class="updated" id="updated" hidden></button>
+  </div>
 
   <main class="layout">
     <!-- Left: me -->
