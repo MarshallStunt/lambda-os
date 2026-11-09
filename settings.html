@@ -212,11 +212,18 @@
         <button class="btn" id="updLater" type="button" hidden>Later</button>
       </div>
       <div id="updHow" hidden>
-        <label id="updCmdLabel">1. Get the new version: paste this in Terminal (it finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder)</label>
-        <div class="keyrow"><input type="text" id="updCmd" readonly class="mono"><button class="btn" id="updCopy" type="button">Copy</button></div>
-        <p class="hint">Or <a class="linkish" id="updZip" target="_blank" rel="noopener">download the ZIP</a> and copy its files over your lambda-os folder.</p>
-        <label>2. Load it</label>
-        <div class="row" style="margin-top:4px"><button class="btn primary" id="updReload" type="button">Reload extension</button><span class="hint">Your settings, tracked deployments and keys are kept.</span></div>
+        <label>How to update (2 minutes)</label>
+        <ol class="hint" style="margin:6px 0 10px 18px;line-height:1.7">
+          <li><a class="linkish" id="updDownload" target="_blank" rel="noopener">Download the new lambda-os.zip</a> and unzip it (Windows: right-click it → Extract All).</li>
+          <li>Delete your old <b>lambda-os</b> folder and put the new <b>lambda-os</b> folder in the same place (same name).</li>
+          <li>Click <b>Reload extension</b> below. Your settings, tracked deployments and keys are kept.</li>
+        </ol>
+        <div class="row" style="margin-top:4px"><button class="btn primary" id="updReload" type="button">Reload extension</button></div>
+        <details style="margin-top:10px"><summary class="hint">Advanced: update with one command (for git copies)</summary>
+          <label id="updCmdLabel">Paste this in Terminal (it finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder)</label>
+          <div class="keyrow"><input type="text" id="updCmd" readonly class="mono"><button class="btn" id="updCopy" type="button">Copy</button></div>
+          <p class="hint">Or <a class="linkish" id="updZip" target="_blank" rel="noopener">download the ZIP from GitHub</a>.</p>
+        </details>
       </div>
       <p class="hint">Updates come from the public GitHub repo (github.com/MarshallStunt/lambda-os). Checked every 2 hours; a NEW badge and one notification per version tell you when one is out.</p>
     </fieldset>
