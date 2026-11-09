@@ -120,9 +120,17 @@ $('alTest').addEventListener('click', async () => {
   }
   if (status?.ok) row('good', 'Chrome created the test notification.');
   else row('critical', `Chrome couldn't create the notification (${esc(status?.error || 'unknown error')}).`);
-  if (ping?.ok && level === 'granted' && status?.ok) row('warning', `So if no pop-up appeared, <b>macOS is hiding Chrome's notifications</b>. Open System Settings → Notifications → <b>Google Chrome</b>: turn on <i>Allow notifications</i> and pick <i>Banners</i> or <i>Alerts</i>. Also check that a Focus / Do Not Disturb isn't on (Control Center). Until then, every alert is still in the 🔔 alert center on the dashboard.`);
-  say(steps.join('') + `<div class="row"><button class="btn" id="openMacNotif">Open macOS notification settings</button><button class="btn" id="openChromeNotif">Chrome notification settings</button></div>`);
-  $('openMacNotif').onclick = () => { window.location.href = 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'; };
+  const os = window.LambdaPlatform?.os || 'linux';
+  const osHelp = {
+    mac: `<b>macOS is hiding Chrome's notifications</b>. Open System Settings → Notifications → <b>Google Chrome</b>: turn on <i>Allow notifications</i> and pick <i>Banners</i> or <i>Alerts</i>. Also check that a Focus / Do Not Disturb isn't on (Control Center).`,
+    win: `<b>Windows is hiding Chrome's notifications</b>. Open Settings → System → Notifications: make sure notifications are on and <b>Google Chrome</b> is allowed. Also check that <i>Do not disturb</i> / Focus assist is off.`,
+    linux: `<b>your desktop is hiding Chrome's notifications</b>. Check your desktop's notification settings (GNOME: Settings → Notifications → Google Chrome; KDE: System Settings → Notifications) and that Do Not Disturb is off.`,
+    cros: `<b>ChromeOS is hiding notifications</b>. Open the quick settings and make sure Do not disturb is off, and that notifications from Chrome are allowed.`,
+  };
+  const osLink = { mac: ['Open macOS notification settings', 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'], win: ['Open Windows notification settings', 'ms-settings:notifications'] }[os];
+  if (ping?.ok && level === 'granted' && status?.ok) row('warning', `So if no pop-up appeared, ${osHelp[os]} Until then, every alert is still in the 🔔 alert center on the dashboard.`);
+  say(steps.join('') + `<div class="row">${osLink ? `<button class="btn" id="openOsNotif">${osLink[0]}</button>` : ''}<button class="btn" id="openChromeNotif">Chrome notification settings</button></div>`);
+  if (osLink) $('openOsNotif').onclick = () => { window.location.href = osLink[1]; };
   $('openChromeNotif').onclick = () => chrome.tabs.create({ url: 'chrome://settings/content/notifications' });
 });
 $('brTest').addEventListener('click', async () => { await save({ quiet: true }); chrome.runtime.sendMessage({ type: 'test-brief' }).then(() => say('<p class="st-good">Brief notification sent. Click it to open the brief.</p>')); });
@@ -235,6 +243,7 @@ async function showUpdate(force) {
     : u.available ? `<b class="st-good">🆕 Version ${esc(u.latest)} is available</b> (you have ${esc(u.current)}).` : `✓ You have the latest version (${esc(u.current)}).`;
   $('updHow').hidden = !u.available; $('updLater').hidden = !u.available; $('updLater').dataset.version = u.latest || '';
 }
+$('updCmdLabel').textContent = `1. Get the new version: paste this in ${{ win: 'PowerShell', mac: 'Terminal', linux: 'a terminal', cros: 'the Linux terminal' }[window.LambdaPlatform?.os || 'linux']}. It finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder.`;
 $('updChanges').href = LambdaUpdates.LINKS.changes; $('updZip').href = LambdaUpdates.LINKS.zip; $('updCmd').value = LambdaUpdates.command();
 $('updCheck').addEventListener('click', () => showUpdate(true));
 $('updCopy').addEventListener('click', async () => { await navigator.clipboard.writeText($('updCmd').value); $('updCopy').textContent = 'Copied ✓'; setTimeout(() => ($('updCopy').textContent = 'Copy'), 1500); });

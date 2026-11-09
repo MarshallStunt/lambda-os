@@ -43,10 +43,11 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
 
 ## Install (unpacked)
-Easiest to keep up to date is a git copy:
+Works in Chrome (and Edge / Brave) on **Windows, macOS and Linux**. Easiest to keep up to date is a git copy:
 ```bash
 git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
 ```
+(Windows PowerShell: `git clone https://github.com/MarshallStunt/lambda-os.git $HOME\lambda-os`. No git? Download the ZIP from GitHub and unzip it.)
 1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and pick the `lambda-os` folder. Keep the folder where it is: Chrome runs the extension from it.
 3. Data refreshes in the background every 10 minutes by default (Settings → Data → *Refresh data automatically*: 2 min … 1 h, or off).
@@ -54,7 +55,7 @@ git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
 4. The ⚙ button opens Settings: Jira site, the JQL for the dashboard and "My queue", NetBox address, optional NetBox token, live/demo.
 
 ## Using it
-- **⌘K** or **/** opens search. Try `CMH01`, a hostname, `DC-33191`, `low stock at LAX01`, `203-000536`, `waiting parts on site`, `what breaches SLA today`, or start with `?` to force a question.
+- **⌘K** (Ctrl+K on Windows/Linux) or **/** opens search; **⌘J** / Ctrl+J opens the AI panel. Try `CMH01`, a hostname, `DC-33191`, `low stock at LAX01`, `203-000536`, `waiting parts on site`, `what breaches SLA today`, or start with `?` to force a question.
 - **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.

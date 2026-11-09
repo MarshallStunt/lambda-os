@@ -172,7 +172,7 @@
           <select id="aiEffort"><option value="low">Low: fastest, cheapest</option><option value="medium">Medium: balanced (default)</option><option value="high">High: most thorough</option></select></div>
         <div class="row" style="margin-top:10px"><button class="btn" id="aiTest" type="button">Test AI connection</button><span class="hint" id="aiTestOut"></span></div>
       </div>
-      <p class="hint">Ask from ⌘K: answers are grounded in the dashboard's loaded data and link straight to tickets, deployments and sites. Your key stays in this browser, is sent only to the provider you pick, and is never written to backups.</p>
+      <p class="hint">Ask with <b>✨ Ask AI</b> in the top bar or from the search bar: answers are grounded in the dashboard's loaded data and link straight to tickets, deployments and sites. Your key stays in this browser, is sent only to the provider you pick, and is never written to backups.</p>
     </fieldset>
 
     <fieldset>
@@ -200,7 +200,7 @@
         <label for="privWords">Always mask these words (customer names, project code names…), one per line</label>
         <textarea id="privWords" placeholder="Microsoft&#10;Project Starship"></textarea>
       </div>
-      <p class="note">Masked values are swapped for placeholders like <code>[PERSON_2]</code> before the request leaves your browser, and swapped back in the answer only on your screen. In ⌘K, <b>What was sent</b> shows the exact message for every answer.</p>
+      <p class="note">Masked values are swapped for placeholders like <code>[PERSON_2]</code> before the request leaves your browser, and swapped back in the answer only on your screen. Under every AI answer, <b>What was sent</b> shows the exact message.</p>
     </fieldset>
 
     <fieldset id="updates">
@@ -212,7 +212,7 @@
         <button class="btn" id="updLater" type="button" hidden>Later</button>
       </div>
       <div id="updHow" hidden>
-        <label>1. Get the new version: paste this in Terminal (PowerShell on Windows) (it finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder)</label>
+        <label id="updCmdLabel">1. Get the new version: paste this in Terminal (it finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder)</label>
         <div class="keyrow"><input type="text" id="updCmd" readonly class="mono"><button class="btn" id="updCopy" type="button">Copy</button></div>
         <p class="hint">Or <a class="linkish" id="updZip" target="_blank" rel="noopener">download the ZIP</a> and copy its files over your lambda-os folder.</p>
         <label>2. Load it</label>
