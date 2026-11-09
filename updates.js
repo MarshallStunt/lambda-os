@@ -1,5 +1,5 @@
-// Update check, like Lambda Rackside: reads the latest manifest.json from the private GitHub repo with the user's
-// own GitHub sign-in in Chrome (so only people who can see the repo get updates), at most every 2 hours.
+// Update check, like Lambda Rackside: reads the latest manifest.json from the public GitHub repo, at most every
+// 2 hours (no GitHub sign-in needed).
 // Chrome doesn't let an unpacked extension rewrite its own folder, so updating = pull (git copy) or copy the new ZIP
 // over the folder, then reload the extension. Settings → Updates gives a one-line command that finds the folder.
 
@@ -26,10 +26,10 @@ const LambdaUpdates = (() => {
       try {
         // github.com/…/raw/… redirects to a short-lived raw.githubusercontent.com link when the signed-in account can see the repo.
         const res = await fetch(`https://github.com/${REPO}/raw/main/manifest.json`, { credentials: 'include', cache: 'no-store' });
-        if (res.status === 404) throw new Error('sign in to GitHub in Chrome with an account that can see the lambda-os repo');
+        if (res.status === 404) throw new Error(`the ${REPO} repo or its manifest.json wasn't found on GitHub`);
         if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status}`);
         const latest = (await res.json().catch(() => ({}))).version;
-        if (!latest) throw new Error('sign in to GitHub in Chrome with an account that can see the lambda-os repo');
+        if (!latest) throw new Error('GitHub sent back something other than the manifest');
         r = { ok: true, latest, at: Date.now() };
       } catch (e) {
         r = { ok: false, error: e.message, at: Date.now() };
