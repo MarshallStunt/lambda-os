@@ -1,6 +1,11 @@
 // Applies the saved look (theme, accent, density, text size, glow, motion) before the page paints, so there's no flash.
 // The look is mirrored in localStorage for this synchronous first read; chrome.storage settings.look is the source of truth.
 (function () {
+  // Platform: shortcut labels, update commands and help text differ on Windows / macOS / Linux.
+  const p = `${navigator.userAgentData?.platform || ''} ${navigator.platform || ''} ${navigator.userAgent}`;
+  const os = /Win/i.test(p) ? 'win' : /Mac/i.test(p) ? 'mac' : /CrOS/i.test(p) ? 'cros' : 'linux';
+  window.LambdaPlatform = { os, mod: os === 'mac' ? '⌘' : 'Ctrl', key: k => os === 'mac' ? `⌘${k}` : `Ctrl+${k}` };
+  document.documentElement.dataset.os = os;
   const DEFAULT = { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' };
   function apply(look) {
     const l = { ...DEFAULT, ...(look || {}) }, html = document.documentElement;

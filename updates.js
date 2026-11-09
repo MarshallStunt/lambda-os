@@ -51,6 +51,12 @@ const LambdaUpdates = (() => {
         `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
         `if (-not $d) { 'lambda-os folder not found' } elseif (Test-Path "$d\\.git") { git -C "$d" pull } else { Start-Process '${LINKS.zip}'; explorer.exe $d; '${note}' }`;
     }
+    if (!/Mac/.test(ua)) { // Linux / ChromeOS Linux: Chrome keeps profiles under ~/.config; read the extension's path with python3
+      const dirs = edge ? ['~/.config/microsoft-edge'] : brave ? ['~/.config/BraveSoftware/Brave-Browser'] : ['~/.config/google-chrome', '~/.config/chromium', '~/.config/google-chrome-beta'];
+      const files = dirs.map(d => `${d}/*/Secure\\ Preferences ${d}/*/Preferences`).join(' ');
+      return `for f in ${files}; do d=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extensions"]["settings"][sys.argv[2]]["path"])' "$f" ${id} 2>/dev/null) && [ -n "$d" ] && break; done; ` +
+        `if [ -z "$d" ]; then echo "lambda-os folder not found"; elif [ -d "$d/.git" ]; then git -C "$d" pull; else xdg-open "${LINKS.zip}"; xdg-open "$d"; echo "${note}"; fi`;
+    }
     const dir = `~/Library/Application\\ Support/${edge ? 'Microsoft\\ Edge' : brave ? 'BraveSoftware/Brave-Browser' : 'Google/Chrome'}`;
     return `for f in ${dir}/*/Secure\\ Preferences ${dir}/*/Preferences; do d=$(plutil -extract extensions.settings.${id}.path raw -o - "$f" 2>/dev/null) && break; done; ` +
       `if [ -z "$d" ]; then echo "lambda-os folder not found"; elif [ -d "$d/.git" ]; then git -C "$d" pull; else open "${LINKS.zip}"; open "$d"; echo "${note}"; fi`;

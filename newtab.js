@@ -10,6 +10,7 @@ LambdaData.ready.then(D => {
   // Canvas colors come from the stage, which stays dark in both themes (so a theme switch needs no repaint of the canvases).
   const stageStyle = getComputedStyle(document.querySelector('.stage') || document.documentElement);
   const cssVar = n => stageStyle.getPropertyValue(n).trim();
+  const MONO = 'ui-monospace, Menlo, Consolas, "Cascadia Mono", "DejaVu Sans Mono", "Liberation Mono", monospace';
   const CALM = document.documentElement.dataset.motion === 'reduced' || matchMedia('(prefers-reduced-motion: reduce)').matches;
   const C = {};
   ['--good', '--warning', '--serious', '--critical', '--idle', '--accent', '--accent-2', '--text', '--text-2', '--muted', '--panel-solid',
@@ -72,8 +73,13 @@ LambdaData.ready.then(D => {
   badge.textContent = D.MODE === 'live' ? 'LIVE' : 'DEMO DATA';
   badge.classList.toggle('live', D.MODE === 'live');
   badge.title = D.MODE === 'live' ? 'Live NetBox and Jira data, using your own sign-ins' : (D.NOTE || 'Demo data. Switch to live in Settings.');
-  $('#sources').innerHTML = D.SOURCES.map(s =>
-    `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${s.name}${s.access ? ' · allow' : ''}</button>`).join('');
+  // Healthy sources are just dots (name on hover); only sources that need you get a labeled, clickable pill.
+  const needsYou = s => s.access || s.state === 'error' || s.state === 'stale';
+  const pillLabel = s => s.access ? `${s.name} · allow` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`;
+  $('#sources').innerHTML = `<span class="src-dots" aria-label="Connected sources">${D.SOURCES.filter(s => !needsYou(s)).map(s =>
+      `<span class="src-dot ${s.state}" title="${esc(`${s.name}: ${s.title}`)}" aria-label="${esc(s.name)} ${s.state}"></span>`).join('')}</span>`
+    + D.SOURCES.filter(needsYou).map(s =>
+      `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`).join('');
   $('#sources').addEventListener('click', async e => {
     const b = e.target.closest('.source-pill'); if (!b) return;
     const needs = D.SOURCES.filter(x => x.access).flatMap(x => x.access);
@@ -94,8 +100,10 @@ LambdaData.ready.then(D => {
     if (D.MODE !== 'live') { updated.hidden = true; return; }
     updated.hidden = false;
     const every = SET_REFRESH ? ` · every ${SET_REFRESH >= 60 ? '1h' : SET_REFRESH + 'm'}` : SET_REFRESH === 0 ? ' · manual' : '';
-    updated.innerHTML = fresh ? '<b>New data</b> · reload' : `Updated ${rel(D.AT)}${rel(D.AT) === 'now' ? '' : ' ago'}${every} ↻`;
-    updated.title = fresh ? 'New data is ready. It loads by itself once you’ve been idle for a minute, or click now.' : `Data refreshes in the background${every}. Change it in Settings → Data. Click to refresh now.`;
+    // Compact in the top bar ("↻ 3m"); the full story is in the tooltip.
+    updated.innerHTML = fresh ? '<b>↻ New</b>' : `↻ ${rel(D.AT)}`;
+    updated.title = fresh ? 'New data is ready. It loads by itself once you’ve been idle for a minute, or click to load it now.'
+      : `Updated ${rel(D.AT)}${rel(D.AT) === 'now' ? '' : ' ago'}${every.replace(' · ', ' · refreshes ')}. Click to refresh now (change the interval in Settings → Data).`;
     updated.classList.toggle('fresh', !!fresh);
   }
   paintUpdated(); setInterval(() => !updated.classList.contains('fresh') && paintUpdated(), 30000);
@@ -106,6 +114,8 @@ LambdaData.ready.then(D => {
     location.reload();
   });
   // Theme toggle: System → Light → Dark. Only CSS changes, so it's instant.
+  const KEY = k => window.LambdaPlatform?.key(k) || `Ctrl+${k}`;
+  $('#cmdKbd').textContent = KEY('K'); $('#aiBtn').title = `Ask the AI assistant (${KEY('J')})`;
   const lookBtn = $('#lookBtn'), THEMES = ['system', 'light', 'dark'], ICON = { system: '◐', light: '☀', dark: '☾' };
   const paintLook = () => { const t = window.LambdaLook?.current().theme || 'system'; lookBtn.textContent = ICON[t]; lookBtn.title = `Theme: ${t[0].toUpperCase() + t.slice(1)} (click to change · more in Settings → Appearance)`; };
   paintLook();
@@ -607,7 +617,7 @@ LambdaData.ready.then(D => {
       });
       const boxes = [];
       labels.filter(l => l.pri > 0).sort((a, b) => b.pri - a.pri || (b.s.devices || 0) - (a.s.devices || 0)).forEach(({ s, p, sel, hov, idle }) => {
-        ctx.font = '600 11px ui-monospace, Menlo, monospace';
+        ctx.font = `600 11px ${MONO}`;
         const bw = ctx.measureText(s.id).width + 4, box = [p.x + 8, p.y - 7, p.x + 8 + bw, p.y + (sel || hov ? 20 : 7)];
         if (!(sel || hov) && boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
         boxes.push(box);
@@ -842,7 +852,7 @@ LambdaData.ready.then(D => {
       });
       const boxes = [];
       labels.filter(l => l.pri > 0).sort((a, b) => b.pri - a.pri || (b.s.devices || 0) - (a.s.devices || 0)).forEach(({ s, p, sel, hov, idle }) => {
-        ctx.font = '600 11px ui-monospace, Menlo, monospace';
+        ctx.font = `600 11px ${MONO}`;
         const bw = ctx.measureText(s.id).width + 4, box = [p.x + 8, p.y - 7, p.x + 8 + bw, p.y + (sel || hov ? 20 : 7)];
         if (!(sel || hov) && boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
         boxes.push(box);
@@ -1128,7 +1138,7 @@ LambdaData.ready.then(D => {
         const show = focus ? (n === focus || focus.nb.has(n)) : always || view.k > 2;
         if (!show) continue;
         const big = n.type === 'project' || n.type === 'site';
-        ctx.font = `${big ? '600 ' : ''}${(big ? 12 : 10.5) / view.k}px ${n.type === 'site' || n.type === 'ticket' ? 'ui-monospace, Menlo, monospace' : 'system-ui, sans-serif'}`;
+        ctx.font = `${big ? '600 ' : ''}${(big ? 12 : 10.5) / view.k}px ${n.type === 'site' || n.type === 'ticket' ? MONO : 'system-ui, sans-serif'}`;
         ctx.fillStyle = n === focus ? '#fff' : big ? C.text : C['text-2'];
         const label = n.label.length > 42 ? n.label.slice(0, 41) + '…' : n.label;
         ctx.fillText(label, n.x + TYPES[n.type].r + 5 / view.k, n.y);
@@ -1547,7 +1557,7 @@ LambdaData.ready.then(D => {
         ? [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask ${st.label}: “${qt}”`, sub: `${st.model} · grounded in your loaded data${SET?.privacy?.mode === 'redact' ? ' · private values masked' : ''}`, run: () => askAI(q) },
            { group: 'Ask', icon: '⌁', color: C.accent, title: `Quick answer: “${qt}”`, sub: 'Instant, from local data only (nothing leaves your browser)', run: () => ask(q) }]
         : [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask: “${qt}”`, sub: `Answered from local data · ${st.why}`, run: () => ask(q) },
-           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: 'Chat panel (⌘J)', run: () => askAI(q) }];
+           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) }];
       const lq = q.toLowerCase(), go = apps().filter(a => `${a[0]} ${a[1]}`.toLowerCase().includes(lq) || (lq.length >= 3 && a[0].toLowerCase().startsWith(lq))).map(goRow);
       const hits = q.startsWith('?') ? [] : [...search(q), ...go];
       results = looksLikeQuestion(q) || !hits.length ? [...askRows, ...hits] : [...hits, ...askRows];

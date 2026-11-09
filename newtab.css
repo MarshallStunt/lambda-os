@@ -575,3 +575,24 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 /* site card: actions right under the title */
 .site-card .card-actions { margin: 10px 0 6px; gap: 6px; }
 .site-card .card-actions .btn { padding: 5px 10px; font-size: 11.5px; }
+/* top bar: keep every source pill visible */
+.top-right { gap: 8px; }
+.sources { gap: 4px; flex-shrink: 1; }
+.source-pill { padding: 2px 7px; font-size: 10.5px; gap: 5px; }
+.updated { padding: 2px 8px; font: 600 11px var(--mono); flex-shrink: 0; }
+.aibtn, .briefbtn, .bellbtn, .lookbtn, .gear, .updbtn { flex-shrink: 0; }
+@media (max-width: 1500px) { .source-pill { padding: 2px 6px; } .clock { font-size: 16px; } .briefbtn { padding: 4px 8px; } }
+/* sources: dots for healthy, pills only for what needs you */
+.sources { overflow: visible; flex-shrink: 0; align-items: center; }
+.src-dots { display: inline-flex; gap: 5px; align-items: center; padding: 0 4px; }
+.src-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); cursor: help; }
+.src-dot.off { background: var(--muted); box-shadow: none; opacity: .5; }
+.src-dot.demo { background: var(--warning); box-shadow: none; }
+:root[data-glow="off"] .src-dot { box-shadow: none; }
+.topbar { grid-template-columns: auto minmax(200px, 1fr) auto; }
+/* cross-platform: monospace fallbacks for Windows/Linux, and thin themed scrollbars (Windows/Linux default to bright, chunky ones) */
+:root { --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Mono", "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --font: system-ui, -apple-system, "Segoe UI", Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif; }
+* { scrollbar-width: thin; scrollbar-color: var(--line-hi) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 8px; } ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
