@@ -43,7 +43,7 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
 
 ## Install (unpacked)
-Easiest to keep up to date is a git copy (the repo is private: you need access to `MarshallStunt/lambda-os`):
+Easiest to keep up to date is a git copy:
 ```bash
 git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
 ```
@@ -60,8 +60,8 @@ git clone https://github.com/MarshallStunt/lambda-os.git ~/lambda-os
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.
 
 ## Updates
-Like Lambda Rackside: every 2 hours Lambda OS reads the latest `manifest.json` from the private repo with your GitHub
-sign-in in Chrome (sign in to GitHub with an account that can see the repo). When there's a newer version you get a
+Like Lambda Rackside: every 2 hours Lambda OS reads the latest `manifest.json` from this repo on GitHub. When there's
+a newer version you get a
 **NEW** badge, one notification, and **⬆ Update** in the top bar. Settings → **Updates** has a one-line command that
 finds your folder and runs `git pull` (or downloads the ZIP for non-git copies), then **Reload extension**. Settings,
 tracked deployments and keys are kept. To release: bump `version` in `manifest.json` and push to `main`.
