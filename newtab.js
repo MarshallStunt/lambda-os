@@ -1865,6 +1865,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ['NetSuite', 'Material transactions', `${ns}/app/common/search/searchresults.nl?searchid=${s.nsMovesSearch}`],
       ['Slack', 'Open Slack', L.slack || 'https://app.slack.com/client'], ['Gmail', 'Inbox', 'https://mail.google.com/'], ['Calendar', 'Google Calendar', 'https://calendar.google.com/'],
       ['Lambda OS', 'Settings', '#settings'],
+      ['Lambda OS', `Help, ideas, bugs: message ${LambdaUpdates.HELP.name} on Slack`, LambdaUpdates.HELP.slack],
     ];
   }
   const goRow = ([sys, what, url]) => ({ group: 'Go to', icon: '↗', color: C.accent, title: `${sys} · ${what}`, sub: url.startsWith('#') ? 'Appearance, AI, privacy, sources' : url.replace(/^https?:\/\//, '').slice(0, 70),
@@ -1992,5 +1993,9 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
 }).catch(err => {
   console.error(err);
   const b = $('#bootMsg');
-  if (b) b.textContent = `Something went wrong loading Lambda OS: ${err.message}`;
+  if (b) {
+    b.textContent = `Something went wrong loading Lambda OS: ${err.message}. `;
+    const a = Object.assign(document.createElement('a'), { href: LambdaUpdates.HELP.slack, target: '_blank', rel: 'noopener', textContent: `Message ${LambdaUpdates.HELP.name} on Slack` });
+    b.append(a);
+  }
 });

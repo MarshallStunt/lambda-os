@@ -11,6 +11,8 @@ const LambdaUpdates = (() => {
     changes: `https://github.com/${REPO}/commits/main`,
     zip: `https://github.com/${REPO}/archive/refs/heads/main.zip`,
   };
+  // Help, ideas and bug reports go to the maintainer on Slack.
+  const HELP = { name: 'Hadi Khodja', slack: 'https://lambda.slack.com/team/U0AAMLCUCUA' };
   const newer = (a, b) => {
     const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
     for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
@@ -62,7 +64,7 @@ const LambdaUpdates = (() => {
       `if [ -z "$d" ]; then echo "lambda-os folder not found"; elif [ -d "$d/.git" ]; then git -C "$d" pull; else open "${LINKS.zip}"; open "$d"; echo "${note}"; fi`;
   }
 
-  return { REPO, LINKS, check, command, newer };
+  return { REPO, LINKS, HELP, check, command, newer };
 })();
 
 if (typeof self !== 'undefined') self.LambdaUpdates = LambdaUpdates;
