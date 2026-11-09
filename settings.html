@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lambda OS Settings</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="newtab.css">
+  <style>
+    body { overflow: auto; }
+    select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-hi); background: var(--field); color: var(--text); font: 13px var(--font); }
+    .swatches { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+    .swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+    .swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg) inset; }
+    .keyrow { display: flex; gap: 8px; } .keyrow input { flex: 1; }
+    .note { font-size: 12px; color: var(--text-2); background: var(--panel-hi); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 32px 16px 60px; position: relative; z-index: 1; }
+    h1 { font-size: 22px; font-weight: 600; margin: 14px 0 4px; }
+    fieldset { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 16px; margin: 18px 0 0; }
+    legend { padding: 0 6px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-2); }
+    label { display: block; margin: 12px 0 4px; font-size: 12px; color: var(--text-2); }
+    input[type=text], input[type=password], input[type=url], input[type=email], textarea {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-hi); background: rgba(5,7,13,.6); color: var(--text); font: 13px var(--font);
+    }
+    textarea { font-family: var(--mono); font-size: 12px; min-height: 52px; resize: vertical; }
+    .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .radio, .checks { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+    .radio label, .checks label { margin: 0; display: flex; gap: 8px; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; color: var(--text); }
+    .radio input:checked + span { color: var(--accent); }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    .row { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+    .row .spacer { flex: 1; }
+    .btn.danger { border-color: rgba(208,59,59,.6); color: #ff9c9c; }
+    #result { margin-top: 14px; font-size: 12px; }
+    #result .boot-src { margin-top: 6px; }
+    @media (max-width: 600px) { .two { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">λ</span><span class="brand-name">LAMBDA<b>OS</b></span></div>
+    <h1>Settings</h1>
+    <p class="muted">Lambda OS reads everything with your own browser sign-ins. Nothing leaves your browser and no passwords or tokens are stored.</p>
+
+    <fieldset>
+      <legend>Appearance</legend>
+      <label>Theme</label>
+      <div class="radio" id="lookTheme">
+        <label><input type="radio" name="theme" value="system"><span>◐ System</span></label>
+        <label><input type="radio" name="theme" value="light"><span>☀ Light</span></label>
+        <label><input type="radio" name="theme" value="dark"><span>☾ Dark</span></label>
+      </div>
+      <label>Accent color</label>
+      <div class="swatches" id="lookAccent"></div>
+      <div class="two">
+        <div><label for="lookDensity">Density</label><select id="lookDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+        <div><label for="lookText">Text size</label><select id="lookText"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></div>
+        <div><label for="lookGlow">Glow effects</label><select id="lookGlow"><option value="on">On</option><option value="off">Off (flatter)</option></select></div>
+        <div><label for="lookMotion">Motion</label><select id="lookMotion"><option value="full">Full (rotating globe, firing neurons)</option><option value="reduced">Reduced (calm)</option></select></div>
+      </div>
+      <p class="hint">Changes apply right away here, and on the next new tab. The map and second-brain stage stays dark in both themes so imagery and glow stay readable.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Data</legend>
+      <div class="radio">
+        <label><input type="radio" name="mode" value="live"><span>Live</span></label>
+        <label><input type="radio" name="mode" value="demo"><span>Demo data</span></label>
+      </div>
+      <label>Sources</label>
+      <div class="checks" id="sourceChecks"></div>
+      <label for="refreshMinutes">Refresh data automatically</label>
+      <select id="refreshMinutes">
+        <option value="2">Every 2 minutes</option><option value="5">Every 5 minutes</option><option value="10">Every 10 minutes (default)</option>
+        <option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option><option value="60">Every hour</option>
+        <option value="0">Off: only when I click ↻</option>
+      </select>
+      <p class="hint">Runs in the background even when no dashboard tab is open, and alerts are checked after each refresh. Open dashboards pick up new data once you've been idle for a minute. Faster refreshes mean more requests to Jira, NetBox and NetSuite.</p>
+      <p class="hint">Slack is read through your open Slack tab (app.slack.com), so keep one open. Gmail and Calendar use your Google sign-in in Chrome.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Jira</legend>
+      <label for="jiraUrl">Jira site</label>
+      <input type="url" id="jiraUrl" placeholder="https://lambda-inc.atlassian.net">
+      <label for="fleetJql">DC tickets (JQL)</label>
+      <textarea id="fleetJql"></textarea>
+      <label for="mineJql">“My tickets” (JQL)</label>
+      <textarea id="mineJql"></textarea>
+      <label for="portfolioJql">Projects &amp; deployments (JQL): initiatives are projects, epics are deployments</label>
+      <textarea id="portfolioJql"></textarea>
+      <label for="intakeJql">More deployments (JQL, optional), e.g. Cluster Intake epics</label>
+      <textarea id="intakeJql"></textarea>
+      <p class="hint">Ticket fields are matched by name: “Data Center Location(s)”, “Hostname”, “Cabinet Name”, “Rack Position”, “Lambda Part Number”, “Time to resolution”. Deployments use “Planned Start”, “Planned End”, “Completion Date”, “Deployment Type”, “Slack Channel”. Progress counts their child workstreams.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>NetBox</legend>
+      <label for="netboxUrl">NetBox address</label>
+      <input type="url" id="netboxUrl" placeholder="https://netbox.prod.lambdalabs.cloud">
+      <label for="netboxToken">API token (optional)</label>
+      <input type="password" id="netboxToken" autocomplete="off" placeholder="Leave empty to use your NetBox browser login">
+      <p class="hint">Needs the VPN. “Low” stock means at or below each line’s alert quantity.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>NetSuite</legend>
+      <label for="netsuiteUrl">NetSuite address</label>
+      <input type="url" id="netsuiteUrl" placeholder="https://4930164.app.netsuite.com">
+      <div class="two">
+        <div><label for="nsOnHandSearch">Material on hand: saved search ID</label><input type="text" id="nsOnHandSearch" placeholder="3151"></div>
+        <div><label for="nsMovesSearch">Material movements: saved search ID</label><input type="text" id="nsMovesSearch" placeholder="3152"></div>
+      </div>
+      <p class="hint">Read with your NetSuite sign-in, using each saved search’s CSV export. The ID is the number after <code>searchid=</code> in the search’s address.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Google</legend>
+      <label for="calendarEmail">Calendar to show (optional)</label>
+      <input type="email" id="calendarEmail" placeholder="Defaults to your Gmail / Jira address">
+    </fieldset>
+
+    <fieldset>
+      <legend>Alerts</legend>
+      <div class="checks"><label><input type="checkbox" id="alEnabled"><span>Desktop alerts on</span></label><label><input type="checkbox" id="alBadge"><span>Urgent count on the toolbar icon</span></label></div>
+      <label>Alert me when</label>
+      <div class="checks">
+        <label><input type="checkbox" data-al="myTickets"><span>My tickets near or past SLA</span></label>
+        <label><input type="checkbox" data-al="assigned"><span>A ticket is assigned to me</span></label>
+        <label><input type="checkbox" data-al="tracked"><span>A tracked deployment changes status</span></label>
+        <label><input type="checkbox" data-al="parts"><span>A part I'm waiting on is on hand</span></label>
+        <label><input type="checkbox" data-al="mentions"><span>I'm mentioned in Slack</span></label>
+        <label><input type="checkbox" data-al="siteCritical"><span>A site turns critical</span></label>
+        <label><input type="checkbox" data-al="sources"><span>A source is signed out or not updating (after 15 min)</span></label>
+      </div>
+      <div class="two">
+        <div><label for="alSla">Warn this many hours before an SLA breach</label><input type="text" id="alSla" inputmode="numeric" placeholder="4"></div>
+        <div><label>Quiet hours (no pop-ups)</label><div class="keyrow"><input type="time" id="alQuietFrom"><input type="time" id="alQuietTo"></div></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="alTest" type="button">Send a test alert</button><span class="hint">Alerts are checked after every background refresh (every 10 minutes). The first check only takes a baseline, so you're not flooded.</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Daily brief</legend>
+      <div class="checks"><label><input type="checkbox" id="brEnabled"><span>Daily brief on</span></label><label><input type="checkbox" id="brAuto"><span>Open it on my first new tab of the day</span></label></div>
+      <div class="two">
+        <div><label for="brTime">Time</label><input type="time" id="brTime"></div>
+        <div><label for="brDays">Days</label><select id="brDays"><option value="weekdays">Weekdays</option><option value="daily">Every day</option></select></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="brTest" type="button">Show the brief notification now</button><span class="hint">Meetings, your breached and due tickets, tracked deployments with progress since yesterday, new tickets and low spares at your sites, parts arrived, mentions. With an AI provider set, the brief can also summarize itself.</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>AI assistant</legend>
+      <label for="aiProvider">Provider</label>
+      <select id="aiProvider">
+        <option value="off">Off: local answers only</option>
+        <option value="anthropic">Claude (Anthropic)</option>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="local">Local model (LM Studio / Ollama)</option>
+      </select>
+      <div id="aiFields">
+        <div id="aiLocalRow"><label for="aiLocalUrl">Local server (OpenAI-compatible)</label>
+          <div class="keyrow"><input type="url" id="aiLocalUrl" placeholder="http://localhost:1234/v1"><button class="btn" data-preset="lmstudio">LM Studio</button><button class="btn" data-preset="ollama">Ollama</button></div></div>
+        <label for="aiKey" id="aiKeyLabel">API key</label>
+        <div class="keyrow"><input type="password" id="aiKey" autocomplete="off"><button class="btn" id="aiKeyShow" type="button">Show</button></div>
+        <label for="aiModel">Model</label>
+        <div class="keyrow"><input type="text" id="aiModel" list="aiModels" placeholder="e.g. claude-opus-5-5"><datalist id="aiModels"></datalist><button class="btn" id="aiLoadModels" type="button">Load models</button></div>
+        <div id="aiEffortRow"><label for="aiEffort">Effort (Claude)</label>
+          <select id="aiEffort"><option value="low">Low: fastest, cheapest</option><option value="medium">Medium: balanced (default)</option><option value="high">High: most thorough</option></select></div>
+        <div class="row" style="margin-top:10px"><button class="btn" id="aiTest" type="button">Test AI connection</button><span class="hint" id="aiTestOut"></span></div>
+      </div>
+      <p class="hint">Ask from ⌘K: answers are grounded in the dashboard's loaded data and link straight to tickets, deployments and sites. Your key stays in this browser, is sent only to the provider you pick, and is never written to backups.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Privacy: what the AI may see</legend>
+      <div class="radio" id="privMode">
+        <label><input type="radio" name="privmode" value="redact"><span>Mask sensitive data (recommended)</span></label>
+        <label><input type="radio" name="privmode" value="off"><span>Send as-is</span></label>
+        <label><input type="radio" name="privmode" value="local"><span>Never send to an AI</span></label>
+      </div>
+      <div id="privOptions">
+        <label>Mask these before sending</label>
+        <div class="checks">
+          <label><input type="checkbox" data-priv="people"><span>People's names</span></label>
+          <label><input type="checkbox" data-priv="emails"><span>Email addresses</span></label>
+          <label><input type="checkbox" data-priv="network"><span>IP / MAC addresses</span></label>
+          <label><input type="checkbox" data-priv="serials"><span>Serial numbers</span></label>
+          <label><input type="checkbox" data-priv="hostnames"><span>Hostnames</span></label>
+          <label><input type="checkbox" data-priv="money"><span>Money amounts</span></label>
+        </div>
+        <label>Leave these out entirely</label>
+        <div class="checks">
+          <label><input type="checkbox" data-priv="messages"><span>Slack & email content</span></label>
+          <label><input type="checkbox" data-priv="calendar"><span>Calendar meetings</span></label>
+        </div>
+        <label for="privWords">Always mask these words (customer names, project code names…), one per line</label>
+        <textarea id="privWords" placeholder="Microsoft&#10;Project Starship"></textarea>
+      </div>
+      <p class="note">Masked values are swapped for placeholders like <code>[PERSON_2]</code> before the request leaves your browser, and swapped back in the answer only on your screen. In ⌘K, <b>What was sent</b> shows the exact message for every answer.</p>
+    </fieldset>
+
+    <fieldset id="updates">
+      <legend>Updates</legend>
+      <p id="updStatus">Checking…</p>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="updCheck" type="button">Check now</button>
+        <a class="btn" id="updChanges" target="_blank" rel="noopener">What's new</a>
+        <button class="btn" id="updLater" type="button" hidden>Later</button>
+      </div>
+      <div id="updHow" hidden>
+        <label>1. Get the new version: paste this in Terminal (PowerShell on Windows) (it finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder)</label>
+        <div class="keyrow"><input type="text" id="updCmd" readonly class="mono"><button class="btn" id="updCopy" type="button">Copy</button></div>
+        <p class="hint">Or <a class="linkish" id="updZip" target="_blank" rel="noopener">download the ZIP</a> and copy its files over your lambda-os folder.</p>
+        <label>2. Load it</label>
+        <div class="row" style="margin-top:4px"><button class="btn primary" id="updReload" type="button">Reload extension</button><span class="hint">Your settings, tracked deployments and keys are kept.</span></div>
+      </div>
+      <p class="hint">Updates come from the private GitHub repo, read with your GitHub sign-in in Chrome, so you need access to it. Checked every 2 hours; a NEW badge and one notification per version tell you when one is out.</p>
+    </fieldset>
+
+    <div class="row">
+      <button class="btn primary" id="save">Save &amp; test connections</button>
+      <button class="btn" id="open">Open dashboard</button>
+      <span class="spacer"></span>
+      <button class="btn" id="exportBtn" title="Download your settings and tracked deployments as a file">Save backup</button>
+      <button class="btn" id="importBtn" title="Restore settings and tracked deployments from a backup file">Load backup</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+    </div>
+    <div class="row">
+      <button class="btn" id="clear">Clear cached data</button>
+      <button class="btn danger" id="reset">Reset settings to defaults</button>
+    </div>
+    <div id="result" role="status"></div>
+  </div>
+  <script src="live.js"></script>
+  <script src="ai.js"></script>
+  <script src="updates.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

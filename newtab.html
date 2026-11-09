@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lambda OS</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+  <div class="boot" id="boot"><div class="boot-card"><div class="brand-mark">λ</div><p id="bootMsg" class="muted">Loading…</p></div></div>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">λ</span>
+      <span class="brand-name">LAMBDA<b>OS</b></span>
+      <span class="mock-badge" id="modeBadge">…</span>
+    </div>
+    <button class="cmd-trigger" id="cmdTrigger" type="button">
+      <span class="cmd-icon" aria-hidden="true">⌕</span>
+      <span>Search sites, devices, tickets, deployments… or ask</span>
+      <kbd>⌘K</kbd>
+    </button>
+    <div class="top-right">
+      <button class="updbtn" id="updBtn" hidden title="A new version of Lambda OS is available">⬆ Update</button>
+      <button class="aibtn" id="aiBtn" title="Ask the AI assistant (⌘J)">✨ Ask AI</button>
+      <div class="sources" id="sources"></div>
+      <button class="updated" id="updated" hidden></button>
+      <button class="bellbtn" id="bellBtn" aria-label="Alerts">🔔<b id="bellCount"></b></button>
+      <div class="alertpop" id="alertPop" hidden></div>
+      <button class="briefbtn" id="briefBtn" title="Daily brief">☀ Brief</button>
+      <button class="lookbtn" id="lookBtn" aria-label="Theme">◐</button>
+      <button class="gear" id="settingsBtn" title="Settings" aria-label="Settings">⚙</button>
+      <div class="clock"><span id="clockTime">--:--</span><small id="clockDate"></small></div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Left: me -->
+    <section class="col col-left">
+      <div class="greeting">
+        <h1 id="greeting">Good day</h1>
+        <p id="greetingSub" class="muted"></p>
+      </div>
+      <div class="kpis" id="kpis"></div>
+      <div class="panel agenda-panel" id="agendaPanel" hidden>
+        <div class="panel-head"><h2 id="agendaTitle">Today</h2><span class="muted" id="agendaNext"></span></div>
+        <ul class="agenda" id="agenda"></ul>
+      </div>
+      <div class="panel queue-panel">
+        <div class="panel-head"><div class="qtabs" id="qtabs" role="tablist">
+            <button data-q="tickets" class="on" role="tab" aria-selected="true"><span id="qTicketsLabel">Tickets</span></button>
+            <button data-q="tracking" role="tab" aria-selected="false">★ Tracking <b id="trackCount"></b></button>
+            <button data-q="inbox" role="tab" aria-selected="false">Inbox <b id="inboxCount"></b></button></div>
+          <span class="muted" id="queueCount"></span></div>
+        <p class="queue-note muted" id="queueNote" hidden>Nothing is assigned to, reported or watched by you, so this shows the most urgent tickets fleet-wide.</p>
+        <ul class="queue" id="queue"></ul>
+      </div>
+    </section>
+
+    <!-- Center: stage -->
+    <section class="col col-center panel stage">
+      <div class="stage-head">
+        <div class="tabs" role="tablist">
+          <button role="tab" class="tab active" data-view="globe" aria-selected="true">Fleet</button>
+          <button role="tab" class="tab" data-view="graph" aria-selected="false">Second brain</button>
+          <button role="tab" class="tab" data-view="deploys" aria-selected="false">Deployments</button>
+        </div>
+        <div class="stage-legend" id="stageLegend"></div>
+      </div>
+      <div class="stage-body">
+        <canvas id="globegl" class="globegl" aria-hidden="true"></canvas>
+        <canvas id="globe" class="view active" aria-label="Globe of Lambda sites"></canvas>
+        <canvas id="flatmap" class="view" aria-label="Map of Lambda sites"></canvas>
+        <canvas id="graph" class="view brain" aria-label="Second brain: sites, deployments, projects, tickets, people, parts, Slack channels and meetings, linked like neurons"></canvas>
+        <div id="deploys" class="view dview" role="region" aria-label="Deployments timeline"></div>
+        <div class="tooltip" id="tooltip" hidden></div>
+        <aside class="site-card" id="siteCard" hidden></aside>
+        <div class="map-attrib" id="mapAttrib" hidden></div>
+        <div class="stage-hint muted" id="stageHint">Drag to rotate · click a site</div>
+      </div>
+    </section>
+
+    <!-- Right: live -->
+    <section class="col col-right">
+      <div class="panel feed-panel">
+        <div class="panel-head"><h2><span class="live-dot" aria-hidden="true"></span>Live</h2>
+          <div class="feed-filters" id="feedFilters"></div></div>
+        <ul class="feed" id="feed"></ul>
+      </div>
+      <div class="panel sites-panel">
+        <div class="panel-head"><h2>Sites</h2><span class="muted" id="siteCount">by open tickets</span></div>
+        <ul class="site-list" id="siteList"></ul>
+      </div>
+    </section>
+  </main>
+
+  <!-- Command palette -->
+  <div class="palette-backdrop" id="palette" hidden>
+    <div class="palette" role="dialog" aria-label="Command palette">
+      <div class="palette-input">
+        <span aria-hidden="true">⌕</span>
+        <input id="paletteInput" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Try: CMH01 · a hostname · DC-12345 · low stock at LAX01 · ? anything">
+        <kbd>esc</kbd>
+      </div>
+      <div class="palette-body" id="paletteBody"></div>
+    </div>
+  </div>
+
+  <!-- Daily brief -->
+  <div class="brief-backdrop" id="brief" hidden><div class="brief" role="dialog" aria-label="Daily brief"></div></div>
+
+  <!-- AI assistant -->
+  <aside class="aipanel" id="aiPanel" hidden aria-label="AI assistant">
+    <div class="aip-head"><div><b>✨ Lambda AI</b><div class="muted small" id="aipStatus"></div></div>
+      <span><button class="chip" data-aip-new title="Start over">New chat</button><button class="x" data-aip-close aria-label="Close">✕</button></span></div>
+    <div class="aip-msgs" id="aipMsgs"></div>
+    <form class="aip-input" id="aipForm"><textarea id="aipText" rows="2" placeholder="Ask about sites, tickets, deployments, spares, shipments…  (Enter to send, Shift+Enter for a new line)"></textarea><button class="btn primary" id="aipSend" type="submit">Ask</button></form>
+  </aside>
+
+  <!-- Detail drawer -->
+  <aside class="drawer" id="drawer" hidden></aside>
+
+  <script src="world.js"></script>
+  <script src="live.js"></script>
+  <script src="data.js"></script>
+  <script src="ai.js"></script>
+  <script src="alerts.js"></script>
+  <script src="updates.js"></script>
+  <script src="newtab.js"></script>
+</body>
+</html>
