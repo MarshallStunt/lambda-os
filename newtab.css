@@ -572,3 +572,6 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 .updbtn { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 99px; white-space: nowrap; color: #fff; background: #2a78d6; }
 .updbtn:hover { filter: brightness(1.1); }
 .updbtn[hidden] { display: none; }
+/* site card: actions right under the title */
+.site-card .card-actions { margin: 10px 0 6px; gap: 6px; }
+.site-card .card-actions .btn { padding: 5px 10px; font-size: 11.5px; }

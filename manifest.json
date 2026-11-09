@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lambda OS",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Ops command center for Lambda: sites, inventory, tickets, projects and deployments from NetBox, Jira, NetSuite, Slack, Gmail and Calendar.",
   "chrome_url_overrides": {
     "newtab": "newtab.html"

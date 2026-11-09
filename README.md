@@ -12,8 +12,8 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
 - **Fleet** is a globe wrapped in real **satellite imagery** with place labels (Esri World Imagery), rendered with WebGL.
   Zooming in far hands off to a street-level tile map at the same spot (down to individual buildings); zooming back
   out returns to the globe. Each site card has **◎ Exact location**, which flies to the site's NetBox coordinates at
-  building level. Base maps: Satellite, Dark (CARTO), Streets (OpenStreetMap), or Dots (offline, no imagery).
-  Map tiles load from those providers as images, so they need internet but no extra permissions. Attribution is shown on the map.
+  building level. Base maps: Satellite or Dots (offline, no imagery).
+  Satellite tiles load from Esri as images, so they need internet but no extra permissions. Attribution is shown on the map.
   Land outlines for the Dots mode come from Natural Earth 1:110m (public domain), bundled in `world.js`.
 - **Deployments**: a timeline of PMO epics grouped by project (initiative), with progress from their workstreams
   (DCID, SDN, SCR, STORAGE…), health, planned dates and overdue flags. ☆ stars a deployment so it shows in the

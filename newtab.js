@@ -334,13 +334,7 @@ LambdaData.ready.then(D => {
         url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
         labels: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`,
         attr: 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community' },
-      dark: { label: 'Dark', max: 20, tint: 0,
-        url: (z, x, y) => `https://${'abcd'[(x + y) % 4]}.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}${devicePixelRatio > 1 ? '@2x' : ''}.png`,
-        attr: '© OpenStreetMap contributors © CARTO' },
-      streets: { label: 'Streets', max: 19, tint: 0.1,
-        url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
-        attr: '© OpenStreetMap contributors' },
-    };
+    }; // Satellite + "Dots" (offline, no imagery). A saved choice that's no longer offered falls back to Satellite.
     let name = 'satellite';
     try { const v = localStorage.getItem('lambdaos-basemap'); if (PROVIDERS[v] || v === 'off') name = v; } catch { /* per-viewer convenience */ }
     const cache = new Map(), listeners = new Set();
@@ -1340,6 +1334,7 @@ LambdaData.ready.then(D => {
       $('#siteCard').innerHTML = `
         <div class="card-head"><div><div class="code">${esc(s.id)} · ${esc({ dc: 'Data center', pop: 'POP', prem: 'On-prem', other: 'Site' }[s.kind])}</div><h3>${esc(s.name)}</h3>${idleChip}</div>
           <button class="x" data-close aria-label="Close">✕</button></div>
+        <div class="links card-actions">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>
         ${s.city || s.address ? `<p class="muted small">${esc(s.address || s.city)}</p>` : ''}
         ${s.coordNote ? `<p class="note small">⚠ ${esc(s.coordNote)}</p>` : ''}
         <div class="stats">
@@ -1354,8 +1349,7 @@ LambdaData.ready.then(D => {
           ${s.moves.slice(0, 5).map(m => `<div class="mini-ticket" ${m.deploymentKey ? `data-dep="${m.deploymentKey}"` : ''}><span class="qkey">${esc(m.doc)}</span><span class="qsum">${esc(m.type)}${m.deployment ? ' · ' + esc(m.deployment) : ''}</span><span class="small muted">${esc(m.status || m.date)}</span></div>`).join('')}` : ''}
         <div class="section-title"><span>Open tickets</span><span>${tickets.length}</span></div>
         ${tickets.slice(0, 10).map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`).join('') || '<p class="muted small">None.</p>'}
-        ${tickets.length > 10 ? `<p class="muted small">+${tickets.length - 10} more</p>` : ''}
-        <div class="links">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>`;
+        ${tickets.length > 10 ? `<p class="muted small">+${tickets.length - 10} more · <a class="linkish" data-url="${esc(s.jiraUrl || '')}" data-what="Jira">see all in Jira</a></p>` : ''}`;
       $('#siteCard').hidden = false; $('#siteCard').scrollTop = 0; renderSites();
     },
     close() { $('#siteCard').hidden = true; Fleet.clear(); renderSites(); },
