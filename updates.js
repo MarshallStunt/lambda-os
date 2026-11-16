@@ -10,8 +10,8 @@ const LambdaUpdates = (() => {
     repo: `https://github.com/${REPO}`,
     changes: `https://github.com/${REPO}/commits/main`,
     zip: `https://github.com/${REPO}/archive/refs/heads/main.zip`,
-    // The simple download for non-technical users (a ZIP on Google Drive, replaced with each release).
-    download: 'https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing',
+    // The simple download for non-technical users: the Lambda OS folder on Google Drive, holding the latest lambda-os.zip.
+    download: 'https://drive.google.com/drive/folders/1RoYPMbG7DTKtXErXekowG0LrXoRWGj0s',
   };
   // Help, ideas and bug reports go to the maintainer on Slack.
   const HELP = { name: 'Hadi Khodja', slack: 'https://lambda.slack.com/team/U0AAMLCUCUA' };

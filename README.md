@@ -51,7 +51,7 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   traffic") that app pauses for 30 minutes. Settings → Data turns it off (and closes the pinned tabs).
 
 ## Install (about 5 minutes, just Chrome)
-1. **[Download lambda-os.zip](https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing)** (Google Drive: click the download arrow ⬇ at the top right).
+1. **Download lambda-os.zip** from the [Lambda OS folder on Google Drive](https://drive.google.com/drive/folders/1RoYPMbG7DTKtXErXekowG0LrXoRWGj0s) (right-click it → **Download**).
 2. **Unzip it.** Mac: double-click it in Downloads. Windows: right-click it → **Extract All…** → **Extract**.
 3. **Move the `lambda-os` folder into Documents** and keep it there: Chrome runs Lambda OS from it.
 4. In Chrome, go to `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`).
@@ -72,11 +72,11 @@ instead and update with the one-line command in Settings → Updates.
 ## Updates
 Every 2 hours Lambda OS reads the latest `manifest.json` from this repo on GitHub. When there's a newer version you get
 a **NEW** badge, one notification and **⬆ Update** in the top bar. To update: download
-[lambda-os.zip](https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing) again, unzip it, replace the old `lambda-os` folder with the new one (same place, same name), then
+lambda-os.zip again from the [Lambda OS folder](https://drive.google.com/drive/folders/1RoYPMbG7DTKtXErXekowG0LrXoRWGj0s), unzip it, replace the old `lambda-os` folder with the new one (same place, same name), then
 click ↻ on `chrome://extensions` (or Settings → Updates → **Reload extension**). Settings and tracked deployments are
 kept. Git copies: Settings → Updates has a one-line command.
 
-To release: bump `version` in `manifest.json`, push to `main`, and replace lambda-os.zip on Google Drive
+To release: bump `version` in `manifest.json`, push to `main`, and replace lambda-os.zip in the [Lambda OS Drive folder](https://drive.google.com/drive/folders/1RoYPMbG7DTKtXErXekowG0LrXoRWGj0s)
 (Drive → right-click the file → **Manage versions** → upload, so the link stays the same).
 
 ## Files
