@@ -18,6 +18,24 @@ const LambdaAlerts = (() => {
   const outage = s => s.access ? 'needs access' : s.auth || /sign/i.test(s.error || '') ? 'signed out' : 'not updating';
   const DOWN_AFTER = 15 * 60e3; // alert once a source has been failing this long (one alert per outage)
 
+  // Purchase order state. The due date is the vendor's promise when there is one (else Atium's expected date):
+  // 'received' | 'open' (no date) | 'due' | 'late' (past due, up to 30 days) | 'stale' (more than 30 days past due:
+  // usually an order nobody has updated in Atium, so it isn't shouted about).
+  function poState(p, now = Date.now()) {
+    if (p.status === 'closed' || p.pct >= 1) return { open: false, state: 'received' };
+    const due = p.promise || p.expected;
+    if (!due) return { open: true, state: 'open', due: null };
+    const dueAt = Date.parse(due + 'T23:59:59'), days = Math.floor((now - dueAt) / DAY);
+    return { open: true, due, dueAt, days, state: dueAt >= now ? 'due' : days > 30 ? 'stale' : 'late' };
+  }
+  // "Your" sites: where your tickets are, plus the sites of deployments you track (or own).
+  const yourSites = D => new Set([...D.TICKETS.filter(t => t.mine || t.assignee === 'me').map(t => t.site),
+    ...(D.tracked ? D.tracked() : []).flatMap(d => d.sites || [])].filter(Boolean));
+  // Atium builds you'd care about: at your sites, or linked to a deployment you track.
+  const myBuilds = (D, sites = yourSites(D)) => { const tk = new Set((D.tracked ? D.tracked() : []).map(d => d.key));
+    return (D.BUILDS || []).filter(b => (b.site && sites.has(b.site)) || (b.deploymentKey && tk.has(b.deploymentKey))); };
+  const sitePOs = s => s?.atium?.pos || s?.atium?.posLive?.pos || null;
+
   // Quiet hours: "22:00"–"07:00" style, may wrap past midnight.
   function quiet(cfg, now = Date.now()) {
     if (!cfg.quietFrom || !cfg.quietTo) return false;
@@ -62,6 +80,36 @@ const LambdaAlerts = (() => {
     for (const s of D.SITES) if (s.health !== 'idle') next.sites[s.id] = s.health;
     if (!first && cfg.siteCritical) for (const s of D.SITES.filter(s => s.health === 'critical' && prev.sites?.[s.id] && prev.sites[s.id] !== 'critical')) notes.push({
       id: `site:${s.id}`, urgent: true, url: s.url || '', title: `${s.id} turned critical`, message: `${s.name} · ${s.breached} SLA breached · ${s.openTickets} open tickets` });
+    // Atium: a build milestone goes late, a hand-off is within 7 days, a purchase order at your sites goes past due.
+    const sites = yourSites(D), builds = myBuilds(D, sites), atOn = !first && cfg.atium !== false;
+    next.builds = {}; next.handoff = []; next.po = {}; next.poSites = [];
+    for (const b of builds) {
+      const sig = b.late && b.next ? b.next.name : '';
+      next.builds[b.id] = sig;
+      if (atOn && sig && prev.builds && b.id in prev.builds && prev.builds[b.id] !== sig) notes.push({
+        id: `build:${b.id}:${sig}`, url: b.deploymentKey ? depLink(b.deploymentKey) : b.url,
+        title: `${sig} is late · ${b.name}`, message: [b.site, b.customer, b.next.at ? `was due ${new Date(b.next.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''].filter(Boolean).join(' · ') });
+      const ho = b.handoff;
+      if (ho && !ho.done && ho.at && ho.at > now - DAY && ho.at - now < 7 * DAY) {
+        next.handoff.push(b.id);
+        if (atOn && prev.handoff && !prev.handoff.includes(b.id)) notes.push({
+          id: `handoff:${b.id}`, url: b.deploymentKey ? depLink(b.deploymentKey) : b.url,
+          title: `Hand-off ${ho.at - now < DAY ? 'within a day' : `in ${Math.ceil((ho.at - now) / DAY)} days`} · ${b.name}`,
+          message: [b.site, b.customer, b.rackedPct != null ? `racked ${Math.round(b.rackedPct * 100)}%` : '', b.validatedPct != null ? `validated ${Math.round(b.validatedPct * 100)}%` : ''].filter(Boolean).join(' · ') });
+      }
+    }
+    for (const s of D.SITES.filter(s => sites.has(s.id) && sitePOs(s))) {
+      const sid = String(s.atium.id), seen = (prev?.poSites || []).includes(sid);
+      next.poSites.push(sid);
+      for (const p of sitePOs(s)) {
+        const st = poState(p, now);
+        if (st.state !== 'late') continue;
+        const key = `${sid}:${p.id}`; next.po[key] = 1;
+        if (atOn && seen && !prev.po?.[key]) notes.push({
+          id: `po:${key}`, url: s.atium.posUrl,
+          title: `${p.name} is past due · ${s.id}`, message: `${p.supplier || 'Supplier'} · due ${st.due} · ${[p.assets && `${p.assetsIn}/${p.assets} assets`, p.consumables && `${p.consumablesIn}/${p.consumables} consumables`].filter(Boolean).join(', ')} received` });
+      }
+    }
     next.srcAlerted = {};
     for (const s of troubled(D)) {
       const since = s.since || now;
@@ -117,7 +165,17 @@ const LambdaAlerts = (() => {
       partsArrived: mine.filter(t => waitingParts(t) && partOnHand(D, t)),
       newTickets: newTickets.sort((a, b) => b.created - a.created), mySites: [...mySites],
       fleet: { open: D.TICKETS.length, breached: D.TICKETS.filter(t => breached(t, now)).length, openWas: prev?.open ?? null, breachedWas: prev?.breached ?? null },
-      lowSpares, unread: D.MAIL?.unread ?? null, mentions: (D.MENTIONS || []).filter(m => m.at > now - DAY),
+      lowSpares, unread: D.MAIL?.unread ?? null,
+      atium: (() => {
+        const sites = yourSites(D), soon = now + 14 * DAY;
+        const builds = myBuilds(D, sites).filter(b => b.late || (b.handoff && !b.handoff.done && b.handoff.at && b.handoff.at < soon) || (b.next?.at && b.next.at < now + 3 * DAY));
+        const pos = [];
+        for (const s of D.SITES.filter(s => sites.has(s.id))) for (const p of sitePOs(s) || []) pos.push({ site: s.id, url: s.atium.posUrl, p, st: poState(p, now) });
+        return { on: !!(D.BUILDS || []).length || pos.length > 0, builds,
+          late: pos.filter(x => x.st.state === 'late').sort((a, b) => b.st.dueAt - a.st.dueAt),
+          dueSoon: pos.filter(x => x.st.state === 'due' && x.st.dueAt < now + 3 * DAY).sort((a, b) => a.st.dueAt - b.st.dueAt),
+          stale: pos.filter(x => x.st.state === 'stale').length };
+      })(), mentions: (D.MENTIONS || []).filter(m => m.at > now - DAY),
       troubled: troubled(D).map(s => ({ ...s, label: outage(s), sinceText: s.since ? clock(s.since) : '', staleText: s.staleAt ? clock(s.staleAt) : '' })),
     };
   }
@@ -137,7 +195,7 @@ const LambdaAlerts = (() => {
     return d.getHours() * 60 + d.getMinutes() >= h * 60 + (m || 0);
   };
 
-  return { evaluate, addToHistory, brief, nextBriefAt, briefDue, quiet, dayKey, troubled, outage, clock };
+  return { evaluate, addToHistory, brief, nextBriefAt, briefDue, quiet, dayKey, troubled, outage, clock, poState, mySites: yourSites };
 })();
 
 if (typeof self !== 'undefined') self.LambdaAlerts = LambdaAlerts;

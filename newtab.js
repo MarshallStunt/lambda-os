@@ -1352,30 +1352,35 @@ LambdaData.ready.then(D => {
   // Atium purchase orders for a site: read when the card opens (cached 10 min). No prices in Atium; this is receiving.
   const poCache = new Map();
   const poKinds = k => Object.entries(k || {}).map(([kind, c]) => `${c} ${kind}${c > 1 ? 's' : ''}`).join(', ');
+  // Late = past the vendor's promised date (or Atium's expected date) by up to 30 days; older than that is "stale"
+  // (an order nobody has updated in Atium), shown quietly and counted, not flagged.
   const poRow = (p, url) => {
-    const today = new Date().toISOString().slice(0, 10), open = p.status !== 'closed' && p.pct < 1, late = open && p.expected && p.expected < today;
+    const st = LambdaAlerts.poState(p);
     const got = [p.assets && `${p.assetsIn}/${p.assets} assets`, p.consumables && `${p.consumablesIn}/${p.consumables} consumables`].filter(Boolean).join(' · ');
-    const when = !open ? 'received' : p.expected ? `${late ? 'was due' : 'due'} ${fmtDate(p.expected)}` : 'open';
-    return `<div class="mini-ticket" data-href="${esc(url)}" title="${esc(p.name)} from ${esc(p.supplier)}${p.openLines ? ` · waiting on ${esc(poKinds(p.kinds))}` : ''}${p.promise ? ` · vendor promise ${esc(p.promise)}` : ''}">
-      <span class="qkey">${esc(p.name)}</span><span class="qsum">${esc(p.supplier || 'Supplier unknown')}<br><small class="muted">${esc(got || 'no lines')}${open && p.pct > 0 ? ` · ${pct(p.pct)} in` : ''}</small></span>
-      ${statusChip(!open ? 'good' : late ? 'warning' : 'idle', when)}</div>`;
+    const chip = { received: ['good', 'received'], open: ['idle', 'open'], due: ['idle', `due ${fmtDate(st.dueAt)}`],
+      late: ['warning', `was due ${fmtDate(st.dueAt)}`], stale: ['idle', `stale · due ${fmtDate(st.dueAt)}`] }[st.state];
+    return `<div class="mini-ticket${st.state === 'stale' ? ' po-stale' : ''}" data-href="${esc(url)}" title="${esc(p.name)} from ${esc(p.supplier)}${p.openLines ? ` · waiting on ${esc(poKinds(p.kinds))}` : ''}${p.promise ? ` · vendor promise ${esc(p.promise)}` : ''}${p.expected ? ` · expected ${esc(p.expected)}` : ''}${st.state === 'stale' ? ' · more than 30 days past due: probably not updated in Atium' : ''}">
+      <span class="qkey">${esc(p.name)}</span><span class="qsum">${esc(p.supplier || 'Supplier unknown')}<br><small class="muted">${esc(got || 'no lines')}${st.open && p.pct > 0 ? ` · ${pct(p.pct)} in` : ''}</small></span>
+      ${statusChip(chip[0], chip[1])}</div>`;
   };
   const poBlock = (pos, url) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const open = pos.filter(p => p.status !== 'closed' && p.pct < 1), done = pos.length - open.length, late = open.filter(p => p.expected && p.expected < today).length;
-    open.sort((a, b) => (a.expected || '9') < (b.expected || '9') ? -1 : 1);
-    return `<div class="section-title"><span>Purchase orders · Atium</span><span>${open.length} open${late ? ` · <b class="st-warning">${late} late</b>` : ''}</span></div>
-      ${open.slice(0, 8).map(p => poRow(p, url)).join('') || '<p class="muted small">Nothing waiting to be received.</p>'}
+    const rank = { late: 0, due: 1, open: 2, stale: 3 };
+    const open = pos.map(p => ({ p, st: LambdaAlerts.poState(p) })).filter(x => x.st.open)
+      .sort((a, b) => rank[a.st.state] - rank[b.st.state] || (a.st.dueAt || Infinity) - (b.st.dueAt || Infinity));
+    const done = pos.length - open.length, late = open.filter(x => x.st.state === 'late').length, stale = open.filter(x => x.st.state === 'stale').length;
+    return `<div class="section-title"><span>Purchase orders · Atium</span><span>${open.length} open${late ? ` · <b class="st-warning">${late} late</b>` : ''}${stale ? ` · ${stale} stale` : ''}</span></div>
+      ${open.slice(0, 8).map(x => poRow(x.p, url)).join('') || '<p class="muted small">Nothing waiting to be received.</p>'}
       <p class="muted small">${open.length > 8 ? `+${open.length - 8} more open · ` : ''}${done ? `${done} fully received · ` : ''}<a class="linkish" data-url="${esc(url)}" data-what="Atium">all purchase orders</a></p>`;
   };
   async function loadPOs(s) {
     const box = () => { const el = $('#sitePOs'); return el && el.dataset.site === s.id ? el : null; };
     if (s.atium.pos) { box() && (box().innerHTML = poBlock(s.atium.pos, s.atium.posUrl)); return; } // demo data
+    if (s.atium.posLive?.pos && box()) box().innerHTML = poBlock(s.atium.posLive.pos, s.atium.posUrl); // from the last refresh, while the fresh read runs
     const hit = poCache.get(s.atium.id);
     let r = hit && Date.now() - hit.at < 10 * 60e3 ? hit.r : null;
     if (!r) {
       try { r = await LambdaLive.atiumPOs(s.atium.id); poCache.set(s.atium.id, { at: Date.now(), r }); }
-      catch (e) { if (box()) box().innerHTML = `<div class="section-title"><span>Purchase orders · Atium</span></div><p class="muted small">Couldn't load: ${esc(String(e.message || e).replace(/^SIGN_IN: /, ''))} · <a class="linkish" data-url="${esc(s.atium.posUrl)}" data-what="Atium">open in Atium</a></p>`; return; }
+      catch (e) { if (s.atium.posLive?.pos) return; if (box()) box().innerHTML = `<div class="section-title"><span>Purchase orders · Atium</span></div><p class="muted small">Couldn't load: ${esc(String(e.message || e).replace(/^SIGN_IN: /, ''))} · <a class="linkish" data-url="${esc(s.atium.posUrl)}" data-what="Atium">open in Atium</a></p>`; return; }
     }
     if (box()) box().innerHTML = r.pos.length ? poBlock(r.pos, r.url) : '';
   }
@@ -1961,6 +1966,11 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         ${sec('Parts arrived for your tickets', b.partsArrived.length, b.partsArrived.map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(D.partById(t.part)?.name || t.part)} on hand at ${esc(t.site)}</span></div>`).join(''), 'Nothing new on hand.')}
         ${sec(`New tickets${b.mySites.length ? ' at your sites' : ''}`, b.newTickets.length, b.newTickets.slice(0, 8).map(ticketRow).join('') + (b.newTickets.length > 8 ? `<p class="muted small">+${b.newTickets.length - 8} more</p>` : ''), 'No new tickets.')}
         ${sec('Low spares at your sites', b.lowSpares.length, b.lowSpares.slice(0, 8).map(x => `<div class="mini-ticket" data-site="${esc(x.site)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.part)}</span><span class="small st-${x.stock === 0 ? 'critical' : 'warning'}">${x.stock} / alert ${x.alert}</span></div>`).join(''), 'Spares look fine.')}
+        ${b.atium.on ? sec('Builds & purchase orders · Atium', b.atium.builds.length + b.atium.late.length + b.atium.dueSoon.length,
+          b.atium.builds.map(buildRow).join('')
+          + [...b.atium.late, ...b.atium.dueSoon].slice(0, 8).map(x => `<div class="mini-ticket" data-href="${esc(x.url)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.p.name)} · ${esc(x.p.supplier || '')}</span>${statusChip(x.st.state === 'late' ? 'warning' : 'idle', `${x.st.state === 'late' ? 'was due' : 'due'} ${fmtDate(x.st.dueAt)}`)}</div>`).join('')
+          + (b.atium.stale ? `<p class="muted small">${b.atium.stale} purchase order${b.atium.stale > 1 ? 's' : ''} at your sites more than 30 days past due (probably not updated in Atium).</p>` : ''),
+          notConnected('atium') || 'No late milestones, hand-offs in the next 2 weeks, or late purchase orders at your sites.') : ''}
         ${sec('Fleet', '', `<div class="mini-ticket"><span class="qsum">Open DC tickets</span><b>${b.fleet.open.toLocaleString()}</b> ${b.fleet.openWas != null ? signed(b.fleet.open - b.fleet.openWas) : ''}</div>
           <div class="mini-ticket"><span class="qsum">SLA breached</span><b>${b.fleet.breached.toLocaleString()}</b> ${b.fleet.breachedWas != null ? signed(b.fleet.breached - b.fleet.breachedWas) : ''}</div>`)}
         ${sec('Slack mentions (24h)', b.mentions.length, b.mentions.slice(0, 5).map(m => `<div class="mini-ticket" data-href="${esc(m.link)}"><span class="qkey">${m.isDm ? 'DM' : '#' + esc(m.channel)}</span><span class="qsum">${esc(m.user)}: ${esc(m.text)}</span></div>`).join(''), notConnected('slack') || 'No new mentions.')}

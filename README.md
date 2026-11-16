@@ -46,7 +46,11 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   deployment panel shows real build progress; asset counts per site; completed milestones in the live feed. Read through
   an Atium tab with your Okta sign-in, which never leaves that tab (two requests per refresh). Opening a site card
   also loads that site's purchase orders: what is still waiting to be received, expected dates and late orders
-  (Atium has no prices; cached 10 minutes).
+  (Atium has no prices; cached 10 minutes). Alerts (Settings → Alerts) tell you when a build milestone at your sites goes late, a
+  hand-off is a week away, or a purchase order at your sites goes past due; the daily brief has the same list. A purchase
+  order is late after the vendor's promised date (or Atium's expected date); more than 30 days past due counts as "stale"
+  (usually not updated in Atium), so it is shown quietly and never alerted. For this, each refresh also reads purchase
+  orders for up to 6 of your sites, at most every 3 hours.
 - **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
   reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab. Google
   Calendar is always read from its own pinned tab (schedule view), because Google answers the automated agenda feed with

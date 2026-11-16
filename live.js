@@ -34,7 +34,7 @@ const LambdaLive = (() => {
     // Appearance: theme 'system' | 'light' | 'dark'; accent; density; text size; glow; motion
     look: { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' },
     // Desktop alerts (checked after every background refresh) and the daily brief.
-    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true,
+    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
   };
@@ -553,7 +553,21 @@ const LambdaLive = (() => {
     if (!result?.ok) throw new Error(`Atium: ${result?.error || 'the Atium tab did not answer.'}`);
     return result;
   }
-  const atium = s => atiumRun(s, atiumInPage, ['portfolio']);
+  // Sites + builds every refresh; plus purchase orders for "your" sites (the dashboard keeps that list in atiumWatch:
+  // sites of your tickets and tracked deployments), at most 6 sites, each re-read every 3 hours, for alerts and the brief.
+  async function atium(s) {
+    const result = await atiumRun(s, atiumInPage, ['portfolio']);
+    let watch = [], prev = null;
+    try { ({ atiumWatch: watch = [], snapshot: { atium: prev } = {} } = await chrome.storage.local.get(['atiumWatch', 'snapshot'])); } catch { /* none yet */ }
+    const posBySite = {}, now = Date.now(), ids = new Set(result.sites.map(x => x.id));
+    for (const id of watch.filter(id => ids.has(id)).slice(0, 6)) {
+      const had = prev?.posBySite?.[id];
+      if (had && now - had.at < 3 * 3600e3) { posBySite[id] = had; continue; }
+      try { const r = await atiumRun(s, atiumInPage, ['pos', id]); posBySite[id] = { at: now, pos: r.pos }; }
+      catch { if (had) posBySite[id] = had; } // keep the last good read; a PO read never fails the whole refresh
+    }
+    return { ...result, posBySite };
+  }
   async function atiumPOs(siteId) {
     const s = await settings();
     if (s.sources?.atium === false) throw new Error('Atium is turned off in Settings.');

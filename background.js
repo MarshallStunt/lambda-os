@@ -137,6 +137,10 @@ async function runAlerts(snap) {
     if (s.mode !== 'live' || !snap) return;
     const D = await buildD(snap);
     const { alertState, history } = await chrome.storage.local.get(['alertState', 'history']);
+    // Sites whose Atium purchase orders the next refresh should read (for alerts and the brief).
+    const watch = D.SITES.filter(x => x.atium && LambdaAlerts.mySites(D).has(x.id)).map(x => x.atium.id).slice(0, 6);
+    const { atiumWatch } = await chrome.storage.local.get('atiumWatch');
+    if (JSON.stringify(watch) !== JSON.stringify(atiumWatch || [])) await chrome.storage.local.set({ atiumWatch: watch });
     const res = LambdaAlerts.evaluate(D, alertState, s.alerts);
     await chrome.storage.local.set({ alertState: res.state, history: LambdaAlerts.addToHistory(history, D) });
     await setBadge(res.urgentCount, s.alerts.enabled && s.alerts.badge);
