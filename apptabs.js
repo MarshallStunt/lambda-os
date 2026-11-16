@@ -17,6 +17,7 @@ const LambdaTabs = (() => {
     /^https:\/\/([\w-]+\.)?slack\.com\/(signin|sign_in|workspace-signin|ssb\/signin|checkcookie|sso)/i,
     /^https:\/\/[\w-]+\.slack\.com\/?([?#]|$)/, // a workspace's landing page is its sign-in page
     /^https:\/\/[\w-]+\.okta\.com\//, /^https:\/\/system\.netsuite\.com\/pages\/customerlogin/i, /^https:\/\/[\w-]+\.app\.netsuite\.com\/app\/login\//i,
+    /^https:\/\/[\w.-]+\.lambdalabs\.cloud\/login(\/|[?#]|$)/i, // Atium's own sign-in page (before Okta)
   ];
   const BOT = [/^https:\/\/(www\.|ipv[46]\.)?google\.[a-z.]+\/sorry\//, /^https:\/\/challenges\.cloudflare\.com\//];
   const BOT_TEXT = /unusual traffic|captcha|are you a robot|verify (that )?you are (a )?human/i;

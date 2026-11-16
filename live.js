@@ -458,23 +458,70 @@ const LambdaLive = (() => {
 
   /* ---------------- Atium (runs inside an Atium tab, with that tab's own Okta sign-in) ----------------
      Atium keeps its sign-in in the page, so like Slack it's read from inside an Atium tab (yours, or Lambda OS's pinned
-     one). The token is used only inside that tab and never stored by Lambda OS. Two requests per refresh. */
-  async function atiumInPage() {
+     one). The token is used only inside that tab and never stored by Lambda OS. Two requests per refresh.
+     Atium's access token lasts an hour and the Atium page only renews it when it makes a request itself, which an idle
+     pinned tab never does. So, like the Atium page, on a 401 this renews it with Atium's own /api/auth/refresh and saves
+     the result back where Atium keeps it; only if that fails is it a real "sign in". One reader for both jobs:
+     what = 'portfolio' (sites + builds, every refresh) or 'pos' (one site's purchase orders, when its card opens). */
+  async function atiumInPage(what = 'portfolio', siteId = null) {
     try {
-      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const KEY = 'kelsier_okta_auth', wait = ms => new Promise(r => setTimeout(r, ms));
+      const stored = () => { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; } };
       let auth = null;
-      for (let i = 0; i < 30 && !auth?.access_token; i++) {
-        try { auth = JSON.parse(localStorage.getItem('kelsier_okta_auth') || 'null'); } catch { auth = null; }
-        if (!auth?.access_token) await wait(500);
-      }
+      for (let i = 0; i < 30 && !auth?.access_token; i++) { auth = stored(); if (!auth?.access_token) await wait(500); }
       if (!auth?.access_token) return { ok: false, error: /okta|login|signin/i.test(location.href) ? 'Not signed in to Atium in that tab.' : 'LOADING' };
+      let renewing = null;
+      const renew = () => renewing ||= (async () => {
+        const cur = stored() || auth;
+        // The page may have renewed it already (another request of its own): use that.
+        if (cur.access_token !== auth.access_token) { auth = cur; return true; }
+        if (!cur.refresh_token) return false;
+        const r = await fetch('/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: cur.refresh_token }) });
+        if (!r.ok) return false;
+        const nu = await r.json();
+        if (!nu?.access_token) return false;
+        auth = { ...cur, ...nu, refresh_token: nu.refresh_token ?? cur.refresh_token };
+        localStorage.setItem(KEY, JSON.stringify(auth)); // same place and shape the Atium page saves it
+        return true;
+      })();
       const get = async path => {
-        const r = await fetch(path, { headers: { Authorization: 'Bearer ' + auth.access_token } });
-        if (r.status === 401) throw Object.assign(new Error('Not signed in to Atium in that tab (session expired).'), { auth: true });
-        if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
-        return r.json();
+        for (let tries = 0; ; tries++) {
+          const r = await fetch(path, { headers: { Authorization: 'Bearer ' + auth.access_token } });
+          if (r.status === 401 && tries === 0 && await renew().catch(() => false)) continue;
+          if (r.status === 401) throw Object.assign(new Error('Not signed in to Atium in that tab (session expired).'), { auth: true });
+          if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+          return r.json();
+        }
       };
-      const [sites, port] = await Promise.all([get('/api/ui/sites'), get('/api/ui/builds/portfolio')]);
+      if (what === 'pos') {
+        // Atium pages at 100 orders / 200 lines; read at most 5 pages of each. No prices: receiving progress and dates.
+        const all = async (path, key, size) => {
+          const out = []; let total = Infinity;
+          for (let off = 0; off < total && off < size * 5; off += size) {
+            const j = await get(`/api/ui/sites/${siteId}/${path}?limit=${size}&offset=${off}`);
+            out.push(...(j[key] || [])); total = j.total ?? 0;
+            if (!(j[key] || []).length) break;
+          }
+          return out;
+        };
+        const [pos, items] = await Promise.all([all('purchase-orders', 'purchase_orders', 100), all('purchase-orders/items', 'items', 200)]);
+        const lines = new Map();
+        for (const it of items) { if (!lines.has(it.purchase_id)) lines.set(it.purchase_id, []); lines.get(it.purchase_id).push(it); }
+        const min = xs => xs.filter(Boolean).sort()[0] || null;
+        return {
+          ok: true, base: location.origin, siteId, url: `${location.origin}/sites/${siteId}/purchase-orders`,
+          pos: pos.map(p => {
+            const open = (lines.get(p.purchase_id) || []).filter(l => l.status !== 'complete');
+            const kinds = {}; for (const l of open) kinds[l.kind || 'item'] = (kinds[l.kind || 'item'] || 0) + 1;
+            return { id: p.purchase_id, name: p.purchase_name, supplier: p.supplier_name || '', status: p.purchase_status || '', date: p.purchase_date || null,
+              assets: p.total_assets || 0, assetsIn: p.received_assets || 0, consumables: p.total_consumables || 0, consumablesIn: p.received_consumables || 0,
+              pct: (p.received_percent ?? 0) / 100, openLines: open.length, kinds,
+              expected: min(open.map(l => l.min_expected_receipt_date || l.consumable_purchase?.expected_receipt_date)),
+              promise: min(open.map(l => l.min_vendor_promise_date || l.consumable_purchase?.vendor_promise_date)) };
+          }),
+        };
+      }
+      const sites = await get('/api/ui/sites'), port = await get('/api/ui/builds/portfolio'); // one after the other, so a renewal happens once
       return {
         ok: true, base: location.origin,
         sites: (sites.sites || []).map(x => ({ id: x.id, name: x.name, slug: x.slug, assets: x.asset_count || 0, consumables: x.consumable_count || 0 })),
@@ -486,51 +533,6 @@ const LambdaLive = (() => {
           milestones: (b.milestones || []).map(m => ({ type: m.milestone_type, name: m.display_name, status: m.status,
             done: m.actual_date || m.finished_date || null, scheduled: m.scheduled_date || null })),
         })),
-      };
-    } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
-  }
-  // Purchase orders for one Atium site, read when you open that site's card (one site per call, so the
-  // regular refresh stays at two requests). Atium has no prices; this is receiving progress and expected dates.
-  async function atiumPOsInPage(siteId) {
-    try {
-      const wait = ms => new Promise(r => setTimeout(r, ms));
-      let auth = null;
-      for (let i = 0; i < 30 && !auth?.access_token; i++) {
-        try { auth = JSON.parse(localStorage.getItem('kelsier_okta_auth') || 'null'); } catch { auth = null; }
-        if (!auth?.access_token) await wait(500);
-      }
-      if (!auth?.access_token) return { ok: false, error: /okta|login|signin/i.test(location.href) ? 'Not signed in to Atium in that tab.' : 'LOADING' };
-      const get = async path => {
-        const r = await fetch(path, { headers: { Authorization: 'Bearer ' + auth.access_token } });
-        if (r.status === 401) throw Object.assign(new Error('Not signed in to Atium in that tab (session expired).'), { auth: true });
-        if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
-        return r.json();
-      };
-      // Atium pages at 100 orders / 200 lines; read at most 5 pages of each.
-      const all = async (path, key, size) => {
-        const out = []; let total = Infinity;
-        for (let off = 0; off < total && off < size * 5; off += size) {
-          const j = await get(`/api/ui/sites/${siteId}/${path}?limit=${size}&offset=${off}`);
-          out.push(...(j[key] || [])); total = j.total ?? 0;
-          if (!(j[key] || []).length) break;
-        }
-        return out;
-      };
-      const [pos, items] = await Promise.all([all('purchase-orders', 'purchase_orders', 100), all('purchase-orders/items', 'items', 200)]);
-      const lines = new Map();
-      for (const it of items) { if (!lines.has(it.purchase_id)) lines.set(it.purchase_id, []); lines.get(it.purchase_id).push(it); }
-      const min = xs => xs.filter(Boolean).sort()[0] || null;
-      return {
-        ok: true, base: location.origin, siteId, url: `${location.origin}/sites/${siteId}/purchase-orders`,
-        pos: pos.map(p => {
-          const open = (lines.get(p.purchase_id) || []).filter(l => l.status !== 'complete');
-          const kinds = {}; for (const l of open) kinds[l.kind || 'item'] = (kinds[l.kind || 'item'] || 0) + 1;
-          return { id: p.purchase_id, name: p.purchase_name, supplier: p.supplier_name || '', status: p.purchase_status || '', date: p.purchase_date || null,
-            assets: p.total_assets || 0, assetsIn: p.received_assets || 0, consumables: p.total_consumables || 0, consumablesIn: p.received_consumables || 0,
-            pct: (p.received_percent ?? 0) / 100, openLines: open.length, kinds,
-            expected: min(open.map(l => l.min_expected_receipt_date || l.consumable_purchase?.expected_receipt_date)),
-            promise: min(open.map(l => l.min_vendor_promise_date || l.consumable_purchase?.vendor_promise_date)) };
-        }),
       };
     } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
   }
@@ -551,11 +553,11 @@ const LambdaLive = (() => {
     if (!result?.ok) throw new Error(`Atium: ${result?.error || 'the Atium tab did not answer.'}`);
     return result;
   }
-  const atium = s => atiumRun(s, atiumInPage);
+  const atium = s => atiumRun(s, atiumInPage, ['portfolio']);
   async function atiumPOs(siteId) {
     const s = await settings();
     if (s.sources?.atium === false) throw new Error('Atium is turned off in Settings.');
-    return atiumRun(s, atiumPOsInPage, [Number(siteId)]);
+    return atiumRun(s, atiumInPage, ['pos', Number(siteId)]);
   }
 
   /* ---------------- Refresh ---------------- */
