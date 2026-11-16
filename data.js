@@ -189,7 +189,9 @@
 
     const src = (key, name) => {
       const st = snap.sources?.[key], data = snap[key === 'netbox' ? 'nb' : key];
-      if (!st || st.off) return { key, name, state: 'off', title: st?.off ? `${name} is turned off in Settings` : `${name}: not loaded yet` };
+      if (st?.off) return { key, name, state: 'off', title: `${name} is turned off in Settings` };
+      // A source added in an update (or switched on) has no result until the next refresh finishes.
+      if (!st) return { key, name, state: 'wait', title: `${name}: not loaded yet; it appears after the next refresh (or click ↻ in the top bar)` };
       if (st.ok) return { key, name, state: 'ok', title: `${name}: live, using your sign-in` };
       if (st.access) return { key, name, state: 'error', access: st.access, title: st.error, since: st.failingSince || null };
       return { key, name, state: data ? 'stale' : 'error', url: st.login, since: st.failingSince || null, staleAt: data ? st.staleAt || null : null, error: st.error, auth: !!st.auth,

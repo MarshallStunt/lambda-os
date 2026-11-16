@@ -69,7 +69,7 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 .sources { display: flex; gap: 6px; }
 .source-pill { display: flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--line); font-size: 11px; color: var(--text-2); }
 .source-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px var(--good); }
-.source-pill.off i { background: var(--muted); box-shadow: none; }
+.source-pill.off i, .source-pill.wait i { background: var(--muted); box-shadow: none; }
 .clock { display: flex; flex-direction: column; align-items: flex-end; font: 600 18px var(--mono); line-height: 1.1; }
 .clock small { font: 11px var(--font); color: var(--muted); }
 

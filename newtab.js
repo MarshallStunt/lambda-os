@@ -80,7 +80,7 @@ LambdaData.ready.then(D => {
   // (AI isn't listed here: its status lives in the ✨ Ask AI panel.)
   $('#sources').innerHTML = D.SOURCES.filter(s => s.key !== 'claude').map(s => needsYou(s)
     ? `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`
-    : `<span class="source-pill ${s.state}" title="${esc(s.title)}"><i></i>${esc(s.name)}${s.state === 'off' ? ' · off' : ''}</span>`).join('');
+    : `<span class="source-pill ${s.state}" title="${esc(s.title)}"><i></i>${esc(s.name)}${s.state === 'off' ? ' · off' : s.state === 'wait' ? ' · loading' : ''}</span>`).join('');
   $('#sources').addEventListener('click', async e => {
     const b = e.target.closest('.source-pill'); if (!b) return;
     const needs = D.SOURCES.filter(x => x.access).flatMap(x => x.access);
@@ -202,7 +202,7 @@ LambdaData.ready.then(D => {
   /* ---------------- Today (Google Calendar) ---------------- */
   function renderAgenda() {
     const box = $('#agendaPanel'), cal = D.SOURCES.find(s => s.key === 'calendar');
-    if (!D.EVENTS?.length && (!cal || cal.state === 'off' || cal.state === 'demo' && !D.EVENTS)) { box.hidden = true; return; }
+    if (!D.EVENTS?.length && (!cal || cal.state === 'off' || cal.state === 'wait' || cal.state === 'demo' && !D.EVENTS)) { box.hidden = true; return; }
     box.hidden = false;
     const now = Date.now(), endToday = new Date(); endToday.setHours(23, 59, 59, 999);
     const upcoming = D.EVENTS.filter(e => e.allDay ? e.at >= new Date().setHours(0, 0, 0, 0) : e.at > now - 30 * 60000);
