@@ -138,6 +138,7 @@ $('brTest').addEventListener('click', async () => { await save({ quiet: true });
 function fill(s) {
   paintAlerts(s.alerts, s.brief);
   $('refreshMinutes').value = String(s.refreshMinutes ?? 10);
+  $('appTabs').checked = s.appTabs !== false;
   ai = JSON.parse(JSON.stringify(s.ai)); $('aiProvider').value = ai.provider; shownProvider = ai.provider; paintAI();
   paintPrivacy(s.privacy);
   look = window.LambdaLook.current(); paintLook(); // theme.js keeps this in sync with the saved settings
@@ -152,6 +153,7 @@ function read() {
   document.querySelectorAll('[data-source]').forEach(c => (s.sources[c.dataset.source] = c.checked));
   s.ai = readAI(); s.privacy = readPrivacy(); s.look = look; s.alerts = readAlerts(); s.brief = readBrief();
   s.refreshMinutes = Number($('refreshMinutes').value);
+  s.appTabs = $('appTabs').checked;
   return s;
 }
 // A Jira / NetBox / NetSuite address outside the built-in ones needs the user's OK to reach it.
@@ -201,7 +203,7 @@ async function importBackup(file) {
   try { data = JSON.parse(await file.text()); } catch { return say('<p class="st-critical">That file isn’t a Lambda OS backup (not valid JSON).</p>'); }
   if (data?.app !== 'lambda-os' || typeof data.settings !== 'object') return say('<p class="st-critical">That file isn’t a Lambda OS backup.</p>');
   const { settings: current = {} } = await chrome.storage.local.get('settings');
-  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes']);
+  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
   if (settings.ai) settings.ai = { ...settings.ai, keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser
@@ -223,6 +225,7 @@ async function reset() {
 }
 
 $('save').addEventListener('click', () => save());
+$('appTabs').addEventListener('change', async () => { await save({ quiet: true }); say($('appTabs').checked ? '<p class="st-good">Saved. Lambda OS keeps its own pinned tabs when you don\'t have the app open.</p>' : '<p class="st-good">Saved. Lambda OS closed its pinned tabs and only reads from tabs you open.</p>'); });
 $('refreshMinutes').addEventListener('change', async () => { await save({ quiet: true }); say(`<p class="st-good">Saved. Data now refreshes ${$('refreshMinutes').value === '0' ? 'only when you click ↻' : `every ${$('refreshMinutes').selectedOptions[0].text.replace(/^Every /, '').replace(/ \(default\)/, '')}`}.</p>`); });
 $('open').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') }));
 $('clear').addEventListener('click', async () => { await chrome.storage.local.remove('snapshot'); say('<p class="muted">Cached data cleared.</p>'); });

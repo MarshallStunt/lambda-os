@@ -3,7 +3,7 @@
 //  • after every new snapshot: desktop alerts, the toolbar badge, and a compact daily history (for the brief's deltas)
 //  • the daily brief notification at the time set in Settings
 //  • makes the extension's API requests look like a plain client, not a browser (drop Origin/Referer/Sec-*, own UA)
-importScripts('live.js', 'data.js', 'alerts.js', 'updates.js');
+importScripts('apptabs.js', 'live.js', 'data.js', 'alerts.js', 'updates.js');
 
 const PLAIN_CLIENT_RULE_ID = 1;
 const BROWSER_HEADERS = ['origin', 'referer', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];
@@ -164,7 +164,19 @@ async function briefNotification() {
   await notify([{ id: 'brief', url: `${DASH()}#brief`, title: 'Your daily brief is ready', message }]);
 }
 
+/* ---------------- Self-healing app tabs (apptabs.js) ---------------- */
+// One tick a minute (an alarm, because the service worker sleeps): heal the pinned tabs, close the ones for apps that
+// were turned off, and close temporary tabs that sat idle for 5 minutes.
+const APPTABS_ALARM = 'appTabs';
+chrome.alarms.get(APPTABS_ALARM).then(a => a || chrome.alarms.create(APPTABS_ALARM, { delayInMinutes: 1, periodInMinutes: 1 }));
+let ticking = null;
+function tabsTick() {
+  ticking ||= LambdaLive.settings().then(s => LambdaTabs.tick(s)).catch(e => console.warn('app tabs', e)).finally(() => { ticking = null; });
+  return ticking;
+}
+
 chrome.alarms.onAlarm.addListener(async a => {
+  if (a.name === APPTABS_ALARM) await tabsTick();
   if (a.name === REFRESH_ALARM) {
     const s = await LambdaLive.settings();
     if (s.mode === 'live') await LambdaLive.refresh().catch(e => console.warn('refresh', e)); // the new snapshot triggers alerts below
@@ -176,7 +188,7 @@ chrome.alarms.onAlarm.addListener(async a => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.snapshot?.newValue) runAlerts(changes.snapshot.newValue);
-  if (changes.settings) { scheduleBrief(); scheduleRefresh(); }
+  if (changes.settings) { scheduleBrief(); scheduleRefresh(); tabsTick(); } // tick: a source turned off closes its tab now
 });
 chrome.notifications.onClicked.addListener(async id => {
   const urls = (await chrome.storage.session.get('notifUrls')).notifUrls || {};

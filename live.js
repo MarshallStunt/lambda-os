@@ -17,6 +17,7 @@ const LambdaLive = (() => {
     intakeJql: 'project = CI AND issuetype = Epic AND statusCategory != Done ORDER BY updated DESC',
     maxTickets: 3000,
     refreshMinutes: 10,                                    // background refresh; 0 = only when I click ↻
+    appTabs: true,                                         // keep pinned background tabs for apps read from a page (apptabs.js)
     netsuiteUrl: 'https://4930164.app.netsuite.com',
     nsOnHandSearch: '3151',                                // ***Cloud: Material On Hand
     nsMovesSearch: '3152',                                 // ***Cloud: Material Transactions Full List
@@ -248,22 +249,26 @@ const LambdaLive = (() => {
       return { ok: r.ok, status: r.status, type: r.headers.get('content-type') || '', url: r.url, text: await r.text() };
     } catch (e) { return { error: String(e.message || e) }; }
   }
-  // Fetch directly from the extension; if that isn't signed in (or is blocked), retry inside an open tab of the site.
-  async function fetchSignedIn(url, { name, tabPattern, login, good }) {
+  // Fetch directly from the extension; if that isn't signed in (or is blocked), read inside a tab of the site: the user's
+  // own tab if one is open, otherwise Lambda OS's self-healing pinned (or temporary) tab for that app (apptabs.js).
+  async function fetchSignedIn(url, { app: appKey, name, login, good }) {
+    await LambdaTabs.checkPaused(appKey, name); // backing off after a bot check: don't send anything
     const why = [];
     let res;
     try {
       const r = await fetch(url, { credentials: 'include' });
       res = { ok: r.ok, status: r.status, type: r.headers.get('content-type') || '', url: r.url, text: await r.text() };
       if (good(res)) return res;
+      await LambdaTabs.botCheck(appKey, name, res);
       why.push(`direct: HTTP ${res.status}${/login|signin|ServiceLogin|accounts\.google/i.test(res.url) ? ', sent to sign-in' : ''}`);
-    } catch (e) { why.push(`direct: ${e.message}`); }
-    const [tab] = await chrome.tabs.query({ url: tabPattern }).catch(() => []);
-    if (!tab) throw new AuthError(`${name}: not signed in from the extension, and no ${name} tab is open to read through (${why.join('; ')}). Open ${name} in a tab and refresh.`, login);
+    } catch (e) { if (e.paused) throw e; why.push(`direct: ${e.message}`); }
+    const s = await settings(), app = LambdaTabs.apps(s)[appKey];
+    if (!app) throw new AuthError(`Not signed in to ${name} (${why.join('; ')}).`, login);
     let out;
-    try { [{ result: out } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: fetchInPage, args: [url] }); }
-    catch (e) { throw new Error(`${name}: couldn't read through the open tab (${e.message}).`); }
+    try { ({ result: out } = await LambdaTabs.run(app, fetchInPage, [url], { useOwn: s.appTabs !== false })); }
+    catch (e) { if (e.auth || e.paused) throw e; throw new Error(`${name}: couldn't read through a ${name} tab (${e.message}).`); }
     if (out && !out.error && good(out)) return out;
+    await LambdaTabs.botCheck(appKey, name, out);
     why.push(`tab: ${out?.error || `HTTP ${out?.status}`}`);
     throw new AuthError(`Not signed in to ${name} (${why.join('; ')}).`, login);
   }
@@ -306,17 +311,13 @@ const LambdaLive = (() => {
       return { ok: false, error: String(e.message || e) };
     }
   }
-  async function slackTab() {
-    await needAccess(['https://app.slack.com/*']);
-    const [tab] = await chrome.tabs.query({ url: 'https://app.slack.com/*' });
-    if (!tab) throw new AuthError('Open Slack (app.slack.com) in a Chrome tab to connect it.', 'https://app.slack.com/client');
-    return tab;
-  }
   async function slack(since = 0) {
-    const tab = await slackTab();
-    let result;
-    try { [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: slackInPage, args: [since] }); }
-    catch (e) { throw new Error(`Slack: couldn't read through the open Slack tab (${e.message}). Reload that tab and try again.`); }
+    await needAccess(['https://app.slack.com/*']);
+    const s = await settings(), app = LambdaTabs.apps(s).slack;
+    let result, own;
+    try { ({ result, own } = await LambdaTabs.run(app, slackInPage, [since], { useOwn: s.appTabs !== false })); }
+    catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Slack: couldn't read through the Slack tab (${e.message}).`); }
+    if (!result?.ok && own && /not signed in/i.test(result?.error || '')) throw new AuthError('SIGN_IN: sign in once in the pinned Slack tab', app.url);
     if (!result?.ok) throw new Error(`Slack: ${result?.error || 'the Slack tab did not answer. Reload it and try again.'}`);
     return result;
   }
@@ -325,7 +326,7 @@ const LambdaLive = (() => {
   const tag = (x, t) => decode((x.match(new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`)) || [])[1] || '');
   async function gmail() {
     await needAccess(['https://mail.google.com/*']);
-    const x = (await fetchSignedIn('https://mail.google.com/mail/u/0/feed/atom', { name: 'Gmail', tabPattern: 'https://mail.google.com/*', login: 'https://mail.google.com/', good: r => r.ok && /<feed/.test(r.text) })).text;
+    const x = (await fetchSignedIn('https://mail.google.com/mail/u/0/feed/atom', { app: 'gmail', name: 'Gmail', login: 'https://mail.google.com/', good: r => r.ok && /<feed/.test(r.text) })).text;
     return {
       email: (tag(x, 'title').match(/[\w.+-]+@[\w.-]+/) || [])[0] || '',
       unread: Number((x.match(/<fullcount>(\d+)/) || [])[1]) || 0,
@@ -353,7 +354,7 @@ const LambdaLive = (() => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     await needAccess(['https://calendar.google.com/*']);
     const r = await fetchSignedIn(`https://calendar.google.com/calendar/htmlembed?src=${encodeURIComponent(who)}&mode=AGENDA&ctz=${encodeURIComponent(tz)}`, {
-      name: 'Google Calendar', tabPattern: 'https://calendar.google.com/*', login: 'https://calendar.google.com/',
+      app: 'calendar', name: 'Google Calendar', login: 'https://calendar.google.com/',
       good: r => r.ok && !/ServiceLogin|accounts\.google\.com/.test(r.url) && /class="(date-section|no-events|view-container)|<body/.test(r.text) });
     const x = r.text;
     if (!/date-section/.test(x)) return { email: who, events: [] };
@@ -394,7 +395,7 @@ const LambdaLive = (() => {
     await needAccess([origin + '/*']);
     const csv = async id => {
       const r = await fetchSignedIn(`${base}/app/common/search/searchresults.nl?searchid=${encodeURIComponent(id)}&csv=Export&OfficeXML=F&pdf=&size=&twbx=F&report=&grid=&dle=T&searchtype=Custom`, {
-        name: 'NetSuite', tabPattern: origin + '/*', login: `${base}/app/center/card.nl`, good: r => r.ok && /comma-separated|csv/i.test(r.type) });
+        app: 'netsuite', name: 'NetSuite', login: `${base}/app/center/card.nl`, good: r => r.ok && /comma-separated|csv/i.test(r.type) });
       return parseCsv(r.text);
     };
     progress?.('NetSuite: material on hand');

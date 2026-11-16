@@ -41,6 +41,12 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   deployments with progress since yesterday, new tickets and low spares at your sites, parts arrived, mentions.
   Opens on your first new tab after the brief time (default 08:30 on weekdays). Can be summarized by your AI provider.
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
+- **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
+  reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab (Gmail /
+  Calendar get one only if the direct read fails; NetSuite uses a temporary tab closed after 5 idle minutes). Every
+  minute it reloads that tab if Chrome discarded it, sends it back if it wandered off, and refreshes it every 30 min. If
+  it lands on a sign-in page you'll see "SIGN_IN: sign in once in the pinned … tab"; on a bot check ("unusual
+  traffic") that app pauses for 30 minutes. Settings → Data turns it off (and closes the pinned tabs).
 
 ## Install (about 5 minutes, just Chrome)
 1. **[Download lambda-os.zip](https://drive.google.com/file/d/1Xv-FaaerzwLkljcxOoXIJVy4UbT0ARsJ/view?usp=sharing)** (Google Drive: click the download arrow ⬇ at the top right).
@@ -94,7 +100,6 @@ To release: bump `version` in `manifest.json`, push to `main`, and replace lambd
 
 ## Not yet
 - Claude: it needs an org-approved API path. The ⌘K answers are computed from the loaded data.
-- Slack only works while a Slack tab is open, because it reads through that tab's session.
 - Part names: most NetBox consumable types are bare P/Ns. The Rackside parts catalog could name them.
 
 ## Help and ideas
