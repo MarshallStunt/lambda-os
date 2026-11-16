@@ -19,10 +19,11 @@ const LambdaLive = (() => {
     refreshMinutes: 10,                                    // background refresh; 0 = only when I click ↻
     appTabs: true,                                         // keep pinned background tabs for apps read from a page (apptabs.js)
     netsuiteUrl: 'https://4930164.app.netsuite.com',
+    atiumUrl: 'https://kelsier.aws.lambdalabs.cloud',         // Atium (Infrastructure Intelligence): builds, site assets
     nsOnHandSearch: '3151',                                // ***Cloud: Material On Hand
     nsMovesSearch: '3152',                                 // ***Cloud: Material Transactions Full List
     calendarEmail: '',                                     // defaults to the Gmail / Jira account
-    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true },
+    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true },
     // AI assistant: provider 'off' | 'anthropic' | 'openai' | 'gemini' | 'local'. Keys stay in this browser and are never put in backups.
     ai: { provider: 'off', keys: { anthropic: '', openai: '', gemini: '', local: '' },
       models: { anthropic: 'claude-opus-5-5', openai: '', gemini: 'gemini-flash-lite-latest', local: '' },
@@ -455,9 +456,59 @@ const LambdaLive = (() => {
     };
   }
 
+  /* ---------------- Atium (runs inside an Atium tab, with that tab's own Okta sign-in) ----------------
+     Atium keeps its sign-in in the page, so like Slack it's read from inside an Atium tab (yours, or Lambda OS's pinned
+     one). The token is used only inside that tab and never stored by Lambda OS. Two requests per refresh. */
+  async function atiumInPage() {
+    try {
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      let auth = null;
+      for (let i = 0; i < 30 && !auth?.access_token; i++) {
+        try { auth = JSON.parse(localStorage.getItem('kelsier_okta_auth') || 'null'); } catch { auth = null; }
+        if (!auth?.access_token) await wait(500);
+      }
+      if (!auth?.access_token) return { ok: false, error: /okta|login|signin/i.test(location.href) ? 'Not signed in to Atium in that tab.' : 'LOADING' };
+      const get = async path => {
+        const r = await fetch(path, { headers: { Authorization: 'Bearer ' + auth.access_token } });
+        if (r.status === 401) throw Object.assign(new Error('Not signed in to Atium in that tab (session expired).'), { auth: true });
+        if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+        return r.json();
+      };
+      const [sites, port] = await Promise.all([get('/api/ui/sites'), get('/api/ui/builds/portfolio')]);
+      return {
+        ok: true, base: location.origin,
+        sites: (sites.sites || []).map(x => ({ id: x.id, name: x.name, slug: x.slug, assets: x.asset_count || 0, consumables: x.consumable_count || 0 })),
+        builds: (port.builds || []).map(b => ({
+          id: b.id, name: b.name || b.cluster_name, siteId: b.site_id, customer: b.customer_override || b.customer || '', gpuModel: b.gpu_model || b.gpu_type || '',
+          planned: b.planned_gpu_qty || 0, installed: b.installed_gpu_qty || 0, gpus: b.effective_gpu_qty || b.planned_gpu_qty || 0, mw: b.mw ?? null,
+          racked: b.devices_racked || 0, devices: b.devices_total || 0, validated: b.yard_validated || 0, hosts: b.yard_hosts_total || 0,
+          conversion: !!b.is_conversion, epic: b.jira_epic_key || null, updated: b.updated_at || null,
+          milestones: (b.milestones || []).map(m => ({ type: m.milestone_type, name: m.display_name, status: m.status,
+            done: m.actual_date || m.finished_date || null, scheduled: m.scheduled_date || null })),
+        })),
+      };
+    } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
+  }
+  async function atium(s) {
+    const app = LambdaTabs.apps(s).atium;
+    if (!app) throw new Error(`Atium address “${s.atiumUrl}” isn't a valid URL.`);
+    await needAccess([new URL(app.url).origin + '/*']);
+    const read = () => LambdaTabs.run(app, atiumInPage, [], { useOwn: s.appTabs !== false });
+    let result, own, tab;
+    try {
+      ({ result, own, tab } = await read());
+      // Still loading, or its sign-in just expired: reload our own tab once (Atium renews its sign-in on load).
+      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
+    } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Atium: couldn't read through the Atium tab (${e.message}).`); }
+    if (result?.error === 'LOADING') throw new Error('Atium is still loading in its tab; trying again next refresh.');
+    if (!result?.ok && (result?.auth || /not signed in/i.test(result?.error || ''))) throw new AuthError(own ? 'SIGN_IN: sign in once in the pinned Atium tab' : 'Not signed in to Atium.', app.url);
+    if (!result?.ok) throw new Error(`Atium: ${result?.error || 'the Atium tab did not answer.'}`);
+    return result;
+  }
+
   /* ---------------- Refresh ---------------- */
-  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite' };
-  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite' };
+  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium' };
+  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium' };
   let inflight = null;
   function refresh(progress) {
     inflight ||= (async () => {
@@ -473,6 +524,7 @@ const LambdaLive = (() => {
         netbox: nbP, jira: jrP, gmail: gmP, calendar: calP,
         slack: on('slack') ? slack() : off,
         netsuite: on('netsuite') ? netsuite(s, progress) : off,
+        atium: on('atium') ? atium(s) : off,
       }));
       const settled = await Promise.allSettled(Object.values(results));
       const snapshot = { at: Date.now(), version: 2, sources: {} };
@@ -530,7 +582,7 @@ const LambdaLive = (() => {
   function originsFor(s) {
     const o = k => { try { return new URL(s[k]).origin + '/*'; } catch { return null; } };
     const on = k => s.sources?.[k] !== false;
-    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'),
+    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
   return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor };

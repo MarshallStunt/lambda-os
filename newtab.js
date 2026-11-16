@@ -279,7 +279,7 @@ LambdaData.ready.then(D => {
   /* ---------------- Live feed ---------------- */
   const feed = [...D.FEED];
   const SRC = { jira: ['JR', 'Jira', '--src-jira'], netbox: ['NB', 'NetBox', '--src-netbox'], slack: ['SL', 'Slack', '--src-slack'],
-    mail: ['GM', 'Gmail', '--src-mail'], netsuite: ['NS', 'NetSuite', '--src-netsuite'] };
+    mail: ['GM', 'Gmail', '--src-mail'], netsuite: ['NS', 'NetSuite', '--src-netsuite'], atium: ['AT', 'Atium', '--src-atium'] };
   const feedOn = Object.fromEntries(Object.keys(SRC).map(k => [k, true]));
   const present = Object.keys(SRC).filter(k => feed.some(f => f.src === k));
   $('#feedFilters').innerHTML = present.map(k => `<button class="chip on" data-src="${k}" aria-pressed="true" ><i style="background:var(${SRC[k][2]})"></i>${SRC[k][1]}</button>`).join('');
@@ -1333,6 +1333,22 @@ LambdaData.ready.then(D => {
   window.__lambdaOS = { land: Land, data: D, map: FlatMap, tiles: Tiles, globeGL: GlobeGL, step: (n = 1) => { for (let i = 0; i < n; i++) { const t = performance.now() + i * 16; if (activeView === 'globe') Fleet.draw(t); else if (activeView === 'graph') Brain.draw(t); } } };
 
   /* ---------------- Site card ---------------- */
+  // An Atium build: stage, racked / validated progress and the next milestone or hand-off.
+  const buildWhen = b => b.handoff?.done ? `handed off ${fmtDate(b.handoff.at)}` : b.next ? `${b.next.name.replace(/^Enable /, '')} ${fmtDate(b.next.at)}${b.late ? ' · late' : ''}` : b.handoff?.at ? `hand-off ${fmtDate(b.handoff.at)}` : '';
+  const buildRow = b => `<div class="mini-ticket" ${b.deploymentKey ? `data-dep="${b.deploymentKey}"` : `data-href="${esc(b.url)}"`} title="${esc(b.name)}${b.customer ? ' · ' + esc(b.customer) : ''}">
+      <span class="qkey">${esc(b.stage)}</span><span class="qsum">${esc(b.name)}<br><small class="muted">${[b.customer, b.rackedPct != null && `racked ${pct(b.rackedPct)}`, b.validatedPct != null && `validated ${pct(b.validatedPct)}`].filter(Boolean).map(esc).join(' · ')}</small></span>
+      ${statusChip(b.health, buildWhen(b) || b.stage)}</div>`;
+  const buildBlock = b => `<div class="section-title"><span>Build progress · Atium</span><span>${esc(b.stage)}</span></div>
+      <dl class="kv">
+        ${b.customer ? `<dt>Customer</dt><dd>${esc(b.customer)}</dd>` : ''}
+        <dt>GPUs</dt><dd>${(b.installed || 0).toLocaleString()} installed of ${(b.planned || b.gpus || 0).toLocaleString()}${b.gpuModel ? ` × ${esc(b.gpuModel)}` : ''}${b.mw ? ` · ${b.mw} MW` : ''}</dd>
+        ${b.devices ? `<dt>Racked</dt><dd>${progressBar(b.rackedPct, b.rackedPct >= 1 ? 'good' : 'idle')} ${b.racked.toLocaleString()} of ${b.devices.toLocaleString()} devices</dd>` : ''}
+        ${b.hosts ? `<dt>Validated</dt><dd>${progressBar(b.validatedPct, b.validatedPct >= 1 ? 'good' : 'idle')} ${b.validated.toLocaleString()} of ${b.hosts.toLocaleString()} hosts</dd>` : ''}
+        ${b.next && !/hand ?off/i.test(b.next.name) ? `<dt>Next</dt><dd>${esc(b.next.name)} · ${fmtDate(b.next.at)}${b.late ? ' · <b class="st-warning">late</b>' : ''}</dd>` : ''}
+        ${b.handoff ? `<dt>Hand-off</dt><dd>${fmtDate(b.handoff.at)}${b.handoff.done ? ' · done' : b.late && /hand ?off/i.test(b.next?.name || '') ? ' · <b class="st-warning">late</b>' : ''}</dd>` : ''}
+      </dl>
+      <div class="links">${btn('Open in Atium', b.url)}</div>`;
+
   const SiteCard = {
     open(s) {
       Fleet.focus(s);
@@ -1351,13 +1367,15 @@ LambdaData.ready.then(D => {
       $('#siteCard').innerHTML = `
         <div class="card-head"><div><div class="code">${esc(s.id)} · ${esc({ dc: 'Data center', pop: 'POP', prem: 'On-prem', other: 'Site' }[s.kind])}</div><h3>${esc(s.name)}</h3>${idleChip}</div>
           <button class="x" data-close aria-label="Close">✕</button></div>
-        <div class="links card-actions">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>
+        <div class="links card-actions">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${s.atium ? btn('Atium', s.atium.url) : ''}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>
         ${s.city || s.address ? `<p class="muted small">${esc(s.address || s.city)}</p>` : ''}
         ${s.coordNote ? `<p class="note small">⚠ ${esc(s.coordNote)}</p>` : ''}
         <div class="stats">
           <div class="stat"><b>${kfmt(s.racks)}</b><span>Racks</span></div><div class="stat"><b>${kfmt(s.devices)}</b><span>Devices</span></div>
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
+        ${s.builds?.length ? `<div class="section-title"><span>Builds · Atium</span><span>${s.builds.length}</span></div>${s.builds.map(buildRow).join('')}` : ''}
+        ${s.atium ? `<p class="muted small">Atium: ${s.atium.assets.toLocaleString()} assets tracked${s.atium.consumables ? ` · ${s.atium.consumables.toLocaleString()} consumables` : ''} · <a class="linkish" data-url="${esc(s.atium.url)}" data-what="Atium">open inventory</a></p>` : ''}
         ${inv.length ? `<div class="section-title"><span>Spares on hand</span><span>bar tick = alert level</span></div>${invRows}
           ${inv.length > 14 ? `<p class="muted small">+${inv.length - 14} more part numbers</p>` : ''}` : ''}
         ${s.material?.length ? `<div class="section-title"><span>Material on hand · NetSuite</span><span>${s.material.length} items</span></div>
@@ -1395,6 +1413,7 @@ LambdaData.ready.then(D => {
         ${d.projectType ? `<dt>Type</dt><dd>${esc([d.deployType, d.projectType].filter(Boolean).join(' · '))}</dd>` : ''}
         ${d.size || d.gpuType ? `<dt>Size</dt><dd>${esc([d.size, d.gpuType].filter(Boolean).join(' · '))}</dd>` : ''}
       </dl>
+      ${d.build ? buildBlock(d.build) : ''}
       ${d.workstreams.length ? `<div class="section-title"><span>Workstreams</span><span>${d.workstreams.length}</span></div>
         <div class="answer" style="margin:0"><table><tr><th>Key</th><th>Workstream</th><th>Status</th><th class="num">Progress</th></tr>${wsRows}</table></div>` : ''}
       ${d.events.length ? `<div class="section-title"><span>Meetings</span><span>${d.events.length}</span></div>${d.events.slice(0, 6).map(e => `<div class="mini-ticket" data-href="${esc(e.link)}"><span class="qkey">${new Date(e.at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span><span class="qsum">${esc(e.title)}</span><span class="small muted">${e.allDay ? 'all day' : new Date(e.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div>`).join('')}` : ''}
@@ -1870,6 +1889,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ['NetSuite', 'Home', `${ns}/app/center/card.nl`], ['NetSuite', 'Material on hand', `${ns}/app/common/search/searchresults.nl?searchid=${s.nsOnHandSearch}`],
       ['NetSuite', 'Material transactions', `${ns}/app/common/search/searchresults.nl?searchid=${s.nsMovesSearch}`],
       ['Slack', 'Open Slack', L.slack || 'https://app.slack.com/client'], ['Gmail', 'Inbox', 'https://mail.google.com/'], ['Calendar', 'Google Calendar', 'https://calendar.google.com/'],
+      ...(L.atium || s.atiumUrl ? [['Atium', 'Build portfolio', `${L.atium || s.atiumUrl}/builds`], ['Atium', 'Home', `${L.atium || s.atiumUrl}/`]] : []),
       ['Lambda OS', 'Settings', '#settings'],
       ['Lambda OS', `Help, ideas, bugs: message ${LambdaUpdates.HELP.name} on Slack`, LambdaUpdates.HELP.slack],
     ];

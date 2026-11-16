@@ -77,8 +77,8 @@
         <option value="0">Off: only when I click ↻</option>
       </select>
       <p class="hint">Runs in the background even when no dashboard tab is open, and alerts are checked after each refresh. Open dashboards pick up new data once you've been idle for a minute. Faster refreshes mean more requests to Jira, NetBox and NetSuite.</p>
-      <div class="checks" style="margin-top:10px"><label><input type="checkbox" id="appTabs"><span>Keep pinned background tabs for Slack and Google Calendar (and Gmail if it needs one)</span></label></div>
-      <p class="hint">Slack can only be read from an open Slack page. If you have Slack open, Lambda OS reads from your tab and never touches it. If not, it keeps its own small pinned Slack tab and keeps it healthy, so you don't have to. Google Calendar is read from its own pinned tab (Google blocks the automated agenda feed). Gmail normally uses your Google sign-in directly and only gets a pinned tab when that doesn't work. If a pinned tab asks you to sign in, sign in there once. Turn this off to use only your own tabs.</p>
+      <div class="checks" style="margin-top:10px"><label><input type="checkbox" id="appTabs"><span>Keep pinned background tabs for Slack, Google Calendar and Atium (and Gmail if it needs one)</span></label></div>
+      <p class="hint">Slack can only be read from an open Slack page. If you have Slack open, Lambda OS reads from your tab and never touches it. If not, it keeps its own small pinned Slack tab and keeps it healthy, so you don't have to. Google Calendar is read from its own pinned tab (Google blocks the automated agenda feed). Atium, like Slack, keeps its sign-in in the page, so it's read through an Atium tab; its sign-in token never leaves that tab. Gmail normally uses your Google sign-in directly and only gets a pinned tab when that doesn't work. If a pinned tab asks you to sign in, sign in there once. Turn this off to use only your own tabs.</p>
     </fieldset>
 
     <fieldset>

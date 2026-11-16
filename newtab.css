@@ -290,7 +290,7 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 .boot-src span { color: var(--text-2); }
 
 /* ---------- v0.3: deployments, second brain, agenda, inbox ---------- */
-:root { --src-mail: #c98500; --src-netsuite: #9085e9; --dep: #3ccf6e; }
+:root { --src-mail: #c98500; --src-netsuite: #9085e9; --src-atium: #e0663a; --dep: #3ccf6e; }
 .src-mail { background: var(--src-mail); color: #0b0b0b; } .src-netsuite { background: var(--src-netsuite); }
 .kpis { grid-template-columns: 1fr 1fr; }
 .kpi { padding: 10px 12px; } .kpi-value { font-size: 21px; }

@@ -25,13 +25,16 @@ const LambdaTabs = (() => {
 
   // The apps that are read from a page. `home` is the path our tab should stay under; `pinned: false` = temporary tab.
   function apps(s = {}) {
-    let ns = null;
+    let ns = null, at = null;
     try { ns = new URL(s.netsuiteUrl).origin; } catch { /* not set */ }
+    try { at = new URL(s.atiumUrl || 'https://kelsier.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
     const list = [
       { key: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: '/client', pinned: true, always: true },
       { key: 'gmail', name: 'Gmail', url: 'https://mail.google.com/mail/u/0/', home: '/mail/', pinned: true },
       // Calendar is read from its page (schedule view), not the agenda feed, which Google answers with "unusual traffic".
       { key: 'calendar', name: 'Google Calendar', url: 'https://calendar.google.com/calendar/u/0/r/agenda', home: '/calendar/', pinned: true, always: true, ownOnly: true },
+      // Atium keeps its Okta sign-in in the page, so it's read from a tab like Slack.
+      at && { key: 'atium', name: 'Atium', url: `${at}/builds`, home: '/', pinned: true, always: true },
       ns && { key: 'netsuite', name: 'NetSuite', url: `${ns}/app/center/card.nl`, home: '/app/', pinned: false },
     ].filter(Boolean);
     return Object.fromEntries(list.map(a => [a.key, a]));

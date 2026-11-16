@@ -6,7 +6,7 @@ queue, and a ⌘K bar that searches everything and answers questions.
 
 **Status: v0.3.** Live data from **NetBox** (sites, racks, devices, spares, change log), **Jira** (DC tickets, plus
 projects and deployments from PMO and Cluster Intake), **NetSuite** (material on hand and material movements),
-**Slack** (your mentions and channels), **Gmail** (unread) and **Google Calendar** (your agenda). Every source uses your
+**Slack** (your mentions and channels), **Gmail** (unread), **Google Calendar** (your agenda) and **Atium** (builds). Every source uses your
 own browser sign-in, and no tokens are stored. Every NetBox site is on the globe, including Canada, Mexico and anywhere else.
 
 - **Fleet** is a globe wrapped in real **satellite imagery** with place labels (Esri World Imagery), rendered with WebGL.
@@ -41,6 +41,10 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   deployments with progress since yesterday, new tickets and low spares at your sites, parts arrived, mentions.
   Opens on your first new tab after the brief time (default 08:30 on weekdays). Can be summarized by your AI provider.
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
+- **Atium** (kelsier.aws.lambdalabs.cloud): every tracked build (customer, GPUs, MW, stage, racked and validated
+  progress, next milestone and hand-off) on its site card, matched to the Jira deployment (same site and GPU count) so the
+  deployment panel shows real build progress; asset counts per site; completed milestones in the live feed. Read through
+  an Atium tab with your Okta sign-in, which never leaves that tab (two requests per refresh).
 - **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
   reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab. Google
   Calendar is always read from its own pinned tab (schedule view), because Google answers the automated agenda feed with

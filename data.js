@@ -197,15 +197,15 @@
     };
     const D = finish({
       MODE: 'live', AT: snap.at,
-      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'),
+      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'),
         { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
       ME: { name: jr?.me?.name || '' },
-      LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '' },
+      LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '' },
       SITES, PARTS: [...PARTS.values()], PEOPLE: [...PEOPLE.values()], DEVICES: [...DEVICES.values()], TICKETS, KPIS, FEED,
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
-    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, codeOf, meId });
+    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, codeOf, meId });
   }
 
   /* ---------------- Projects, deployments, Slack, mail, calendar, NetSuite ---------------- */
@@ -314,8 +314,46 @@
       }
     }
 
+    // Atium: site asset counts and every tracked build (stage, racked / validated progress, milestones), linked to
+    // its site and to the matching Jira deployment (same site, same GPU count; or the Jira epic key when Atium has it).
+    const AT = x.atium, BUILDS = [];
+    for (const s of D.SITES) { s.atium = null; s.builds = []; }
+    if (AT) {
+      const atSite = new Map();
+      // "ORD01DH1" or "YQB01 Quebec City, …" → ORD01 / YQB01 when that's the NetBox site
+      const siteFor = name => { const c = codeOf(name); if (c && D.siteById(c)) return c; const c5 = (String(name).toUpperCase().match(/^[A-Z]{3}\d{2}/) || [])[0]; return c5 && D.siteById(c5) ? c5 : null; };
+      for (const a of AT.sites || []) {
+        const site = D.siteById(siteFor(a.name));
+        atSite.set(a.id, site?.id || null);
+        if (site && !site.atium) site.atium = { id: a.id, assets: a.assets, consumables: a.consumables, url: `${AT.base}/sites/${a.id}/warehouse` };
+      }
+      for (const b of AT.builds || []) {
+        const ms = b.milestones || [], at = d => (d ? Date.parse(d + (d.length === 10 ? 'T12:00:00' : '')) : null);
+        const done = ms.filter(m => m.status === 'completed'), last = [...done].sort((a, c) => (at(c.done || c.scheduled) || 0) - (at(a.done || a.scheduled) || 0))[0];
+        const next = ms.filter(m => m.status !== 'completed').sort((a, c) => (at(a.scheduled) || Infinity) - (at(c.scheduled) || Infinity))[0];
+        const ho = ms.find(m => m.type === 'hand_off'), nextAt = at(next?.scheduled);
+        const STAGE = { enable_receiving: 'Receiving', gpu_ship: 'GPUs shipped', enable_racking: 'Racking', enable_validation: 'Validating', hand_off: 'Handed off', rfs: 'Ready for service' };
+        const stage = !done.length ? 'Planned' : ho?.status === 'completed' ? (ms.find(m => m.type === 'rfs')?.status === 'completed' ? 'Ready for service' : 'Handed off') : STAGE[last.type] || last.name;
+        const site = atSite.get(b.siteId) || siteFor(b.name);
+        const o = { ...b, site, stage, next: next ? { name: next.name, at: nextAt } : null, handoff: ho ? { at: at(ho.done || ho.scheduled), done: ho.status === 'completed' } : null,
+          rackedPct: b.devices ? b.racked / b.devices : null, validatedPct: b.hosts ? b.validated / b.hosts : null,
+          late: !!(nextAt && nextAt < now - DAY), url: `${AT.base}/builds`, deploymentKey: null };
+        o.health = o.late ? 'warning' : ho?.status === 'completed' ? 'good' : 'idle';
+        BUILDS.push(o);
+        if (site && D.siteById(site)) D.siteById(site).builds.push(o);
+        const bw = new Set(words(b.name));
+        const dep = (b.epic && DEPLOYMENTS.find(d => d.key === b.epic))
+          || DEPLOYMENTS.find(d => site && d.sites.includes(site) && d.gpus && [b.planned, b.gpus].includes(d.gpus))
+          || DEPLOYMENTS.find(d => site && d.sites.includes(site) && words(d.title).filter(w => bw.has(w)).length >= 2);
+        if (dep && !dep.build) { dep.build = o; o.deploymentKey = dep.key; }
+      }
+      for (const s of D.SITES) s.builds.sort((a, c) => (a.handoff?.done - c.handoff?.done) || ((a.handoff?.at || Infinity) - (c.handoff?.at || Infinity)));
+    }
+
     // Feed and KPIs
     D.FEED.push(
+      ...BUILDS.flatMap(b => (b.milestones || []).filter(m => m.status === 'completed' && m.done).map(m => ({ b, m, at: Date.parse(m.done + (m.done.length === 10 ? 'T12:00:00' : '')) })))
+        .filter(e => e.at > now - 7 * DAY && e.at <= now).map(({ b, m, at }) => ({ src: 'atium', at, ref: b.deploymentKey || b.site, text: `${b.name} · ${m.name} done${b.customer ? ` · ${b.customer}` : ''}` })),
       ...MENTIONS.map(m => ({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}` })),
       ...(MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}` })),
       ...MOVES.filter(m => m.at > now - 7 * DAY).slice(0, 25).map(m => ({ src: 'netsuite', at: m.at, ref: m.deploymentKey || m.site, text: `${m.doc} · ${m.type}${m.deployment ? ` · ${m.deployment}` : ''}${m.status ? ` · ${m.status}` : ''}` })),
@@ -332,7 +370,7 @@
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
-      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES,
+      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
       isTracked: k => TRACKED.has(k), toggleTrack: k => { TRACKED.has(k) ? TRACKED.delete(k) : TRACKED.add(k); saveTracked(); return TRACKED.has(k); },
       tracked: () => DEPLOYMENTS.filter(d => TRACKED.has(d.key) || d.mine).sort((a, b) => (a.end || Infinity) - (b.end || Infinity)),
@@ -411,7 +449,7 @@
       ME: { name: '' }, LINKS: { jira: '', netbox: '' }, SITES, PARTS, PEOPLE, DEVICES, TICKETS, KPIS, FEED,
       pollFeed: async () => [{ ...pick(FEED_T)(), at: Date.now() }], feedEveryMs: 6000,
     });
-    D.SOURCES.splice(3, 0, ...['NetSuite', 'Gmail', 'Calendar'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })));
+    D.SOURCES.splice(3, 0, ...['NetSuite', 'Gmail', 'Calendar', 'Atium'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })));
     // Demo projects, deployments, Slack, mail, calendar and NetSuite in the same shapes live.js produces.
     const dd = (days) => new Date(now + days * 864e5).toISOString().slice(0, 10);
     const proj = (key, summary, status) => ({ key, url: '', source: 'PMO', kind: 'project', summary, status, cat: 'indeterminate', parentKey: '', siteRaw: [], assigneeId: 'p1', assigneeName: 'A. Rivera',
@@ -440,7 +478,22 @@
       const d = new Date(); const [, h, m, ap] = t.match(/(\d+):(\d+)(am|pm)/); d.setHours((+h % 12) + (ap === 'pm' ? 12 : 0), +m, 0, 0); return { date: '', time: t, title, link: '', at: d.getTime() + (i > 2 ? 864e5 : 0), allDay: false }; }) };
     const nsMock = { base: '', onhand: SITES.filter(s => s.kind === 'dc' && s.status === 'active').flatMap(s => PARTS.map(p => ({ item: p.id.toUpperCase(), legacy: '', name: p.name, qty: int(0, 60), loc: `${s.id} | ${s.name}` }))),
       moves: Array.from({ length: 12 }, (_, i) => ({ date: '', at: now - i * 864e5 * 0.6, type: pick(['Transfer Order', 'Item Receipt', 'Material Movement']), doc: `TO${600 + i}`, deployment: pick(['Speed of Light QRO01', '5184x VR200 ORD01', 'Azure to On-Demand SEA01', '']), dcLoc: pick(['QRO01', 'ORD01', 'SEA01', 'DAL02']), from: 'Warehouse', to: '', status: pick(['Shipped', 'Received', 'Pending Fulfillment']), rma: 'No', tracking: '1Z' + int(100000, 999999) })) };
-    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
+    // Demo Atium builds for the same deployments, in the shape live.js reads from Atium.
+    const atBase = 'https://kelsier.aws.lambdalabs.cloud';
+    const atSites = SITES.map((s, i) => ({ id: i + 1, name: `${s.id} - ${s.name}`, assets: int(300, 4500), consumables: int(10, 90) }));
+    const atIdOf = code => atSites.find(a => a.name.startsWith(code + ' '))?.id;
+    const ms = (rx, rk, va, ho, done) => [['enable_receiving', 'Enable Receiving', rx], ['enable_racking', 'Enable Racking', rk], ['enable_validation', 'Enable Validation', va], ['hand_off', 'Hand Off', ho]]
+      .map(([type, name, d], i) => ({ type, name, status: i < done ? 'completed' : 'scheduled', done: i < done ? dd(d) : null, scheduled: dd(d) }));
+    const build = (name, site, customer, gpus, model, racked, validated, steps, done) => ({ id: name, name, siteId: atIdOf(site), customer, gpuModel: model, planned: gpus, installed: Math.round(gpus * validated), gpus,
+      mw: Math.round(gpus / 400) || null, racked: Math.round(gpus / 8 * 1.3 * racked), devices: Math.round(gpus / 8 * 1.3), validated: Math.round(gpus / 8 * validated), hosts: Math.round(gpus / 8), conversion: false, epic: null, milestones: ms(...steps, done) });
+    const atMock = { base: atBase, sites: atSites, builds: [
+      build('QRO01-CL01 15624x VR200', 'QRO01', 'Anthropic', 15624, 'VR200', 0.04, 0, [-15, 30, 90, 200], 1),
+      build('ORD01-DH02 5184x VR200 MaxQ', 'ORD01', 'Anthropic', 5184, 'VR200', 0.62, 0.31, [-60, -35, -10, 120], 3),
+      build('DAL02-CL04 4032x VR200', 'DAL02', 'Microsoft', 4032, 'VR200', 0.88, 0.47, [-110, -80, -6, 58], 3),
+      build('YQB01-CL02 2048x B300', 'YQB01', 'Nvidia', 2048, 'B300', 0.52, 0.12, [-25, -12, -3, 85], 2),
+      build('SEA01-CL01 2040x H100 conversion', 'SEA01', 'Anthropic', 2040, 'H100', 1, 0.94, [-75, -60, -30, -4], 4),
+    ] };
+    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 
   function finish(D) {
