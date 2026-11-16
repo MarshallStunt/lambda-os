@@ -42,8 +42,10 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   Opens on your first new tab after the brief time (default 08:30 on weekdays). Can be summarized by your AI provider.
 - **Go anywhere**: ⌘K jumps to Jira queues, NetBox, NetSuite searches, Slack, Gmail and Calendar.
 - **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
-  reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab (Gmail /
-  Calendar get one only if the direct read fails; NetSuite uses a temporary tab closed after 5 idle minutes). Every
+  reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab. Google
+  Calendar is always read from its own pinned tab (schedule view), because Google answers the automated agenda feed with
+  "unusual traffic". Gmail gets one only if the direct read fails; NetSuite uses a temporary tab closed after 5 idle
+  minutes. Pinned copies are recognised only at the exact address Lambda OS opened, so your own pinned tabs are safe. Every
   minute it reloads that tab if Chrome discarded it, sends it back if it wandered off, and refreshes it every 30 min. If
   it lands on a sign-in page you'll see "SIGN_IN: sign in once in the pinned … tab"; on a bot check ("unusual
   traffic") that app pauses for 30 minutes. Settings → Data turns it off (and closes the pinned tabs).

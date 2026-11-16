@@ -277,9 +277,25 @@ const LambdaLive = (() => {
   // Reads with the Slack tab's own session, so the extension never stores a Slack token.
   async function slackInPage(since) {
     try {
-      const cfg = JSON.parse(localStorage.getItem('localConfig_v2') || 'null');
-      const team = cfg && Object.values(cfg.teams || {})[0];
-      if (!team?.token) return { ok: false, error: 'Not signed in to Slack in that tab.' };
+      // A tab that's just starting needs a moment to load the session; then try every signed-in workspace,
+      // the one open in the tab first.
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      let teams = [];
+      for (let i = 0; i < 30 && !teams.length; i++) {
+        const cfg = JSON.parse(localStorage.getItem('localConfig_v2') || 'null');
+        teams = Object.entries(cfg?.teams || {}).filter(([, t]) => t?.token);
+        if (!teams.length) await wait(500);
+      }
+      if (!teams.length) return { ok: false, error: /signin|workspace-signin|checkcookie/i.test(location.href) ? 'Not signed in to Slack in that tab.' : 'LOADING' };
+      const here = (location.pathname.match(/\/client\/(T[A-Z0-9]+)/) || [])[1];
+      teams.sort(([a], [b]) => (b === here) - (a === here));
+      let team = null;
+      for (const [, t] of teams) {
+        const fd = new FormData(); fd.append('token', t.token);
+        const r = await (await fetch('/api/auth.test', { method: 'POST', body: fd, credentials: 'include' })).json().catch(() => ({}));
+        if (r.ok) { team = t; break; }
+      }
+      if (!team) return { ok: false, error: 'Not signed in to Slack in that tab.' };
       const call = async (m, p = {}) => {
         const fd = new FormData(); fd.append('token', team.token);
         for (const [k, v] of Object.entries(p)) fd.append(k, v);
@@ -314,9 +330,15 @@ const LambdaLive = (() => {
   async function slack(since = 0) {
     await needAccess(['https://app.slack.com/*']);
     const s = await settings(), app = LambdaTabs.apps(s).slack;
-    let result, own;
-    try { ({ result, own } = await LambdaTabs.run(app, slackInPage, [since], { useOwn: s.appTabs !== false })); }
-    catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Slack: couldn't read through the Slack tab (${e.message}).`); }
+    const read = () => LambdaTabs.run(app, slackInPage, [since], { useOwn: s.appTabs !== false });
+    let result, own, tab;
+    try {
+      ({ result, own, tab } = await read());
+      // Still starting up, or the stored session looks stale: reload our own tab once and look again before deciding
+      // anything (a tab you're using is never reloaded). Only a real sign-in page counts as signed out.
+      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
+    } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Slack: couldn't read through the Slack tab (${e.message}).`); }
+    if (result?.error === 'LOADING') throw new Error('Slack is still loading in its tab; trying again next refresh.');
     if (!result?.ok && own && /not signed in/i.test(result?.error || '')) throw new AuthError('SIGN_IN: sign in once in the pinned Slack tab', app.url);
     if (!result?.ok) throw new Error(`Slack: ${result?.error || 'the Slack tab did not answer. Reload it and try again.'}`);
     return result;
@@ -338,38 +360,60 @@ const LambdaLive = (() => {
     };
   }
 
-  /* ---------------- Google Calendar (agenda view of the user's own calendar) ---------------- */
-  function parseWhen(dateText, timeText) {
-    const day = new Date(dateText.replace(/^\w+\s+/, '')); // "Mon Nov 9, 2026" → "Nov 9, 2026"
-    if (isNaN(day)) return { at: null, allDay: true };
-    const m = String(timeText || '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
-    if (!m) return { at: day.getTime(), allDay: true };
-    let h = Number(m[1]) % 12; if (/pm/i.test(m[3])) h += 12;
-    day.setHours(h, Number(m[2] || 0), 0, 0);
-    return { at: day.getTime(), allDay: false };
+  /* ---------------- Google Calendar (read from Lambda OS's pinned Calendar tab) ----------------
+     Google's agenda feed now answers automated requests with an "unusual traffic" page, so Lambda OS reads the normal
+     Calendar page (schedule view) in its own pinned tab instead. That page keeps itself up to date, so reading it sends
+     Google no extra requests; apptabs.js refreshes the tab every 30 minutes. */
+  // Runs inside the Calendar tab: each event button has a screen-reader label like
+  // "9:30am to 10am, Title, Name, Accepted, Location, November 16, 2026" or "All day, Title, …, November 13 – 16, 2026".
+  async function readGoogleCalendar() {
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    let els = [];
+    for (let i = 0; i < 30; i++) {
+      els = [...document.querySelectorAll('[data-eventid][role="button"][aria-label]')];
+      if (els.length || (i > 12 && document.querySelector('[role="main"]'))) break;
+      await wait(500);
+    }
+    const DATE = /,\s*([A-Z][a-z]+ \d{1,2}(?:\s*[–-]\s*(?:[A-Z][a-z]+ )?\d{1,2})?,\s*\d{4})\s*$/;
+    const out = [], seen = new Set();
+    for (const el of els) {
+      const label = el.getAttribute('aria-label') || '';
+      if (/^working location/i.test(label)) continue;
+      const dm = label.match(DATE); if (!dm) continue;
+      const parts = label.slice(0, dm.index).split(/,\s*/);
+      const allDay = /^all day$/i.test(parts[0]);
+      const tm = !allDay && parts[0].match(/^(\d{1,2}(?::\d{2})?\s?[ap]m)\s+to\s+(\d{1,2}(?::\d{2})?\s?[ap]m)$/i);
+      if (!allDay && !tm) continue;
+      const title = parts[1] || '(no title)';
+      const day = dm[1].replace(/\s*[–-]\s*(?:[A-Z][a-z]+ )?\d{1,2}(?=,)/, ''); // "November 13 – 16, 2026" → "November 13, 2026"
+      const key = title + day + (tm ? tm[1] : 'all');
+      if (seen.has(key)) continue; seen.add(key);
+      out.push({ title, date: dm[1], day, time: tm ? tm[1] : '', end: tm ? tm[2] : '', allDay,
+        status: parts.find(p => /^(Accepted|Declined|Tentative|Needs RSVP|Organizer)$/i.test(p)) || '' });
+    }
+    return { ok: true, url: location.href, events: out };
+  }
+  // "9:30am" / "12pm" on "November 16, 2026" → ms
+  function eventTime(day, time) {
+    const m = String(time || '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i), d = new Date(day);
+    if (isNaN(d)) return null;
+    if (m) { let h = Number(m[1]) % 12; if (/pm/i.test(m[3])) h += 12; d.setHours(h, Number(m[2] || 0), 0, 0); }
+    return d.getTime();
   }
   async function calendar(s, email) {
-    const who = s.calendarEmail || email;
-    if (!who) throw new Error('Calendar needs your email address (Settings).');
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     await needAccess(['https://calendar.google.com/*']);
-    const r = await fetchSignedIn(`https://calendar.google.com/calendar/htmlembed?src=${encodeURIComponent(who)}&mode=AGENDA&ctz=${encodeURIComponent(tz)}`, {
-      app: 'calendar', name: 'Google Calendar', login: 'https://calendar.google.com/',
-      good: r => r.ok && !/ServiceLogin|accounts\.google\.com/.test(r.url) && /class="(date-section|no-events|view-container)|<body/.test(r.text) });
-    const x = r.text;
-    if (!/date-section/.test(x)) return { email: who, events: [] };
-    const events = [];
-    for (const sec of x.split('class="date-section').slice(1)) {
-      const date = decode((sec.match(/<div class="date">([^<]+)</) || [])[1] || '');
-      for (const row of sec.match(/<tr class="event">[\s\S]*?<\/tr>/g) || []) {
-        const time = decode((row.match(/class="event-time">([^<]*)</) || [])[1] || '');
-        const title = decode(((row.match(/<span class="event-summary">([\s\S]*?)<\/span>/) || [])[1] || '').replace(/<[^>]+>/g, '')).trim();
-        let link = decode((row.match(/<a[^>]*href="([^"]+)"/) || [])[1] || '');
-        if (link && !/^https?:/.test(link)) link = 'https://calendar.google.com' + (link.startsWith('/') ? '' : '/calendar/') + link;
-        events.push({ date, time, title, link: link || 'https://calendar.google.com/', ...parseWhen(date, time) });
-      }
-    }
-    return { email: who, events };
+    const app = LambdaTabs.apps(s).calendar;
+    let result;
+    try { ({ result } = await LambdaTabs.run(app, readGoogleCalendar, [], { useOwn: s.appTabs !== false })); }
+    catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Google Calendar: couldn't read the Calendar tab (${e.message}).`); }
+    if (!result?.ok) throw new Error('Google Calendar: the Calendar tab did not answer; trying again next refresh.');
+    const who = s.calendarEmail || email || '';
+    const events = result.events.map(e => {
+      const at = eventTime(e.day, e.allDay ? '' : e.time), d = at ? new Date(at) : null;
+      return { title: e.title, date: e.date, time: e.allDay ? '' : e.time, end: e.end, allDay: e.allDay, status: e.status, at,
+        link: d ? `https://calendar.google.com/calendar/u/0/r/day/${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : app.url };
+    }).filter(e => e.at && !/^declined$/i.test(e.status)).sort((a, b) => a.at - b.at);
+    return { email: who, events: events.slice(0, 60) };
   }
 
   /* ---------------- NetSuite (CSV export of saved searches) ---------------- */

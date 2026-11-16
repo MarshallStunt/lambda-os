@@ -30,13 +30,15 @@ const LambdaTabs = (() => {
     const list = [
       { key: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: '/client', pinned: true, always: true },
       { key: 'gmail', name: 'Gmail', url: 'https://mail.google.com/mail/u/0/', home: '/mail/', pinned: true },
-      { key: 'calendar', name: 'Google Calendar', url: 'https://calendar.google.com/calendar/u/0/r', home: '/calendar/', pinned: true },
+      // Calendar is read from its page (schedule view), not the agenda feed, which Google answers with "unusual traffic".
+      { key: 'calendar', name: 'Google Calendar', url: 'https://calendar.google.com/calendar/u/0/r/agenda', home: '/calendar/', pinned: true, always: true, ownOnly: true },
       ns && { key: 'netsuite', name: 'NetSuite', url: `${ns}/app/center/card.nl`, home: '/app/', pinned: false },
     ].filter(Boolean);
     return Object.fromEntries(list.map(a => [a.key, a]));
   }
 
   const urlOf = t => t?.pendingUrl || t?.url || '';
+  const base = u => String(u || '').split(/[?#]/)[0].replace(/\/$/, ''); // address without ?query and #hash
   const originOf = u => { try { return new URL(u).origin; } catch { return ''; } };
   // "Our address" = same origin, and the path (ignoring ?query and #hash) under the app's home path.
   const atHome = (app, u) => { try { const x = new URL(u); return x.origin === originOf(app.url) && x.pathname.startsWith(app.home); } catch { return false; } };
@@ -98,9 +100,11 @@ const LambdaTabs = (() => {
   }
 
   /* ---------------- our pinned tabs ---------------- */
-  // Every pinned tab at the app's address (after a restart these are the candidates to adopt).
+  // Pinned tabs at exactly the address we opened, or last saw our tab on (?query and #hash ignored). After a restart
+  // these are the candidates to adopt; a pinned tab of yours elsewhere in the app (another Slack channel) never counts.
   async function pinnedCopies(app) {
-    return (await chrome.tabs.query({ pinned: true })).filter(t => atHome(app, urlOf(t)));
+    const want = new Set([base(app.url), (await load(OWN_KEY))[app.key]?.at].filter(Boolean));
+    return (await chrome.tabs.query({ pinned: true })).filter(t => want.has(base(urlOf(t))));
   }
   const locks = new Map();
   // Our pinned tab for the app: by saved id, else adopted by address, else (create) a new one. Extra copies are closed.
@@ -130,24 +134,35 @@ const LambdaTabs = (() => {
   // Get our tab into a readable state. Never yanks a tab the user is looking at (they may be signing in there).
   async function heal(app, tab, rec = {}, depth = 0) {
     const u = urlOf(tab), kind = pageKind(u, tab.status === 'complete' ? tab.title : '');
-    if (kind === 'bot') throw pausedError(app.name, await pause(app.key));
-    if (kind === 'signin') throw signInError(app);
-    if (tab.active) return tab.status === 'complete' ? tab : (await waitComplete(tab.id)) || tab;
+    const stale = Date.now() - (rec.refreshedAt || 0) > REFRESH_MS;
     let action = null;
-    if (!atHome(app, u)) {
+    if (kind) {
+      // Stuck on a sign-in or bot-check page. Every 30 minutes (and after a pause ends) look once more at the app,
+      // in case you signed in elsewhere; otherwise stop here. Never while you're looking at the tab.
+      if (!depth && stale && !tab.active) action = 'navigate';
+      else if (kind === 'bot') throw pausedError(app.name, await pause(app.key));
+      else throw signInError(app);
+    } else if (tab.active) return remember(app, tab.status === 'complete' ? tab : (await waitComplete(tab.id)) || tab, rec);
+    else if (!atHome(app, u)) {
       if (depth) throw new TabError(`${app.name}: the pinned tab keeps leaving ${app.url} (now at ${originOf(u) || 'an unknown page'}).`);
       action = 'navigate';
     } else if (tab.discarded || tab.frozen || tab.status === 'unloaded') action = 'reload';
-    else if (!depth && Date.now() - (rec.refreshedAt || 0) > REFRESH_MS) action = 'reload';
+    else if (!depth && stale) action = 'reload';
     if (action === 'navigate') await chrome.tabs.update(tab.id, { url: app.url });
     if (action === 'reload') await chrome.tabs.reload(tab.id);
     if (action && app.pinned) { rec = { ...rec, id: tab.id, refreshedAt: Date.now() }; await saveOwn(app.key, rec); }
-    if (!action && tab.status === 'complete') return tab;
+    if (!action && tab.status === 'complete') return remember(app, tab, rec);
     const loaded = await waitComplete(tab.id);
     if (!loaded) throw new TabError(`${app.name}: the ${app.pinned ? 'pinned' : 'temporary'} tab closed while loading.`);
     if (loaded.status !== 'complete') throw new TabError(`${app.name}: the ${app.pinned ? 'pinned' : 'temporary'} tab didn't finish loading within 30 seconds.`);
     if (action) await sleep(SETTLE_MS); // let the app start up before reading
     return heal(app, loaded, rec, depth + 1);
+  }
+
+  // Keep the address our tab is on, so it's recognised by address after a restart.
+  async function remember(app, tab, rec) {
+    if (app.pinned && atHome(app, urlOf(tab)) && rec.at !== base(urlOf(tab))) await saveOwn(app.key, { ...rec, id: tab.id, at: base(urlOf(tab)) });
+    return tab;
   }
 
   /* ---------------- temporary tabs ---------------- */
@@ -197,7 +212,7 @@ const LambdaTabs = (() => {
     await checkPaused(app.key, app.name);
     // After a restart our pinned tab has a new id and would look like the user's: re-adopt it first.
     if (app.pinned && useOwn && (await load(OWN_KEY))[app.key]) await ownTab(app, { create: false });
-    if (!skipUser) { const t = await userTab(app); if (t) return { tab: t, own: false }; }
+    if (!skipUser && !(app.ownOnly && useOwn)) { const t = await userTab(app); if (t) return { tab: t, own: false }; }
     if (!useOwn) throw new TabError(`Open ${app.name} in a Chrome tab to connect it (or turn on "Keep pinned tabs" in Settings → Data).`, { signIn: true, login: app.url });
     if (!app.pinned) return { tab: await heal(app, await tempTab(app)), own: true };
     const o = await ownTab(app);
@@ -226,6 +241,18 @@ const LambdaTabs = (() => {
     }
   }
 
+  // Reload our own tab once (e.g. Slack still starting) and check it again. Never used on the user's tabs.
+  async function reload(app, tab) {
+    if (tab.active) return tab;
+    await chrome.tabs.reload(tab.id);
+    const loaded = await waitComplete(tab.id);
+    if (!loaded) throw new TabError(`${app.name}: the tab closed while reloading.`);
+    await sleep(SETTLE_MS);
+    const rec = { ...((await load(OWN_KEY))[app.key] || {}), refreshedAt: Date.now() };
+    if (app.pinned) await saveOwn(app.key, { ...rec, id: tab.id });
+    return heal(app, loaded, rec, 1);
+  }
+
   /* ---------------- upkeep (every minute, from the service worker) ---------------- */
   async function closeOwn(key) {
     const rec = (await load(OWN_KEY))[key];
@@ -243,8 +270,8 @@ const LambdaTabs = (() => {
     for (const app of Object.values(A)) {
       if (!app.pinned || !on(app.key)) continue;
       if (await pausedUntil(app.key)) { status[app.key] = 'paused'; continue; }
-      // Slack always gets a tab; Gmail/Calendar only once a direct read needed one. Not while the user has their own.
-      if (!recs[app.key] && (!app.always || await userTab(app))) continue;
+      // Slack and Calendar always get a tab (Slack not while you have your own); Gmail only once a direct read needed one.
+      if (!recs[app.key] && (!app.always || (!app.ownOnly && await userTab(app)))) continue;
       try { const o = await ownTab(app); await heal(app, o.tab, o.rec); status[app.key] = 'ok'; }
       catch (e) { status[app.key] = e.message; }
     }
@@ -252,7 +279,7 @@ const LambdaTabs = (() => {
     return status;
   }
 
-  return { apps, appTab, ownTab, pinnedCopies, heal, run, markTemp, closeTempTabs, tick, closeOwn, checkPaused, botCheck, pause, pageKind, TabError };
+  return { apps, appTab, ownTab, pinnedCopies, heal, reload, run, markTemp, closeTempTabs, tick, closeOwn, checkPaused, botCheck, pause, pageKind, TabError };
 })();
 
 if (typeof self !== 'undefined') self.LambdaTabs = LambdaTabs;
