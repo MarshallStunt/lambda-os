@@ -489,11 +489,57 @@ const LambdaLive = (() => {
       };
     } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
   }
-  async function atium(s) {
+  // Purchase orders for one Atium site, read when you open that site's card (one site per call, so the
+  // regular refresh stays at two requests). Atium has no prices; this is receiving progress and expected dates.
+  async function atiumPOsInPage(siteId) {
+    try {
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      let auth = null;
+      for (let i = 0; i < 30 && !auth?.access_token; i++) {
+        try { auth = JSON.parse(localStorage.getItem('kelsier_okta_auth') || 'null'); } catch { auth = null; }
+        if (!auth?.access_token) await wait(500);
+      }
+      if (!auth?.access_token) return { ok: false, error: /okta|login|signin/i.test(location.href) ? 'Not signed in to Atium in that tab.' : 'LOADING' };
+      const get = async path => {
+        const r = await fetch(path, { headers: { Authorization: 'Bearer ' + auth.access_token } });
+        if (r.status === 401) throw Object.assign(new Error('Not signed in to Atium in that tab (session expired).'), { auth: true });
+        if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+        return r.json();
+      };
+      // Atium pages at 100 orders / 200 lines; read at most 5 pages of each.
+      const all = async (path, key, size) => {
+        const out = []; let total = Infinity;
+        for (let off = 0; off < total && off < size * 5; off += size) {
+          const j = await get(`/api/ui/sites/${siteId}/${path}?limit=${size}&offset=${off}`);
+          out.push(...(j[key] || [])); total = j.total ?? 0;
+          if (!(j[key] || []).length) break;
+        }
+        return out;
+      };
+      const [pos, items] = await Promise.all([all('purchase-orders', 'purchase_orders', 100), all('purchase-orders/items', 'items', 200)]);
+      const lines = new Map();
+      for (const it of items) { if (!lines.has(it.purchase_id)) lines.set(it.purchase_id, []); lines.get(it.purchase_id).push(it); }
+      const min = xs => xs.filter(Boolean).sort()[0] || null;
+      return {
+        ok: true, base: location.origin, siteId, url: `${location.origin}/sites/${siteId}/purchase-orders`,
+        pos: pos.map(p => {
+          const open = (lines.get(p.purchase_id) || []).filter(l => l.status !== 'complete');
+          const kinds = {}; for (const l of open) kinds[l.kind || 'item'] = (kinds[l.kind || 'item'] || 0) + 1;
+          return { id: p.purchase_id, name: p.purchase_name, supplier: p.supplier_name || '', status: p.purchase_status || '', date: p.purchase_date || null,
+            assets: p.total_assets || 0, assetsIn: p.received_assets || 0, consumables: p.total_consumables || 0, consumablesIn: p.received_consumables || 0,
+            pct: (p.received_percent ?? 0) / 100, openLines: open.length, kinds,
+            expected: min(open.map(l => l.min_expected_receipt_date || l.consumable_purchase?.expected_receipt_date)),
+            promise: min(open.map(l => l.min_vendor_promise_date || l.consumable_purchase?.vendor_promise_date)) };
+        }),
+      };
+    } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
+  }
+  // Runs one of the Atium readers in an Atium tab (yours, or our pinned one) with the usual sign-in handling.
+  async function atiumRun(s, fn, args = []) {
     const app = LambdaTabs.apps(s).atium;
     if (!app) throw new Error(`Atium address “${s.atiumUrl}” isn't a valid URL.`);
     await needAccess([new URL(app.url).origin + '/*']);
-    const read = () => LambdaTabs.run(app, atiumInPage, [], { useOwn: s.appTabs !== false });
+    const read = () => LambdaTabs.run(app, fn, args, { useOwn: s.appTabs !== false });
     let result, own, tab;
     try {
       ({ result, own, tab } = await read());
@@ -504,6 +550,12 @@ const LambdaLive = (() => {
     if (!result?.ok && (result?.auth || /not signed in/i.test(result?.error || ''))) throw new AuthError(own ? 'SIGN_IN: sign in once in the pinned Atium tab' : 'Not signed in to Atium.', app.url);
     if (!result?.ok) throw new Error(`Atium: ${result?.error || 'the Atium tab did not answer.'}`);
     return result;
+  }
+  const atium = s => atiumRun(s, atiumInPage);
+  async function atiumPOs(siteId) {
+    const s = await settings();
+    if (s.sources?.atium === false) throw new Error('Atium is turned off in Settings.');
+    return atiumRun(s, atiumPOsInPage, [Number(siteId)]);
   }
 
   /* ---------------- Refresh ---------------- */
@@ -585,7 +637,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor };
+  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;

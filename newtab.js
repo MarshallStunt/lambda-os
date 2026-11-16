@@ -1349,6 +1349,37 @@ LambdaData.ready.then(D => {
       </dl>
       <div class="links">${btn('Open in Atium', b.url)}</div>`;
 
+  // Atium purchase orders for a site: read when the card opens (cached 10 min). No prices in Atium; this is receiving.
+  const poCache = new Map();
+  const poKinds = k => Object.entries(k || {}).map(([kind, c]) => `${c} ${kind}${c > 1 ? 's' : ''}`).join(', ');
+  const poRow = (p, url) => {
+    const today = new Date().toISOString().slice(0, 10), open = p.status !== 'closed' && p.pct < 1, late = open && p.expected && p.expected < today;
+    const got = [p.assets && `${p.assetsIn}/${p.assets} assets`, p.consumables && `${p.consumablesIn}/${p.consumables} consumables`].filter(Boolean).join(' · ');
+    const when = !open ? 'received' : p.expected ? `${late ? 'was due' : 'due'} ${fmtDate(p.expected)}` : 'open';
+    return `<div class="mini-ticket" data-href="${esc(url)}" title="${esc(p.name)} from ${esc(p.supplier)}${p.openLines ? ` · waiting on ${esc(poKinds(p.kinds))}` : ''}${p.promise ? ` · vendor promise ${esc(p.promise)}` : ''}">
+      <span class="qkey">${esc(p.name)}</span><span class="qsum">${esc(p.supplier || 'Supplier unknown')}<br><small class="muted">${esc(got || 'no lines')}${open && p.pct > 0 ? ` · ${pct(p.pct)} in` : ''}</small></span>
+      ${statusChip(!open ? 'good' : late ? 'warning' : 'idle', when)}</div>`;
+  };
+  const poBlock = (pos, url) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const open = pos.filter(p => p.status !== 'closed' && p.pct < 1), done = pos.length - open.length, late = open.filter(p => p.expected && p.expected < today).length;
+    open.sort((a, b) => (a.expected || '9') < (b.expected || '9') ? -1 : 1);
+    return `<div class="section-title"><span>Purchase orders · Atium</span><span>${open.length} open${late ? ` · <b class="st-warning">${late} late</b>` : ''}</span></div>
+      ${open.slice(0, 8).map(p => poRow(p, url)).join('') || '<p class="muted small">Nothing waiting to be received.</p>'}
+      <p class="muted small">${open.length > 8 ? `+${open.length - 8} more open · ` : ''}${done ? `${done} fully received · ` : ''}<a class="linkish" data-url="${esc(url)}" data-what="Atium">all purchase orders</a></p>`;
+  };
+  async function loadPOs(s) {
+    const box = () => { const el = $('#sitePOs'); return el && el.dataset.site === s.id ? el : null; };
+    if (s.atium.pos) { box() && (box().innerHTML = poBlock(s.atium.pos, s.atium.posUrl)); return; } // demo data
+    const hit = poCache.get(s.atium.id);
+    let r = hit && Date.now() - hit.at < 10 * 60e3 ? hit.r : null;
+    if (!r) {
+      try { r = await LambdaLive.atiumPOs(s.atium.id); poCache.set(s.atium.id, { at: Date.now(), r }); }
+      catch (e) { if (box()) box().innerHTML = `<div class="section-title"><span>Purchase orders · Atium</span></div><p class="muted small">Couldn't load: ${esc(String(e.message || e).replace(/^SIGN_IN: /, ''))} · <a class="linkish" data-url="${esc(s.atium.posUrl)}" data-what="Atium">open in Atium</a></p>`; return; }
+    }
+    if (box()) box().innerHTML = r.pos.length ? poBlock(r.pos, r.url) : '';
+  }
+
   const SiteCard = {
     open(s) {
       Fleet.focus(s);
@@ -1375,6 +1406,7 @@ LambdaData.ready.then(D => {
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
         ${s.builds?.length ? `<div class="section-title"><span>Builds · Atium</span><span>${s.builds.length}</span></div>${s.builds.map(buildRow).join('')}` : ''}
+        ${s.atium && (s.atium.pos || isExt && D.MODE === 'live') ? `<div id="sitePOs" data-site="${esc(s.id)}"><div class="section-title"><span>Purchase orders · Atium</span><span>loading…</span></div></div>` : ''}
         ${s.atium ? `<p class="muted small">Atium: ${s.atium.assets.toLocaleString()} assets tracked${s.atium.consumables ? ` · ${s.atium.consumables.toLocaleString()} consumables` : ''} · <a class="linkish" data-url="${esc(s.atium.url)}" data-what="Atium">open inventory</a></p>` : ''}
         ${inv.length ? `<div class="section-title"><span>Spares on hand</span><span>bar tick = alert level</span></div>${invRows}
           ${inv.length > 14 ? `<p class="muted small">+${inv.length - 14} more part numbers</p>` : ''}` : ''}
@@ -1386,6 +1418,7 @@ LambdaData.ready.then(D => {
         ${tickets.slice(0, 10).map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`).join('') || '<p class="muted small">None.</p>'}
         ${tickets.length > 10 ? `<p class="muted small">+${tickets.length - 10} more · <a class="linkish" data-url="${esc(s.jiraUrl || '')}" data-what="Jira">see all in Jira</a></p>` : ''}`;
       $('#siteCard').hidden = false; $('#siteCard').scrollTop = 0; renderSites();
+      if (s.atium && $('#sitePOs')) loadPOs(s);
     },
     close() { $('#siteCard').hidden = true; Fleet.clear(); renderSites(); },
   };

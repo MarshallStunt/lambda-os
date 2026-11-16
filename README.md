@@ -44,7 +44,9 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
 - **Atium** (kelsier.aws.lambdalabs.cloud): every tracked build (customer, GPUs, MW, stage, racked and validated
   progress, next milestone and hand-off) on its site card, matched to the Jira deployment (same site and GPU count) so the
   deployment panel shows real build progress; asset counts per site; completed milestones in the live feed. Read through
-  an Atium tab with your Okta sign-in, which never leaves that tab (two requests per refresh).
+  an Atium tab with your Okta sign-in, which never leaves that tab (two requests per refresh). Opening a site card
+  also loads that site's purchase orders: what is still waiting to be received, expected dates and late orders
+  (Atium has no prices; cached 10 minutes).
 - **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
   reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab. Google
   Calendar is always read from its own pinned tab (schedule view), because Google answers the automated agenda feed with

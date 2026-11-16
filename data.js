@@ -325,7 +325,7 @@
       for (const a of AT.sites || []) {
         const site = D.siteById(siteFor(a.name));
         atSite.set(a.id, site?.id || null);
-        if (site && !site.atium) site.atium = { id: a.id, assets: a.assets, consumables: a.consumables, url: `${AT.base}/sites/${a.id}/warehouse` };
+        if (site && !site.atium) site.atium = { id: a.id, assets: a.assets, consumables: a.consumables, url: `${AT.base}/sites/${a.id}/warehouse`, posUrl: `${AT.base}/sites/${a.id}/purchase-orders`, pos: a.pos || null };
       }
       for (const b of AT.builds || []) {
         const ms = b.milestones || [], at = d => (d ? Date.parse(d + (d.length === 10 ? 'T12:00:00' : '')) : null);
@@ -481,6 +481,13 @@
     // Demo Atium builds for the same deployments, in the shape live.js reads from Atium.
     const atBase = 'https://kelsier.aws.lambdalabs.cloud';
     const atSites = SITES.map((s, i) => ({ id: i + 1, name: `${s.id} - ${s.name}`, assets: int(300, 4500), consumables: int(10, 90) }));
+    // Demo purchase orders (Atium has no prices: receiving progress and expected dates only).
+    const iso = n => new Date(now + n * 864e5).toISOString().slice(0, 10);
+    const po = (name, supplier, assets, assetsIn, cons, consIn, exp, kinds) => ({ id: name, name, supplier, status: assetsIn + consIn >= assets + cons ? 'closed' : 'open', date: iso(-40),
+      assets, assetsIn, consumables: cons, consumablesIn: consIn, pct: (assetsIn + consIn) / Math.max(1, assets + cons), openLines: Object.values(kinds).reduce((a, b) => a + b, 0), kinds, expected: exp == null ? null : iso(exp), promise: exp == null ? null : iso(exp + 5) });
+    const demoPOs = { ORD01: [po('PO4245', 'RXL Inc', 48, 12, 0, 0, -6, { device: 3, rack: 1 }), po('PO4310', 'FS', 0, 0, 220, 140, 4, { consumable: 6 }), po('US000386', 'LookingPoint Inc', 2, 0, 0, 0, 12, { device: 2 }), po('PO4102', 'Supermicro', 96, 96, 0, 0, null, {})],
+      QRO01: [po('PO4401', 'Nvidia', 312, 0, 0, 0, 21, { rack: 4, device: 8 }), po('PO4388', 'FS', 0, 0, 480, 480, null, {})] };
+    for (const a of atSites) { const code = a.name.slice(0, 5); if (demoPOs[code]) a.pos = demoPOs[code]; }
     const atIdOf = code => atSites.find(a => a.name.startsWith(code + ' '))?.id;
     const ms = (rx, rk, va, ho, done) => [['enable_receiving', 'Enable Receiving', rx], ['enable_racking', 'Enable Racking', rk], ['enable_validation', 'Enable Validation', va], ['hand_off', 'Hand Off', ho]]
       .map(([type, name, d], i) => ({ type, name, status: i < done ? 'completed' : 'scheduled', done: i < done ? dd(d) : null, scheduled: dd(d) }));
