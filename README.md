@@ -19,7 +19,8 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   (DCID, SDN, SCR, STORAGE…), health, planned dates and overdue flags. ☆ stars a deployment so it shows in the
   **Tracking** tab. Deployments link to their sites, Slack channels, calendar meetings and NetSuite shipments.
 - **Second brain**: everything linked, drawn as neurons. Signals fire along the connections, and hot spots (breached
-  tickets, at-risk deployments, fresh mentions) fire more.
+  tickets, at-risk deployments, fresh mentions) fire more. **2D / 3D** switch in its toolbar: 3D lays the same graph out in
+  depth (near neurons bigger and brighter), turns slowly on its own, drag to turn it, Shift+drag to pan, scroll to zoom.
 - **Settings** has source toggles, **Reset to defaults**, and **Save / Load backup** (settings plus tracked deployments as JSON; a NetBox token is never written to the file).
 
 - **AI assistant**: **✨ Ask AI** in the top bar (or ⌘J) opens a chat panel; ⌘K questions go there too. Claude

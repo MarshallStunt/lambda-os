@@ -1054,6 +1054,10 @@ LambdaData.ready.then(D => {
   const Brain = (() => {
     const cv = $('#graph'), ctx = cv.getContext('2d');
     let w = 1, h = 1, dpr = 1, alpha = 1, hover = null, dragNode = null, pan = null, warmed = false, lastFrame = 0;
+    // 2D or 3D. In 3D the same graph gets depth: it's laid out in 3D, slowly turns, and drag rotates it (Shift+drag pans).
+    let mode3d = false, yaw = 0.6, pitch = -0.35, lastTouch = 0;
+    try { mode3d = localStorage.getItem('lambdaos-brain3d') === '1'; } catch { /* per-viewer convenience */ }
+    const FOCAL = 900;
     const view = { x: 0, y: 0, k: 1 };
     const nodes = [], edges = [], byId = new Map(), pulses = [], hidden = new Set(['device']);
     const TYPES = {
@@ -1080,7 +1084,7 @@ LambdaData.ready.then(D => {
       if (byId.has(id)) { const n = byId.get(id); n.heat = Math.max(n.heat, heat); return n; }
       const a = rnd() * 6.28, r = 60 + rnd() * 320, R = TYPES[type].r;
       const spines = R >= 4.5 ? Array.from({ length: 3 + Math.floor(rnd() * 4) }, () => ({ a: rnd() * 6.28, len: R * (1.6 + rnd() * 1.8), curl: (rnd() - 0.5) * 1.4 })) : [];
-      const n = { id, type, label, ref, heat, fire: 0, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0, nb: new Set(), out: [], spines };
+      const n = { id, type, label, ref, heat, fire: 0, x: Math.cos(a) * r, y: Math.sin(a) * r, z: (rnd() - 0.5) * 300, vx: 0, vy: 0, vz: 0, X: 0, Y: 0, S: 1, D: 0, nb: new Set(), out: [], spines };
       nodes.push(n); byId.set(id, n); return n;
     };
     const link = (a, b) => {
@@ -1128,30 +1132,42 @@ LambdaData.ready.then(D => {
       for (let i = 0; i < n; i++) {
         const a = nodes[i];
         for (let j = i + 1; j < n; j++) {
-          const b = nodes[j]; let dx = b.x - a.x, dy = b.y - a.y; const d2 = Math.max(dx * dx + dy * dy, 36);
+          const b = nodes[j]; let dx = b.x - a.x, dy = b.y - a.y, dz = mode3d ? b.z - a.z : 0; const d2 = Math.max(dx * dx + dy * dy + dz * dz, 36);
           if (d2 > 90000) continue;
-          const d = Math.sqrt(d2), f = (650 / d2) * alpha; dx /= d; dy /= d;
-          a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+          const d = Math.sqrt(d2), f = (650 / d2) * alpha; dx /= d; dy /= d; dz /= d;
+          a.vx -= dx * f; a.vy -= dy * f; a.vz -= dz * f; b.vx += dx * f; b.vy += dy * f; b.vz += dz * f;
         }
-        a.vx -= a.x * 0.0035 * alpha; a.vy -= a.y * 0.0035 * alpha;
+        a.vx -= a.x * 0.0035 * alpha; a.vy -= a.y * 0.0035 * alpha; a.vz -= a.z * 0.0035 * alpha;
       }
       for (const { a, b } of edges) {
         const big = t => t === 'project' || t === 'site' || t === 'deployment';
         const L = big(a.type) && big(b.type) ? 90 : big(a.type) || big(b.type) ? 50 : 26;
-        let dx = b.x - a.x, dy = b.y - a.y; const d = Math.sqrt(dx * dx + dy * dy) || 1, f = (d - L) * 0.03 * alpha;
-        dx /= d; dy /= d; a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+        let dx = b.x - a.x, dy = b.y - a.y, dz = mode3d ? b.z - a.z : 0; const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1, f = (d - L) * 0.03 * alpha;
+        dx /= d; dy /= d; dz /= d; a.vx += dx * f; a.vy += dy * f; a.vz += dz * f; b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
       }
       for (const p of nodes) {
-        if (p === dragNode) { p.vx = p.vy = 0; continue; }
-        p.vx *= 0.6; p.vy *= 0.6; p.x += p.vx; p.y += p.vy;
+        if (p === dragNode) { p.vx = p.vy = p.vz = 0; continue; }
+        p.vx *= 0.6; p.vy *= 0.6; p.vz *= 0.6; p.x += p.vx; p.y += p.vy; if (mode3d) p.z += p.vz;
       }
       alpha = Math.max(0.012, alpha * 0.992);
     }
+    // Screen position for every node: in 2D the layout itself; in 3D rotated (yaw, pitch) with perspective. S scales
+    // sizes (nearer = bigger) and D is depth (0 near … 1 far) for fading and draw order.
+    function project() {
+      if (!mode3d) { for (const n of nodes) { n.X = n.x; n.Y = n.y; n.S = 1; n.D = 0; } return; }
+      const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+      let zmin = Infinity, zmax = -Infinity;
+      for (const n of nodes) {
+        const x1 = n.x * cy - n.z * sy, z1 = n.x * sy + n.z * cy, y2 = n.y * cp - z1 * sp, z2 = n.y * sp + z1 * cp, s = FOCAL / (FOCAL + z2 + 400);
+        n.X = x1 * s * 1.45; n.Y = y2 * s * 1.45; n.S = s * 1.45; n.Z = z2; zmin = Math.min(zmin, z2); zmax = Math.max(zmax, z2);
+      }
+      const span = Math.max(1, zmax - zmin); for (const n of nodes) n.D = (n.Z - zmin) / span;
+    }
     // Quadratic curve between two nodes, bowed sideways so connections read as dendrites, not wires.
-    const ctrl = e => { const mx = (e.a.x + e.b.x) / 2, my = (e.a.y + e.b.y) / 2, dx = e.b.x - e.a.x, dy = e.b.y - e.a.y; return [mx - dy * e.bend * 0.35, my + dx * e.bend * 0.35]; };
+    const ctrl = e => { const mx = (e.a.X + e.b.X) / 2, my = (e.a.Y + e.b.Y) / 2, dx = e.b.X - e.a.X, dy = e.b.Y - e.a.Y; return [mx - dy * e.bend * 0.35, my + dx * e.bend * 0.35]; };
     const along = (e, t, from) => {
       const [cx, cy] = ctrl(e), A = from === e.a ? e.a : e.b, B = from === e.a ? e.b : e.a, u = 1 - t;
-      return [u * u * A.x + 2 * u * t * cx + t * t * B.x, u * u * A.y + 2 * u * t * cy + t * t * B.y];
+      return [u * u * A.X + 2 * u * t * cx + t * t * B.X, u * u * A.Y + 2 * u * t * cy + t * t * B.Y];
     };
     function spawn(n) {
       const outs = n.out.filter(e => visible(e.a) && visible(e.b));
@@ -1170,7 +1186,7 @@ LambdaData.ready.then(D => {
     }
     function fit() {
       const vis = nodes.filter(visible); if (!vis.length) return;
-      const xs = vis.map(n => n.x), ys = vis.map(n => n.y), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      project(); const xs = vis.map(n => n.X), ys = vis.map(n => n.Y), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
       view.k = Math.max(0.2, Math.min(1.6, 0.9 * Math.min(w / (maxX - minX + 60), h / (maxY - minY + 60))));
       view.x = -((minX + maxX) / 2) * view.k; view.y = -((minY + maxY) / 2) * view.k;
     }
@@ -1179,6 +1195,9 @@ LambdaData.ready.then(D => {
       if (!warmed) { for (let i = 0; i < 320; i++) tick(); warmed = true; fit(); }
       tick();
       const dt = Math.min(50, now - (lastFrame || now)); lastFrame = now;
+      if (mode3d && !pan && !CALM && now - lastTouch > 2500) yaw += 0.0011 * (dt / 16); // slow turn when you're not using it
+      project();
+      const fade = n => mode3d ? 1 - n.D * 0.7 : 1; // far nodes are dimmer
       // Spontaneous firing, biased toward hot nodes; arriving signals make the target fire and sometimes propagate.
       for (const n of nodes) {
         if (!visible(n)) continue;
@@ -1203,17 +1222,18 @@ LambdaData.ready.then(D => {
         if (!visible(e.a) || !visible(e.b)) continue;
         const on = focus && (e.a === focus || e.b === focus), [cx, cy] = ctrl(e);
         ctx.strokeStyle = on ? TYPES[focus.type].color : TYPES[e.a.type].color;
-        ctx.globalAlpha = on ? 0.85 : focus ? 0.03 : 0.13 + 0.25 * Math.max(e.a.fire, e.b.fire);
-        ctx.lineWidth = (on ? 1.6 : 0.9) / view.k;
-        ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.quadraticCurveTo(cx, cy, e.b.x, e.b.y); ctx.stroke();
+        ctx.globalAlpha = (on ? 0.85 : focus ? 0.03 : 0.13 + 0.25 * Math.max(e.a.fire, e.b.fire)) * (on ? 1 : Math.min(fade(e.a), fade(e.b)));
+        ctx.lineWidth = (on ? 1.6 : 0.9) * (e.a.S + e.b.S) / 2 / view.k;
+        ctx.beginPath(); ctx.moveTo(e.a.X, e.a.Y); ctx.quadraticCurveTo(cx, cy, e.b.X, e.b.Y); ctx.stroke();
       }
       ctx.globalCompositeOperation = 'lighter';
-      // glows (somas)
-      for (const n of nodes) {
+      // glows (somas), far to near
+      const order = mode3d ? [...nodes].sort((a, b) => b.D - a.D) : nodes;
+      for (const n of order) {
         if (!visible(n)) continue;
-        const t = TYPES[n.type], R = t.r * (3.2 + n.fire * 3 + n.heat * 0.8);
-        ctx.globalAlpha = (lit(n) ? 0.55 + n.fire * 0.45 : 0.08);
-        ctx.drawImage(glow(t.color), n.x - R, n.y - R, R * 2, R * 2);
+        const t = TYPES[n.type], R = t.r * n.S * (3.2 + n.fire * 3 + n.heat * 0.8);
+        ctx.globalAlpha = (lit(n) ? 0.55 + n.fire * 0.45 : 0.08) * fade(n);
+        ctx.drawImage(glow(t.color), n.X - R, n.Y - R, R * 2, R * 2);
       }
       // signals travelling along dendrites, with a short tail
       for (const p of pulses) {
@@ -1226,23 +1246,23 @@ LambdaData.ready.then(D => {
         }
       }
       ctx.globalCompositeOperation = 'source-over';
-      // spines + cores
-      for (const n of nodes) {
+      // spines + cores, far to near
+      for (const n of order) {
         if (!visible(n)) continue;
-        const t = TYPES[n.type];
-        ctx.globalAlpha = lit(n) ? 1 : 0.15;
+        const t = TYPES[n.type], R = t.r * n.S, x = n.X, y = n.Y;
+        ctx.globalAlpha = (lit(n) ? 1 : 0.15) * fade(n);
         if (n.spines.length && view.k > 0.35) {
           ctx.strokeStyle = t.color; ctx.lineWidth = 0.8 / view.k; ctx.globalAlpha *= 0.5;
           for (const sp of n.spines) {
-            const ex = n.x + Math.cos(sp.a) * sp.len, ey = n.y + Math.sin(sp.a) * sp.len;
-            ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.quadraticCurveTo(n.x + Math.cos(sp.a + sp.curl) * sp.len * 0.6, n.y + Math.sin(sp.a + sp.curl) * sp.len * 0.6, ex, ey); ctx.stroke();
+            const L = sp.len * n.S, ex = x + Math.cos(sp.a) * L, ey = y + Math.sin(sp.a) * L;
+            ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + Math.cos(sp.a + sp.curl) * L * 0.6, y + Math.sin(sp.a + sp.curl) * L * 0.6, ex, ey); ctx.stroke();
           }
-          ctx.globalAlpha = lit(n) ? 1 : 0.15;
+          ctx.globalAlpha = (lit(n) ? 1 : 0.15) * fade(n);
         }
-        shape(n, n.x, n.y, t.r); ctx.fillStyle = t.color; ctx.fill();
+        shape(n, x, y, R); ctx.fillStyle = t.color; ctx.fill();
         ctx.strokeStyle = 'rgba(5,7,13,0.9)'; ctx.lineWidth = 1.5 / view.k; ctx.stroke();
-        if (t.r >= 5) { ctx.fillStyle = '#ffffff'; ctx.globalAlpha *= 0.55 + n.fire * 0.45; ctx.beginPath(); ctx.arc(n.x, n.y, t.r * 0.32, 0, 7); ctx.fill(); }
-        if (n === focus) { ctx.globalAlpha = 1; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.5 / view.k; shape(n, n.x, n.y, t.r + 4 / view.k); ctx.stroke(); }
+        if (t.r >= 5) { ctx.fillStyle = '#ffffff'; ctx.globalAlpha *= 0.55 + n.fire * 0.45; ctx.beginPath(); ctx.arc(x, y, R * 0.32, 0, 7); ctx.fill(); }
+        if (n === focus) { ctx.globalAlpha = 1; ctx.strokeStyle = C.accent; ctx.lineWidth = 1.5 / view.k; shape(n, x, y, R + 4 / view.k); ctx.stroke(); }
       }
       ctx.globalAlpha = 1; ctx.textBaseline = 'middle';
       for (const n of nodes) {
@@ -1253,17 +1273,18 @@ LambdaData.ready.then(D => {
         const big = n.type === 'project' || n.type === 'site';
         ctx.font = `${big ? '600 ' : ''}${(big ? 12 : 10.5) / view.k}px ${n.type === 'site' || n.type === 'ticket' ? MONO : 'system-ui, sans-serif'}`;
         ctx.fillStyle = n === focus ? '#fff' : big ? C.text : C['text-2'];
+        ctx.globalAlpha = n === focus ? 1 : fade(n);
         const label = n.label.length > 42 ? n.label.slice(0, 41) + '…' : n.label;
-        ctx.fillText(label, n.x + TYPES[n.type].r + 5 / view.k, n.y);
+        ctx.fillText(label, n.X + TYPES[n.type].r * n.S + 5 / view.k, n.Y);
       }
-      ctx.textBaseline = 'alphabetic';
+      ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
     }
 
     const toWorld = (sx, sy) => [(sx - w / 2 - view.x) / view.k, (sy - h / 2 - view.y) / view.k];
     const at = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     function hit(sx, sy) {
       const [x, y] = toWorld(sx, sy); let best = null, bd = Infinity;
-      for (const n of nodes) { if (!visible(n)) continue; const d = Math.hypot(n.x - x, n.y - y); if (d < TYPES[n.type].r + 6 / view.k && d < bd) { bd = d; best = n; } }
+      for (const n of nodes) { if (!visible(n)) continue; const dd = Math.hypot(n.X - x, n.Y - y), d = dd + (mode3d ? n.D * 4 / view.k : 0); if (dd < TYPES[n.type].r * n.S + 6 / view.k && d < bd) { bd = d; best = n; } }
       return best;
     }
     function describe(n) {
@@ -1280,15 +1301,19 @@ LambdaData.ready.then(D => {
       return `<b>${esc(n.label)}</b>`;
     }
     cv.addEventListener('pointerdown', e => {
-      const [x, y] = at(e); const n = hit(x, y); cv.setPointerCapture(e.pointerId);
-      if (n) { dragNode = n; alpha = Math.max(alpha, 0.3); n.fire = 1; spawn(n); }
-      pan = { x, y, vx: view.x, vy: view.y, moved: 0, node: n };
+      const [x, y] = at(e); const n = hit(x, y); cv.setPointerCapture(e.pointerId); lastTouch = performance.now();
+      // 2D: drag a neuron to move it, drag empty space to pan. 3D: drag turns the brain, Shift+drag pans.
+      if (n && !mode3d) { dragNode = n; alpha = Math.max(alpha, 0.3); }
+      if (n) { n.fire = 1; spawn(n); }
+      pan = { x, y, vx: view.x, vy: view.y, yaw, pitch, moved: 0, node: n, rotate: mode3d && !e.shiftKey };
     });
     cv.addEventListener('pointermove', e => {
       const [x, y] = at(e);
       if (pan) {
         pan.moved += Math.abs(x - pan.x) + Math.abs(y - pan.y);
+        lastTouch = performance.now();
         if (dragNode) { const [wx, wy] = toWorld(x, y); dragNode.x = wx; dragNode.y = wy; alpha = Math.max(alpha, 0.2); }
+        else if (pan.rotate) { yaw = pan.yaw + (x - pan.x) * 0.006; pitch = Math.max(-1.4, Math.min(1.4, pan.pitch + (y - pan.y) * 0.006)); }
         else { view.x = pan.vx + (x - pan.x); view.y = pan.vy + (y - pan.y); }
         hideTip(); return;
       }
@@ -1310,6 +1335,9 @@ LambdaData.ready.then(D => {
 
     return {
       draw, resize, fit, TYPES, nodeCount: () => nodes.filter(visible).length,
+      is3d: () => mode3d,
+      set3d: on => { if (on === mode3d) return; mode3d = on; try { localStorage.setItem('lambdaos-brain3d', on ? '1' : '0'); } catch { /* ignore */ }
+        alpha = Math.max(alpha, 0.5); for (let i = 0; i < 120; i++) tick(); fit(); },
       counts: () => Object.fromEntries(Object.keys(TYPES).map(k => [k, nodes.filter(n => n.type === k).length])),
       isHidden: k => hidden.has(k), toggle: k => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); hover = null; return !hidden.has(k); },
     };
@@ -1395,7 +1423,8 @@ LambdaData.ready.then(D => {
       const n = Brain.counts();
       return Object.entries(Brain.TYPES).filter(([k]) => n[k]).map(([k, t]) =>
         `<button class="chip ${Brain.isHidden(k) ? '' : 'on'}" data-btype="${k}" aria-pressed="${!Brain.isHidden(k)}"><svg viewBox="0 0 10 10">${shapeSvg(t.shape, t.color)}</svg>${t.label} <small>${n[k]}</small></button>`).join('')
-        + '<button class="chip" data-brain="fit" title="Fit everything (double-click)">Fit</button>';
+        + '<button class="chip" data-brain="fit" title="Fit everything (double-click)">Fit</button>'
+        + `<span class="seg" title="View">${[['2d', '2D'], ['3d', '3D']].map(([k, l]) => `<button class="chip ${(k === '3d') === Brain.is3d() ? 'on' : ''}" data-brain="${k}" aria-pressed="${(k === '3d') === Brain.is3d()}">${l}</button>`).join('')}</span>`;
     },
     deploys: () => [['good', 'On track'], ['warning', 'At risk'], ['critical', 'Off track / overdue'], ['idle', 'Not started']].map(([s, l]) =>
       `<span><svg viewBox="0 0 10 10"><rect x="0" y="2" width="10" height="6" rx="2" fill="${s === 'idle' ? C.accent : C[s]}"/></svg>${l}</span>`).join('')
@@ -1410,12 +1439,13 @@ LambdaData.ready.then(D => {
     if (b.dataset.basemap) { autoSat = false; Tiles.set(b.dataset.basemap); setView('globe'); }
     if (b.dataset.btype) { Brain.toggle(b.dataset.btype); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === 'fit') Brain.fit();
+    if (b.dataset.brain === '2d' || b.dataset.brain === '3d') { Brain.set3d(b.dataset.brain === '3d'); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
   });
   function hint() {
     const unplaced = D.SITES.length - Fleet.placedCount;
     $('#stageHint').textContent = activeView === 'globe'
       ? `${Fleet.placedCount} sites · drag to ${Fleet.mode() === 'globe' ? 'rotate' : 'pan'} · scroll to zoom · double-click to fit · click a site${unplaced ? ` · ${unplaced} without coordinates are in the list` : ''}`
-      : activeView === 'graph' ? `${Brain.nodeCount()} neurons · hover to fire and trace links · drag to pan · scroll to zoom · click to open`
+      : activeView === 'graph' ? `${Brain.nodeCount()} neurons · hover to fire and trace links · ${Brain.is3d() ? 'drag to turn · Shift+drag to pan' : 'drag to pan'} · scroll to zoom · click to open`
       : `${(D.DEPLOYMENTS || []).length} deployments · ☆ to track · click a row for workstreams, meetings, Slack and shipments`;
   }
   function setView(v) {
