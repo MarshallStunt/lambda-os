@@ -774,7 +774,7 @@ LambdaData.ready.then(D => {
     const { mx, my } = Land;
     const api = { selected: null, placedCount: placed.length, fromGlobe: false };
     const toLat = y => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
-    let w = 1, h = 1, dpr = 1, cx = 0.5, cy = 0.4, S = 1, tcx = null, tcy = null, tS = null, drag = null, hover = null, lastInteract = 0, shift = 0;
+    let w = 1, h = 1, dpr = 1, cx = 0.5, cy = 0.4, S = 1, tcx = null, tcy = null, tS = null, drag = null, hover = null, lastInteract = 0, shift = 0, flyZ = -1;
 
     const isLand = Land.isLand;
 
@@ -861,7 +861,8 @@ LambdaData.ready.then(D => {
       if (P.tint) { g.fillStyle = `rgba(5,7,13,${P.tint})`; g.fillRect(0, 0, w, h); }
     }
     function tile(g, kind, z, x, y, sx, sy, ts, noFallback) {
-      const t = Tiles.get(kind, z, x, y);
+      // While flying in, only the destination zoom is downloaded (fetched up front); in-between levels use what's cached.
+      const t = Tiles.get(kind, z, x, y, tS == null || z === flyZ);
       if (t?.ok) { t.used = performance.now(); g.drawImage(t.img, sx, sy, ts + 0.6, ts + 0.6); return; }
       if (noFallback) return;
       for (let k = 1; k <= 5 && z - k >= 0; k++) {
@@ -893,7 +894,8 @@ LambdaData.ready.then(D => {
       shift += ((card ? 364 : 0) - shift) * 0.15;
       if (tS != null) {
         cx += (tcx - cx) * 0.1; cy += (tcy - cy) * 0.1; S += (tS - S) * 0.1;
-        if (Math.abs(tcx - cx) < 1e-5 && Math.abs(tcy - cy) < 1e-5 && Math.abs(tS - S) < 0.5) tS = null;
+        // "Arrived" is relative to the zoom: within half a pixel on screen and 0.2% of the scale.
+        if (Math.abs(tcx - cx) * S < 0.5 && Math.abs(tcy - cy) * S < 0.5 && Math.abs(tS - S) < Math.max(0.5, tS * 2e-3)) { cx = tcx; cy = tcy; S = tS; tS = null; }
       }
       cy = Math.max(0.02, Math.min(0.98, cy));
       drawBase();
@@ -988,7 +990,18 @@ LambdaData.ready.then(D => {
     const goTo = (x, y, s) => { tcx = x + Math.round(cx - x); tcy = y; tS = s; }; // nearest wrapped copy
     api.focus = s => { api.selected = s; if (s.lat != null) goTo(mx(s.lon), my(s.lat), Math.max(S, homeBox().S * 1.4)); };
     // Jump straight to a spot at a given tile zoom (17 ≈ individual buildings).
-    api.flyTo = (lat, lon, z, instant) => { const x = mx(lon), y = my(lat), s2 = 256 * 2 ** z; if (instant) { cx = x; cy = y; S = s2; tS = null; base.key = ''; } else goTo(x, y, s2); };
+    // Exact location: centre on the spot at once and zoom the last few levels (no long pan across the country, which
+    // used to download every zoom level on the way: ~2,000 tiles). The destination tiles are requested first.
+    const prefetch = (x, y, z) => { const P = Tiles.provider(); if (!P) return; const zz = Math.min(P.max, z), n = 2 ** zz, s = 256;
+      const hx = Math.ceil((w / 2) / s) + 1, hy = Math.ceil((h / 2) / s) + 1, tx = Math.floor(x * n), ty = Math.floor(y * n);
+      for (let dy = -hy; dy <= hy; dy++) for (let dx = -hx; dx <= hx; dx++) { const X = (((tx + dx) % n) + n) % n, Y = ty + dy; if (Y < 0 || Y >= n) continue;
+        Tiles.get('base', zz, X, Y); if (P.labels) Tiles.get('labels', zz, X, Y); } };
+    api.flyTo = (lat, lon, z, instant) => {
+      const x = mx(lon), y = my(lat), s2 = 256 * 2 ** z;
+      if (instant) { cx = x; cy = y; S = s2; tS = null; base.key = ''; return; }
+      flyZ = Math.min(Tiles.provider()?.max ?? z, z); prefetch(x, y, z - 4); prefetch(x, y, z); // backdrop for the zoom, then the street level
+      cx = x; cy = y; tcx = x; tcy = y; S = Math.min(Math.max(S, 256 * 2 ** (z - 4)), s2); tS = s2; base.key = '';
+    };
     api.clear = () => { api.selected = null; };
     api.home = () => { const b = homeBox(); goTo(b.cx, b.cy, b.S); };
     api.world = () => goTo(0.5, 0.45, Math.max(w - shift, 1) * 0.98);
