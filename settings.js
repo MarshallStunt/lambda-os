@@ -225,6 +225,44 @@ async function reset() {
 }
 
 $('save').addEventListener('click', () => save());
+
+// ---------- Changes save themselves ----------
+// Every field saves as soon as it changes (typing waits for a short pause). Chrome only lets an extension ask for access
+// to a new address after a click, so a new Jira / NetBox / NetSuite / local AI address gets an "Allow access" button.
+let autoT = null, pillT = null;
+const pill = document.createElement('div');
+pill.className = 'saved-pill'; pill.setAttribute('role', 'status'); pill.hidden = true;
+document.body.appendChild(pill);
+// Appearance (theme, accent, density…) already saves itself through LambdaLook, so it's left to that.
+const skip = el => !el.matches?.('input, select, textarea') || el.type === 'file' || el.closest('[data-nosave]') || el.name === 'theme' || /^look/.test(el.id);
+async function missingAccess(s) {
+  const origins = LambdaLive.originsFor({ ...s, sources: { ...LambdaLive.DEFAULTS.sources, ...(s.sources || {}) } });
+  if (s.ai?.provider === 'local') try { origins.push(new URL(s.ai.localUrl).origin + '/*'); } catch { /* not a URL yet */ }
+  const out = [];
+  for (const o of origins) if (!(await chrome.permissions.contains({ origins: [o] }).catch(() => true))) out.push(o);
+  return out;
+}
+async function autoSave() {
+  clearTimeout(autoT); autoT = null;
+  const s = read();
+  s.look = (await chrome.storage.local.get('settings')).settings?.look || s.look; // never undo an appearance change
+  await chrome.storage.local.set({ settings: s });
+  const need = await missingAccess(s);
+  pill.innerHTML = need.length
+    ? `✓ Saved · Lambda OS needs access to ${esc(need.map(o => o.replace(/^https?:\/\//, '').replace(/\/\*$/, '')).join(', '))} <button class="btn primary" id="pillAllow">Allow access</button>`
+    : '✓ Saved';
+  pill.classList.toggle('warn', !!need.length); pill.hidden = false;
+  clearTimeout(pillT); if (!need.length) pillT = setTimeout(() => { pill.hidden = true; }, 1800);
+  $('pillAllow')?.addEventListener('click', async () => {
+    const ok = await chrome.permissions.request({ origins: need }).catch(() => false);
+    pill.innerHTML = ok ? '✓ Access allowed' : 'Access not allowed, so that source stays off.'; pill.classList.toggle('warn', !ok);
+    clearTimeout(pillT); pillT = setTimeout(() => { pill.hidden = true; }, 2500);
+  });
+}
+const typing = el => el.matches('input[type=text], input[type=url], input[type=email], input[type=password], input[type=number], input:not([type]), textarea');
+document.addEventListener('input', e => { if (skip(e.target)) return; clearTimeout(autoT); autoT = setTimeout(autoSave, typing(e.target) ? 700 : 0); });
+document.addEventListener('change', e => { if (skip(e.target)) return; autoSave(); });
+window.addEventListener('beforeunload', () => { if (autoT) autoSave(); }); // a pending edit is saved even if you close the page right away
 $('appTabs').addEventListener('change', async () => { await save({ quiet: true }); say($('appTabs').checked ? '<p class="st-good">Saved. Lambda OS keeps its own pinned tabs when you don\'t have the app open.</p>' : '<p class="st-good">Saved. Lambda OS closed its pinned tabs and only reads from tabs you open.</p>'); });
 $('refreshMinutes').addEventListener('change', async () => { await save({ quiet: true }); say(`<p class="st-good">Saved. Data now refreshes ${$('refreshMinutes').value === '0' ? 'only when you click ↻' : `every ${$('refreshMinutes').selectedOptions[0].text.replace(/^Every /, '').replace(/ \(default\)/, '')}`}.</p>`); });
 $('open').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') }));

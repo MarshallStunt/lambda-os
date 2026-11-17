@@ -34,6 +34,11 @@
     #result { margin-top: 14px; font-size: 12px; }
     #result .boot-src { margin-top: 6px; }
     @media (max-width: 600px) { .two { grid-template-columns: 1fr; } }
+    .saved-pill { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px;
+      padding: 9px 16px; border-radius: 99px; font-size: 13px; font-weight: 600; color: var(--good); background: var(--glass-strong, rgba(8,12,22,.95));
+      border: 1px solid var(--line-hi); box-shadow: 0 10px 30px rgba(0,0,0,.35); max-width: calc(100% - 32px); }
+    .saved-pill.warn { color: var(--warning); }
+    .saved-pill .btn { padding: 4px 10px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -41,7 +46,7 @@
   <div class="wrap">
     <div class="brand"><span class="brand-mark" aria-hidden="true">λ</span><span class="brand-name">LAMBDA<b>OS</b></span></div>
     <h1>Settings</h1>
-    <p class="muted">Lambda OS reads everything with your own browser sign-ins. Nothing leaves your browser and no passwords or tokens are stored.</p>
+    <p class="muted">Lambda OS reads everything with your own browser sign-ins. Nothing leaves your browser and no passwords or tokens are stored. Changes save automatically.</p>
 
     <fieldset>
       <legend>Appearance</legend>
@@ -237,7 +242,7 @@
     </fieldset>
 
     <div class="row">
-      <button class="btn primary" id="save">Save &amp; test connections</button>
+      <button class="btn primary" id="save" title="Changes save automatically; this checks every source">Test connections</button>
       <button class="btn" id="open">Open dashboard</button>
       <span class="spacer"></span>
       <button class="btn" id="exportBtn" title="Download your settings and tracked deployments as a file">Save backup</button>
