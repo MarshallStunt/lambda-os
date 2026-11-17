@@ -255,13 +255,52 @@ LambdaData.ready.then(D => {
     onsiteBusy = true;
     try { ONSITE = await LambdaLive.atiumOnsite(ids); onsiteAt = Date.now(); } catch { /* the rows say "not loaded" */ }
     onsiteBusy = false; if (qMode === 'volunteer') renderQueue();
+    if (volOpen && !$('#drawer').hidden) { const y = $('#drawer').scrollTop; openVolunteers(); $('#drawer').scrollTop = y; }
   }
-  const volRow = v => `<li class="qitem vol">
-      <div style="min-width:0"><div class="qkey"><button class="tagchip" ${v.known ? `data-site="${esc(v.site)}"` : ''}>${esc(v.site)}</button> ${esc(v.known ? D.siteById(v.site)?.name || '' : '')} · ${esc(v.user)} in #${esc(v.channel)}</div>
-        <div class="qsum vol-text">${esc(v.text)}</div>
-        <div class="qmeta">${signupLine(v)}</div>
-        <div class="links">${v.scheduleUrl ? btn('Sign up in Atium', v.scheduleUrl, true) : ''}${btn('Open in Slack', v.link)}</div></div>
-      <span class="ftime">${rel(v.askedAt)}</span></li>`;
+  // Short row (left column, site card); clicking it opens the full view in the drawer.
+  const signupCount = v => { const s = signups(v); if (!s) return null; const today = new Date().toISOString().slice(0, 10);
+    return new Set(s.list.filter(e => e.date >= today && e.hours > 0).map(e => e.name)).size; };
+  const volRow = v => { const c = signupCount(v);
+    return `<li class="qitem vol" data-vol="${esc(v.site)}" title="Open the full request">
+      <div style="min-width:0"><div class="qkey">${esc(v.site)}${v.known ? ` · ${esc(D.siteById(v.site)?.name || '')}` : ''}</div>
+        <div class="qsum">${esc(v.text)}</div>
+        <div class="qmeta">${esc(v.user)} · ${c == null ? 'see who signed up' : c ? `${c} signed up` : 'no one signed up yet'}</div></div>
+      <span class="ftime">${rel(v.askedAt)}</span></li>`; };
+  // Full view: the whole message, a two-week sign-up grid from the site's Atium onsite schedule, and big buttons.
+  let volOpen = false;
+  function volGrid(v) {
+    const s = signups(v);
+    if (!v.atiumId) return '<p class="muted">No Atium onsite schedule was found for this site, so sign-ups can\'t be shown. Reply in Slack instead.</p>';
+    if (!s) return `<p class="muted">${onsiteBusy ? 'Checking the Atium onsite schedule…' : 'The Atium onsite schedule could not be loaded (sign in to Atium, then reopen).'}</p>`;
+    const days = Array.from({ length: 14 }, (_, i) => new Date(Date.now() + i * 864e5).toISOString().slice(0, 10));
+    const people = [...new Set(s.list.filter(e => e.hours > 0 && e.date >= days[0]).map(e => e.name))].sort((x, y) => (y === s.me) - (x === s.me));
+    if (!people.length) return '<p class="vol-empty st-warning">No one has signed up yet. Check with your manager, then add your days in Atium.</p>';
+    const hrs = (p, d) => s.list.filter(e => e.name === p && e.date === d).reduce((t, e) => t + e.hours, 0);
+    const head = days.map(d => { const x = new Date(d + 'T12:00'); return `<th class="${[0, 6].includes(x.getDay()) ? 'we' : ''}">${x.toLocaleDateString([], { weekday: 'narrow' })}<br>${x.getDate()}</th>`; }).join('');
+    const rows = people.slice(0, 12).map(p => `<tr class="${p === s.me ? 'me' : ''}"><td class="who">${esc(p === s.me ? "You" : p)}</td>${days.map(d => { const h = hrs(p, d); return `<td>${h ? `<i title="${h} h">${h}</i>` : ''}</td>`; }).join('')}</tr>`).join('');
+    const later = people.length > 12 ? `<p class="muted small">+${people.length - 12} more</p>` : '';
+    return `<div class="vol-grid"><table><tr><th class="who">${people.length} signed up · next 2 weeks</th>${head}</tr>${rows}</table></div>${later}`;
+  }
+  function openVolunteers(focus) {
+    const vols = D.VOLUNTEER || [];
+    volOpen = true;
+    Drawer.open(`<div class="qkey">VOLUNTEER REQUESTS · SLACK + ATIUM</div><h3>Help wanted at other sites</h3>
+      <p class="muted">Requests in Slack for people to help at another site's deployment (last 45 days). Check with your manager, then add your days to the site's Atium onsite schedule.</p>
+      ${vols.map(v => `<section class="volcard${v.site === focus ? ' focus' : ''}" id="vol-${esc(v.site)}">
+        <div class="volhead"><span class="volsite">${esc(v.site)}</span><span class="volname">${esc(v.known ? D.siteById(v.site)?.name || '' : '')}</span><span class="muted">${rel(v.askedAt)} ago</span></div>
+        <p class="volmeta">Asked by <b>${esc(v.user)}</b> in #${esc(v.channel)} · ${new Date(v.askedAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}${v.messages > 1 ? ` · ${v.messages} messages about it` : ''}</p>
+        <p class="voltext">${esc(v.text)}</p>
+        ${volGrid(v)}
+        <div class="links">${v.scheduleUrl ? btn('Sign up in Atium', v.scheduleUrl, true) : ''}${btn('Open in Slack', v.link)}${v.known ? `<button class="btn" data-open="site:${esc(v.site)}">Site card</button>` : ''}</div>
+      </section>`).join('') || '<p class="muted">No requests for volunteers in Slack in the last 45 days.</p>'}`, 'wide');
+    if (focus) $(`#vol-${CSS.escape(focus)}`)?.scrollIntoView({ block: 'start' });
+    loadOnsite();
+  }
+  document.addEventListener('click', e => {
+    const v = e.target.closest('[data-vol]'); if (!v) return;
+    if (!$('#brief').hidden) $('#brief').hidden = true;
+    openVolunteers(v.dataset.vol);
+  });
 
   function renderQueue() {
     const tracked = D.tracked(), inbox = inboxItems();
@@ -278,7 +317,7 @@ LambdaData.ready.then(D => {
     $('#volCount').textContent = vols.filter(v => v.at > Date.now() - 14 * 864e5).length || '';
     if (qMode === 'volunteer') {
       $('#queueCount').textContent = vols.length ? `${vols.length} site${vols.length > 1 ? 's' : ''} · 45 days` : '';
-      $('#queue').innerHTML = vols.map(volRow).join('') || (sourceNote('slack', 'volunteer requests') ? '' : '<li class="muted small" style="padding:10px 14px">No requests for volunteers in Slack in the last 45 days.</li>');
+      $('#queue').innerHTML = (vols.length ? '<li class="vol-all"><button class="btn" data-vol="">Open full view ↗</button></li>' : '') + vols.map(volRow).join('') || (sourceNote('slack', 'volunteer requests') ? '' : '<li class="muted small" style="padding:10px 14px">No requests for volunteers in Slack in the last 45 days.</li>');
       $('#queue').insertAdjacentHTML('afterbegin', sourceNote('slack', 'volunteer requests'));
       loadOnsite();
       return;
@@ -1475,8 +1514,8 @@ LambdaData.ready.then(D => {
 
   /* ---------------- Drawer ---------------- */
   const Drawer = {
-    open(html) { $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
-    close() { $('#drawer').hidden = true; },
+    open(html, cls = '') { volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
+    close() { $('#drawer').hidden = true; volOpen = false; },
   };
   const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
   function openDeployment(d) {
@@ -2010,7 +2049,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         ${sec('Parts arrived for your tickets', b.partsArrived.length, b.partsArrived.map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(D.partById(t.part)?.name || t.part)} on hand at ${esc(t.site)}</span></div>`).join(''), 'Nothing new on hand.')}
         ${sec(`New tickets${b.mySites.length ? ' at your sites' : ''}`, b.newTickets.length, b.newTickets.slice(0, 8).map(ticketRow).join('') + (b.newTickets.length > 8 ? `<p class="muted small">+${b.newTickets.length - 8} more</p>` : ''), 'No new tickets.')}
         ${sec('Low spares at your sites', b.lowSpares.length, b.lowSpares.slice(0, 8).map(x => `<div class="mini-ticket" data-site="${esc(x.site)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.part)}</span><span class="small st-${x.stock === 0 ? 'critical' : 'warning'}">${x.stock} / alert ${x.alert}</span></div>`).join(''), 'Spares look fine.')}
-        ${(D.VOLUNTEER || []).some(v => v.at > Date.now() - 7 * 864e5) ? sec('Volunteer requests (7 days)', D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).length, D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).map(v => `<div class="mini-ticket" data-href="${esc(v.scheduleUrl || v.link)}"><span class="qkey">${esc(v.site)}</span><span class="qsum">${esc(v.text.slice(0, 120))}${v.text.length > 120 ? '…' : ''}</span><span class="small muted">${esc(v.user)}</span></div>`).join('')) : ''}
+        ${(D.VOLUNTEER || []).some(v => v.at > Date.now() - 7 * 864e5) ? sec('Volunteer requests (7 days)', D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).length, D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).map(v => `<div class="mini-ticket" data-vol="${esc(v.site)}"><span class="qkey">${esc(v.site)}</span><span class="qsum">${esc(v.text.slice(0, 120))}${v.text.length > 120 ? '…' : ''}</span><span class="small muted">${esc(v.user)}</span></div>`).join('')) : ''}
         ${b.atium.on ? sec('Builds & purchase orders · Atium', b.atium.builds.length + b.atium.late.length + b.atium.dueSoon.length,
           b.atium.builds.map(buildRow).join('')
           + [...b.atium.late, ...b.atium.dueSoon].slice(0, 8).map(x => `<div class="mini-ticket" data-href="${esc(x.url)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.p.name)} · ${esc(x.p.supplier || '')}</span>${statusChip(x.st.state === 'late' ? 'warning' : 'idle', `${x.st.state === 'late' ? 'was due' : 'due'} ${fmtDate(x.st.dueAt)}`)}</div>`).join('')
