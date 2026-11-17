@@ -201,7 +201,7 @@
       jr && { key: 'open', num: TICKETS.length, upBad: true, trend: tTrend, label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
       jr && { key: 'breached', num: breached, upBad: true, trend: tTrend && tTrend[0].breached != null ? tTrend.map((x, i) => ({ day: x.day, v: i === tTrend.length - 1 ? breached : x.breached })) : null, label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
       nb && { key: 'devices', num: devs, trend: devTrend ? devTrend.map((x, i) => ({ day: x.day, v: x.v == null ? devs : Math.max(0, devs - x.v) })) : null, label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
-      jr && { key: 'waiting', num: waiting.length, upBad: true, label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },
+      jr && { key: 'waiting', num: waiting.length, upBad: true, trend: jr.waitHist?.counts ? last30(now).map(({ day }, i, arr) => ({ day, v: i === arr.length - 1 ? waiting.length : jr.waitHist.counts[day] })).filter(p => Number.isFinite(p.v)) : null, label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },
       !jr && { label: 'Sites', value: String(SITES.length), sub: `${live.length} live` },
     ].filter(Boolean);
 

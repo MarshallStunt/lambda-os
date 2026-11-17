@@ -262,6 +262,31 @@ const LambdaLive = (() => {
     const rows = (await Promise.all(jqls.map(j => search(get, j, 1000, 'summary,created,resolutiondate,issuetype').catch(() => [])))).flat();
     return rows.filter(i => !/initiative/i.test(i.fields.issuetype?.name || '')).map(i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.fields.summary || '']).filter(([c, r]) => c && r);
   }
+  // Waiting on parts / RMA for each of the last 29 days, from Jira's history search ("status WAS IN (...) ON date").
+  // Each count takes a few seconds, so this runs once a day (6 at a time) and is kept until tomorrow.
+  async function waitingHistory(base, s, issues) {
+    let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none */ }
+    const dk = t => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+    if (prev?.waitHist && dk(prev.waitHist.at) === dk(Date.now())) return prev.waitHist;
+    const project = (stripOrder(s.fleetJql).match(/project\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i) || [])[1];
+    let names = [...new Set(issues.map(i => i.fields?.status?.name).filter(n => /part|rma/i.test(n || '')))];
+    if (project) try {
+      const st = await getJson(`${base}/rest/api/3/project/${project}/statuses`, { login: base, name: 'Jira' });
+      names = [...new Set([...names, ...st.flatMap(t => t.statuses.map(x => x.name)).filter(n => /part|rma/i.test(n))])];
+    } catch { /* keep what the open tickets show */ }
+    if (!names.length) return null;
+    const scope = stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '');
+    const count = async day => {
+      const r = await fetch(`${base}/rest/api/3/search/approximate-count`, { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Atlassian-Token': 'no-check' },
+        body: JSON.stringify({ jql: `(${scope}) AND status WAS IN (${names.map(n => JSON.stringify(n)).join(', ')}) ON "${day}"` }) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()).count;
+    };
+    const days = Array.from({ length: 29 }, (_, i) => dk(Date.now() - (i + 1) * 864e5)), counts = {};
+    for (let i = 0; i < days.length; i += 6) await Promise.all(days.slice(i, i + 6).map(async d => { counts[d] = await count(d); }));
+    return { at: Date.now(), counts, statuses: names };
+  }
   async function jira(s, progress) {
     const base = trim(s.jiraUrl);
     const get = p => getJson(base + p, { login: base, name: 'Jira' });
@@ -284,6 +309,7 @@ const LambdaLive = (() => {
       tickets: issues.map(i => mapIssue(i, F, base, mine)),
       portfolio: port.v || [], portfolioError: port.e ? String(port.e.message || port.e) : '',
       closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null, closedEpics: epicsClosed,
+      waitHist: await waitingHistory(base, s, issues).catch(() => null),
     };
   }
 
