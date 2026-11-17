@@ -44,7 +44,10 @@ LambdaData.ready.then(D => {
   // Inventory row status: "Out" / "Low" against NetBox's alert-at quantity.
   const invStatus = i => i.alert > 0 && i.stock === 0 ? 'critical' : i.alert > 0 && i.stock <= i.alert ? 'warning' : 'good';
   const INV_LABEL = { critical: 'Out', warning: 'Low', good: 'OK' };
-  const mineSorted = () => D.TICKETS.filter(t => t.mine).sort(byUrgency);
+  // Your tickets: SLA urgency by default; with Smart processing on, the AI's order (anything it didn't rank follows by SLA).
+  const aiRank = () => { const o = D.AI_PRIORITY?.order; return o?.length ? new Map(o.map((k, i) => [k, i])) : null; };
+  const mineSorted = () => { const rk = aiRank(), mine = D.TICKETS.filter(t => t.mine).sort(byUrgency);
+    return rk ? mine.sort((a, b) => (rk.get(a.key) ?? 1e9) - (rk.get(b.key) ?? 1e9) || byUrgency(a, b)) : mine; };
   const XC = { deployment: '#3ccf6e', project: '#f0efec', channel: '#d95926', event: '#c3c2b7' };
   const fmtDate = t => t ? new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric', ...(new Date(t).getFullYear() !== new Date().getFullYear() ? { year: '2-digit' } : {}) }) : '—';
   const depStatus = d => d.overdue ? `Overdue · ${d.status}` : d.status;
@@ -98,6 +101,10 @@ LambdaData.ready.then(D => {
   let SET_REFRESH = null;
   if (isExt) LambdaLive.settings().then(s => { SET_REFRESH = Number(s.refreshMinutes) || 0; paintUpdated(); }).catch(() => {});
   function paintUpdated(fresh) {
+    const sm = D.SMART, tag = $('#smartTag');
+    if (tag) { tag.hidden = D.MODE !== 'live' || !sm?.on; if (sm?.on) { tag.textContent = sm.live && !sm.why ? '✨ AI' : '✨ AI · local now';
+      tag.className = `smart-tag ${sm.live && !sm.why ? 'ok' : 'warn'}`;
+      tag.title = sm.why || `Smart processing with ${sm.label}: ${sm.calls ? `${sm.calls} request${sm.calls > 1 ? 's' : ''} last refresh` : 'nothing new to ask last refresh'}. Settings → Data → Smart processing.`; } }
     if (D.MODE !== 'live') { updated.hidden = true; return; }
     updated.hidden = false;
     const every = SET_REFRESH ? ` · every ${SET_REFRESH >= 60 ? '1h' : SET_REFRESH + 'm'}` : SET_REFRESH === 0 ? ' · manual' : '';
@@ -264,7 +271,7 @@ LambdaData.ready.then(D => {
     return `<li class="qitem vol" data-vol="${esc(v.site)}" title="Open the full request">
       <div style="min-width:0"><div class="qkey">${esc(v.site)}${v.known ? ` · ${esc(D.siteById(v.site)?.name || '')}` : ''}</div>
         <div class="qsum">${esc(v.text)}</div>
-        <div class="qmeta">${esc(v.user)} · ${c == null ? 'see who signed up' : c ? `${c} signed up` : 'no one signed up yet'}</div></div>
+        <div class="qmeta">${v.ai ? '✨ ' : ''}${esc(v.user)}${v.aiDates ? ` · ${esc(v.aiDates)}` : ''}${v.aiPeople ? ` · needs ${esc(v.aiPeople)}` : ''} · ${c == null ? 'see who signed up' : c ? `${c} signed up` : 'no one signed up yet'}</div></div>
       <span class="ftime">${rel(v.askedAt)}</span></li>`; };
   // Full view: the whole message, a two-week sign-up grid from the site's Atium onsite schedule, and big buttons.
   let volOpen = false;
@@ -290,6 +297,7 @@ LambdaData.ready.then(D => {
         <div class="volhead"><span class="volsite">${esc(v.site)}</span><span class="volname">${esc(v.known ? D.siteById(v.site)?.name || '' : '')}</span><span class="muted">${rel(v.askedAt)} ago</span></div>
         <p class="volmeta">Asked by <b>${esc(v.user)}</b> in #${esc(v.channel)} · ${new Date(v.askedAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}${v.messages > 1 ? ` · ${v.messages} messages about it` : ''}</p>
         <p class="voltext">${esc(v.text)}</p>
+        ${v.aiDates || v.aiPeople ? `<p class="volai">✨ ${[v.aiDates && `<b>When:</b> ${esc(v.aiDates)}`, v.aiPeople && `<b>People needed:</b> ${esc(v.aiPeople)}`].filter(Boolean).join(' · ')}</p>` : ''}
         ${volGrid(v)}
         <div class="links">${v.scheduleUrl ? btn('Sign up in Atium', v.scheduleUrl, true) : ''}${btn('Open in Slack', v.link)}${v.known ? `<button class="btn" data-open="site:${esc(v.site)}">Site card</button>` : ''}</div>
       </section>`).join('') || '<p class="muted">No requests for volunteers in Slack in the last 45 days.</p>'}`, 'wide');
@@ -333,14 +341,15 @@ LambdaData.ready.then(D => {
     }
     const mine = mineSorted(), list = mine.length ? mine.slice(0, 100) : [...D.TICKETS].sort(byUrgency).slice(0, 30);
     $('#qTicketsLabel').textContent = mine.length ? 'Tickets' : 'Urgent'; $('#qTicketsLabel').parentElement.title = mine.length ? 'My tickets: assigned to, reported or watched by you' : 'Most urgent tickets fleet-wide';
-    $('#queueCount').textContent = mine.length ? `${mine.length} open` : 'fleet-wide';
+    $('#queueCount').textContent = mine.length ? `${mine.length} open${aiRank() ? ' · ✨ AI order' : ''}` : 'fleet-wide';
+    $('#queueCount').title = aiRank() ? 'Ordered by your AI provider (Settings → Data → Smart processing). Hover a ticket for the reason.' : '';
     $('#queueNote').hidden = !!mine.length || D.MODE !== 'live';
     $('#queue').innerHTML = list.map(t => {
       const st = slaStatus(t);
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}</div><div class="qsum">${esc(t.summary)}</div>
-          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}</div></div>
+          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
   }
@@ -1435,7 +1444,7 @@ LambdaData.ready.then(D => {
   const buildRow = b => `<div class="mini-ticket" ${b.deploymentKey ? `data-dep="${b.deploymentKey}"` : `data-href="${esc(b.url)}"`} title="${esc(b.name)}${b.customer ? ' · ' + esc(b.customer) : ''}">
       <span class="qkey">${esc(b.stage)}</span><span class="qsum">${esc(b.name)}<br><small class="muted">${[b.customer, b.rackedPct != null && `racked ${pct(b.rackedPct)}`, b.validatedPct != null && `validated ${pct(b.validatedPct)}`].filter(Boolean).map(esc).join(' · ')}</small></span>
       ${statusChip(b.health, buildWhen(b) || b.stage)}</div>`;
-  const buildBlock = b => `<div class="section-title"><span>Build progress · Atium</span><span>${esc(b.stage)}</span></div>
+  const buildBlock = b => `<div class="section-title"><span>Build progress · Atium${b.aiLinked ? ' · ✨ matched by AI' : ''}</span><span>${esc(b.stage)}</span></div>
       <dl class="kv">
         ${b.customer ? `<dt>Customer</dt><dd>${esc(b.customer)}</dd>` : ''}
         <dt>GPUs</dt><dd>${(b.installed || 0).toLocaleString()} installed of ${(b.planned || b.gpus || 0).toLocaleString()}${b.gpuModel ? ` × ${esc(b.gpuModel)}` : ''}${b.mw ? ` · ${b.mw} MW` : ''}</dd>

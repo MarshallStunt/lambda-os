@@ -3,7 +3,7 @@
 //  • after every new snapshot: desktop alerts, the toolbar badge, and a compact daily history (for the brief's deltas)
 //  • the daily brief notification at the time set in Settings
 //  • makes the extension's API requests look like a plain client, not a browser (drop Origin/Referer/Sec-*, own UA)
-importScripts('apptabs.js', 'live.js', 'data.js', 'alerts.js', 'updates.js');
+importScripts('apptabs.js', 'live.js', 'data.js', 'ai.js', 'smart.js', 'alerts.js', 'updates.js');
 
 const PLAIN_CLIENT_RULE_ID = 1;
 const BROWSER_HEADERS = ['origin', 'referer', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];

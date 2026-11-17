@@ -37,6 +37,8 @@ const LambdaLive = (() => {
     alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
+    // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
+    smart: { mode: 'local', volunteer: true, matching: true, priority: true, slack: false },
   };
   // Jira fields are found by name, so nothing depends on this Jira's customfield IDs.
   const JIRA_FIELDS = {
@@ -55,7 +57,7 @@ const LambdaLive = (() => {
     ai.keys = { ...DEFAULTS.ai.keys, ...(s?.ai?.keys || {}) }; ai.models = { ...DEFAULTS.ai.models, ...(s?.ai?.models || {}) };
     return { ...DEFAULTS, ...(s || {}), sources: { ...DEFAULTS.sources, ...(s?.sources || {}) }, ai,
       privacy: { ...DEFAULTS.privacy, ...(s?.privacy || {}) }, look: { ...DEFAULTS.look, ...(s?.look || {}) },
-      alerts: { ...DEFAULTS.alerts, ...(s?.alerts || {}) }, brief: { ...DEFAULTS.brief, ...(s?.brief || {}) } };
+      alerts: { ...DEFAULTS.alerts, ...(s?.alerts || {}) }, brief: { ...DEFAULTS.brief, ...(s?.brief || {}) }, smart: { ...DEFAULTS.smart, ...(s?.smart || {}) } };
   }
 
   class AuthError extends Error { constructor(msg, login) { super(msg); this.auth = true; this.login = login; } }
@@ -323,7 +325,7 @@ const LambdaLive = (() => {
       // Volunteer requests: call-outs for people to travel to another site's deployment, plus links to a site's Atium
       // onsite schedule (where volunteers sign up). Last 45 days; the dashboard decides which ones are real requests.
       const after = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10), seen = new Set(), volunteer = [];
-      for (const q of ['volunteer', 'volunteers', 'onsite-schedule']) {
+      for (const q of ['volunteer', 'volunteers', 'onsite-schedule', '"extra hands"', '"need help" onsite', '"anyone available"', '"head over"', '"come out" help']) {
         const r = await call('search.messages', { query: `${q} after:${after}`, count: 40, sort: 'timestamp' }).catch(() => null);
         for (const m of r?.messages?.matches || []) {
           const id = (m.channel?.id || '') + m.ts;
@@ -640,6 +642,12 @@ const LambdaLive = (() => {
         // "Showing data from …" = the last refresh that worked, which stays put while the outage lasts
         if (snapshot[key]) snapshot.sources[k].staleAt = was?.ok ? was.at : (was?.staleAt || prev?.at);
       });
+      // Optional AI step on what the rules couldn't settle (see smart.js). Never blocks the data: on any problem the
+      // earlier answers are kept and the local rules decide the rest.
+      if (typeof LambdaSmart !== 'undefined') {
+        try { snapshot.smart = await LambdaSmart.enrich(snapshot, s, prev?.smart, progress || (() => {})); }
+        catch (e) { snapshot.smart = { ...(prev?.smart || {}), at: Date.now(), live: false, why: `AI step failed (${e.message}). Using the local rules.` }; }
+      } else snapshot.smart = prev?.smart || null;
       await chrome.storage.local.set({ snapshot });
       return snapshot;
     })().finally(() => { inflight = null; });

@@ -86,6 +86,27 @@
       <p class="hint">Slack can only be read from an open Slack page. If you have Slack open, Lambda OS reads from your tab and never touches it. If not, it keeps its own small pinned Slack tab and keeps it healthy, so you don't have to. Google Calendar is read from its own pinned tab (Google blocks the automated agenda feed). Atium, like Slack, keeps its sign-in in the page, so it's read through an Atium tab; its sign-in token never leaves that tab. Gmail normally uses your Google sign-in directly and only gets a pinned tab when that doesn't work. If a pinned tab asks you to sign in, sign in there once. Turn this off to use only your own tabs.</p>
     </fieldset>
 
+    <fieldset id="smart">
+      <legend>Smart processing</legend>
+      <p class="hint" style="margin-top:0">Lambda OS always fetches your data itself, with your browser sign-ins, and sorts and matches it with fixed rules. Optionally, your AI provider (Settings → AI) can settle the cases the rules can't. It only ever sees those few items, masked like Ask AI, and each one only once.</p>
+      <div class="radio">
+        <label><input type="radio" name="smartMode" value="local"><span>Local only</span></label>
+        <label><input type="radio" name="smartMode" value="ai"><span>✨ AI when available</span></label>
+      </div>
+      <p class="hint">With "AI when available", the local rules still run first and take over whenever no AI provider is set up, it can't be reached or a request fails.</p>
+      <div id="smartOpts">
+        <label>Let the AI help with</label>
+        <div class="checks">
+          <label><input type="checkbox" data-smart="volunteer"><span>Volunteer requests: which Slack messages are real calls for help, plus dates and head-count</span></label>
+          <label><input type="checkbox" data-smart="matching"><span>Matching: Atium builds, NetSuite shipments and meetings the rules couldn't link to a deployment</span></label>
+          <label><input type="checkbox" data-smart="priority"><span>Ticket order: which of your tickets to work on first (at most once an hour)</span></label>
+        </div>
+        <div class="checks" style="margin-top:8px"><label><input type="checkbox" id="smartSlack"><span>Let the AI read Slack messages that might be volunteer requests (needed for the first option; Privacy keeps all other Slack text away from the AI)</span></label></div>
+        <p class="hint">At most 3 small requests per refresh. Settings → Privacy → "Never send to an AI" turns all of this off.</p>
+      </div>
+      <p class="note" id="smartStatus">Status appears after the next refresh.</p>
+    </fieldset>
+
     <fieldset>
       <legend>Jira</legend>
       <label for="jiraUrl">Jira site</label>

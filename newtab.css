@@ -676,3 +676,10 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 .qtabs { display: flex; }
 .qtabs button { flex: 1 1 auto; padding: 7px 4px; overflow: visible; text-overflow: clip; }
 .qtabs b { margin-left: 2px; }
+
+/* Smart processing (optional AI) */
+.smart-tag { flex-shrink: 0; font-size: 11px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--text-2); cursor: help; white-space: nowrap; }
+.smart-tag.ok { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.smart-tag.warn { color: var(--warning); }
+.qmeta.ai-why { color: var(--accent); }
+.volai { margin: -6px 0 14px; font-size: 13px; color: var(--accent); }

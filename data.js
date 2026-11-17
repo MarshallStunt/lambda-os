@@ -207,7 +207,7 @@
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
-    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, codeOf, meId });
+    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, smart: snap.smart, codeOf, meId });
   }
 
   /* ---------------- Projects, deployments, Slack, mail, calendar, NetSuite ---------------- */
@@ -247,6 +247,8 @@
     const siteIds = new Set(D.SITES.map(s => s.id));
     const codesIn = text => [...new Set((String(text).toUpperCase().replace(/[-_]/g, ' ').match(/\b[A-Z]{3}\d{2}\b/g) || []).filter(c => siteIds.has(c)))];
     const codeOf = x.codeOf;
+    // Answers from the optional AI step (Settings → Data → Smart processing), applied only where the rules found nothing.
+    const SM = x.smart?.on ? (x.smart.cache || {}) : null, aiLink = (kind, id) => SM?.link?.[`${kind}:${id}`] || null;
 
     // Projects (initiatives) and deployments (epics) with progress from their workstreams.
     const DEPLOYMENTS = [], PROJECTS = [];
@@ -286,7 +288,8 @@
       const sites = codesIn(e.title), flat = e.title.replace(/[,_-]/g, '');
       const dep = DEPLOYMENTS.find(d => d.gpus && sites.some(c => d.sites.includes(c)) && flat.includes(String(d.gpus)))
         || DEPLOYMENTS.find(d => d.gpus && flat.includes(String(d.gpus)) && d.gpus >= 100);
-      return { ...e, sites, site: sites[0] || dep?.site || null, deployment: dep?.key || null };
+      const ai = !dep && aiLink('event', e.title), aiDep = ai && DEPLOYMENTS.find(d => d.key === ai);
+      return { ...e, sites, site: sites[0] || (dep || aiDep)?.site || null, deployment: (dep || aiDep)?.key || null, aiLinked: !!aiDep };
     }).sort((a, b) => a.at - b.at);
     for (const e of EVENTS) if (e.deployment) DEPLOYMENTS.find(d => d.key === e.deployment).events.push(e);
 
@@ -312,6 +315,7 @@
           const sc = words(d.title).filter(w => mw.has(w)).length + (num && d.gpus && String(d.gpus) === num ? 2 : 0);
           if (sc > bs) { bs = sc; best = d; }
         }
+        if (!best) { const k = aiLink('move', m.doc); best = k && DEPLOYMENTS.find(d => d.key === k); if (best) m.aiLinked = true; }
         if (best) { m.deploymentKey = best.key; best.moves.push(m); }
       }
     }
@@ -347,7 +351,9 @@
         const dep = (b.epic && DEPLOYMENTS.find(d => d.key === b.epic))
           || DEPLOYMENTS.find(d => site && d.sites.includes(site) && d.gpus && [b.planned, b.gpus].includes(d.gpus))
           || DEPLOYMENTS.find(d => site && d.sites.includes(site) && words(d.title).filter(w => bw.has(w)).length >= 2);
+        const aiDep = !dep && (k => k && DEPLOYMENTS.find(d => d.key === k && !d.build))(aiLink('build', b.id));
         if (dep && !dep.build) { dep.build = o; o.deploymentKey = dep.key; }
+        else if (aiDep) { aiDep.build = o; o.deploymentKey = aiDep.key; o.aiLinked = true; }
       }
       for (const s of D.SITES) s.builds.sort((a, c) => (a.handoff?.done - c.handoff?.done) || ((a.handoff?.at || Infinity) - (c.handoff?.at || Infinity)));
     }
@@ -361,17 +367,21 @@
       const ASK = /volunteer|need (some |more )?(help|hands|people|folks)|asking for (your )?help|come (out|help)|head (over|out)|add yourself|ready and willing|sign ?up/i;
       const TRIP = /on-?site|deployment|schedule|access ticket|travel|trip|weeks?\b|\b\d{1,2}\/\d{1,2}\b|convers|troubleshoot|cabl|rack|repair/i;
       const bySite = new Map();
+      D.VOL_CANDIDATES = [];
       for (const m of x.slack?.volunteer || []) {
         if (/^(inc-|support|eng|security|general|announce|leandata|ll_|zanker)/i.test(m.channel) || JOKE.test(m.text)) continue;
+        const id = `${m.channelId || m.channel}:${m.at}`, ai = SM?.vol?.[id] || null;
+        D.VOL_CANDIDATES.push({ id, at: m.at, channel: m.channel, text: m.text });
         const atId = m.atiumSites?.[0] || null, link = !!atId;
         const ask = ASK.test(m.text), trip = TRIP.test(m.text);
-        if (!(link || (ask && trip))) continue;
-        const site = (atId && code5(atName.get(atId) || '')) || codesIn(m.text)[0] || code5(m.text) || codesIn(m.channel)[0] || code5(m.channel.replace(/[-_]/g, ' '));
+        // With an AI answer, the AI decides (a schedule link still counts: that's where people sign up); otherwise the rules.
+        if (ai ? !(ai.request || link) : !(link || (ask && trip))) continue;
+        const site = (ai?.site && /^[A-Z]{3}\d{2}$/.test(ai.site) ? ai.site : null) || (atId && code5(atName.get(atId) || '')) || codesIn(m.text)[0] || code5(m.text) || codesIn(m.channel)[0] || code5(m.channel.replace(/[-_]/g, ' '));
         if (!site) continue;
-        const score = (/volunteer/i.test(m.text) ? 3 : 0) + (ask ? 2 : 0) + (link ? 2 : 0) + (trip ? 1 : 0) + (m.text.length > 120 ? 1 : 0);
+        const score = (ai?.request ? 4 : 0) + (/volunteer/i.test(m.text) ? 3 : 0) + (ask ? 2 : 0) + (link ? 2 : 0) + (trip ? 1 : 0) + (m.text.length > 120 ? 1 : 0);
         const cur = bySite.get(site) || { site, atiumId: null, at: 0, best: null, count: 0 };
         cur.count++; cur.at = Math.max(cur.at, m.at); if (atId) cur.atiumId = atId;
-        if (!cur.best || score > cur.best.score || (score === cur.best.score && m.at > cur.best.at)) cur.best = { ...m, score };
+        if (!cur.best || score > cur.best.score || (score === cur.best.score && m.at > cur.best.at)) cur.best = { ...m, score, ai };
         bySite.set(site, cur);
       }
       const atByCode = new Map((x.atium?.sites || []).map(a => [code5(a.name), a.id]));
@@ -381,7 +391,8 @@
           // A message that is only the schedule link reads better as a sentence.
           text: v.best.text.replace(/\S*(kelsier|onsite-schedule)\S*/gi, '').replace(/\s+/g, ' ').trim().length < 25 ? `Shared the ${v.site} onsite schedule: sign up there if you can help with the deployment.` : v.best.text,
           atiumId, scheduleUrl: atiumId && x.atium?.base ? `${x.atium.base}/sites/${atiumId}/deployment/onsite-schedule` : null,
-          demoSignups: v.best.demoSignups, demoMe: v.best.demoMe };
+          demoSignups: v.best.demoSignups, demoMe: v.best.demoMe,
+          ai: !!v.best.ai, aiDates: v.best.ai?.dates || null, aiPeople: v.best.ai?.people || null };
       }).sort((a, b) => b.at - a.at).slice(0, 8);
     })();
 
@@ -406,6 +417,8 @@
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
       DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER,
+      SMART: x.smart ? { on: !!x.smart.on, live: !!x.smart.live, label: x.smart.label || '', why: x.smart.why || '', at: x.smart.at || 0, calls: x.smart.calls || 0 } : null,
+      AI_PRIORITY: SM?.prio?.order?.length ? SM.prio : null,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
       isTracked: k => TRACKED.has(k), toggleTrack: k => { TRACKED.has(k) ? TRACKED.delete(k) : TRACKED.add(k); saveTracked(); return TRACKED.has(k); },
       tracked: () => DEPLOYMENTS.filter(d => TRACKED.has(d.key) || d.mine).sort((a, b) => (a.end || Infinity) - (b.end || Infinity)),
@@ -425,7 +438,7 @@
   const kfmt = n => n >= 10000 ? (n / 1000).toFixed(1) + 'k' : n.toLocaleString();
 
   /* ---------------- Demo build ---------------- */
-  function buildMock(note) {
+  function buildMock(note, smart = null) { // smart: optional AI answers (used by tests and demos)
     let seed = 1337;
     const rnd = () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -549,7 +562,7 @@
       build('YQB01-CL02 2048x B300', 'YQB01', 'Nvidia', 2048, 'B300', 0.52, 0.12, [-25, -12, -3, 85], 2),
       build('SEA01-CL01 2040x H100 conversion', 'SEA01', 'Anthropic', 2040, 'H100', 1, 0.94, [-75, -60, -30, -4], 4),
     ] };
-    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
+    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 
   function finish(D) {

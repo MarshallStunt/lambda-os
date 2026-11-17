@@ -145,7 +145,25 @@ function fill(s) {
   FIELDS.forEach(f => ($(f).value = s[f] || ''));
   document.querySelector(`input[name=mode][value=${s.mode === 'demo' ? 'demo' : 'live'}]`).checked = true;
   document.querySelectorAll('[data-source]').forEach(c => (c.checked = s.sources?.[c.dataset.source] !== false));
+  const sm = s.smart || LambdaLive.DEFAULTS.smart;
+  document.querySelector(`input[name=smartMode][value=${sm.mode === 'ai' ? 'ai' : 'local'}]`).checked = true;
+  document.querySelectorAll('[data-smart]').forEach(c => (c.checked = sm[c.dataset.smart] !== false));
+  $('smartSlack').checked = !!sm.slack;
+  paintSmart();
 }
+// Smart processing: options only matter in AI mode; the status line says what the last refresh actually did.
+async function paintSmart() {
+  const ai = $('smartOpts'), on = document.querySelector('input[name=smartMode]:checked')?.value === 'ai';
+  ai.style.opacity = on ? '1' : '.5'; ai.querySelectorAll('input').forEach(i => (i.disabled = !on));
+  const { snapshot } = await chrome.storage.local.get('snapshot').catch(() => ({}));
+  const x = snapshot?.smart, c = LambdaAI.configured(readAI());
+  $('smartStatus').innerHTML = !on ? 'Local only: fixed rules, nothing is sent to an AI.'
+    : !c.ok ? `<span class="st-warning">AI isn't set up yet, so the local rules are used.</span> ${esc(c.why)}`
+    : !x?.on ? 'AI is on. It starts with the next refresh (click ↻ on the dashboard).'
+    : x.why ? `<span class="st-warning">Last refresh: ${esc(x.why)}</span>`
+    : `<span class="st-good">✓ Last refresh used ${esc(x.label || c.label)}</span>: ${x.calls ? `${x.calls} request${x.calls > 1 ? 's' : ''} for ${x.items} item${x.items > 1 ? 's' : ''}` : 'nothing new to ask'} · ${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+document.addEventListener('change', e => { if (e.target.name === 'smartMode' || e.target.id === 'aiProvider') setTimeout(paintSmart, 50); });
 function read() {
   const s = { mode: document.querySelector('input[name=mode]:checked').value, sources: {} };
   FIELDS.forEach(f => (s[f] = $(f).value.trim()));
@@ -154,6 +172,8 @@ function read() {
   s.ai = readAI(); s.privacy = readPrivacy(); s.look = look; s.alerts = readAlerts(); s.brief = readBrief();
   s.refreshMinutes = Number($('refreshMinutes').value);
   s.appTabs = $('appTabs').checked;
+  s.smart = { mode: document.querySelector('input[name=smartMode]:checked')?.value === 'ai' ? 'ai' : 'local', slack: $('smartSlack').checked };
+  document.querySelectorAll('[data-smart]').forEach(c => (s.smart[c.dataset.smart] = c.checked));
   return s;
 }
 // A Jira / NetBox / NetSuite address outside the built-in ones needs the user's OK to reach it.
@@ -203,7 +223,7 @@ async function importBackup(file) {
   try { data = JSON.parse(await file.text()); } catch { return say('<p class="st-critical">That file isn’t a Lambda OS backup (not valid JSON).</p>'); }
   if (data?.app !== 'lambda-os' || typeof data.settings !== 'object') return say('<p class="st-critical">That file isn’t a Lambda OS backup.</p>');
   const { settings: current = {} } = await chrome.storage.local.get('settings');
-  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs']);
+  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'smart']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
   if (settings.ai) settings.ai = { ...settings.ai, keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser

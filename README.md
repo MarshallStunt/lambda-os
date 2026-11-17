@@ -56,6 +56,13 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   Atium onsite schedules, with jokes and incident or engineering channels filtered out. Each shows who has signed up in
   that site's Atium onsite schedule for the next 4 weeks (and whether you have), with Sign up in Atium and Open in
   Slack buttons. Requests also appear on the site card and, for the last 7 days, in the daily brief.
+- **Smart processing (optional AI)**: Settings → Data → Smart processing chooses **Local only** (default: fixed rules,
+  nothing sent anywhere) or **AI when available**. Fetching is always local. In AI mode, after each refresh your AI
+  provider looks only at what the rules couldn't settle: which Slack messages are real volunteer requests (with dates and
+  head-count; needs its own Slack opt-in), Atium builds / NetSuite shipments / meetings the rules couldn't link to a
+  deployment, and the order of your own tickets (hourly). Text is masked like Ask AI, each item is asked about once
+  (answers are cached), at most 3 small requests per refresh, and if the AI is missing or fails the local rules decide.
+  A ✨ AI tag by the refresh time shows it's on.
 - **Self-healing app tabs** (`apptabs.js`): Slack can only be read from an open page. If you have Slack open, Lambda OS
   reads from your tab and never closes, reloads or moves it. Otherwise it keeps its own small pinned Slack tab. Google
   Calendar is always read from its own pinned tab (schedule view), because Google answers the automated agenda feed with
