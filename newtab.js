@@ -178,22 +178,58 @@ LambdaData.ready.then(D => {
       <path class="area" d="${line}L100,30L0,30Z"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/>
       <circle r="3" style="display:none" vector-effect="non-scaling-stroke"/><rect class="spark-hit" x="0" y="-6" width="100" height="40"/></svg>`;
   }
-  $('#kpis').innerHTML = D.KPIS.map(k => `<div class="kpi">
-      <div class="kpi-label">${esc(k.label)}</div><div class="kpi-value">${esc(k.value)}</div>
-      <div class="kpi-delta"><span class="${k.tone === 'bad' ? 'up-bad' : k.tone === 'good' ? 'up-good' : ''}">${esc(k.sub || '')}</span></div>
-      ${k.spark ? spark(k.spark) + '<div class="spark-tip" hidden></div>' : ''}</div>`).join('');
-  document.querySelectorAll('.kpi').forEach((el, i) => {
-    const k = D.KPIS[i], svg = el.querySelector('svg');
-    if (!svg) return;
-    const dot = svg.querySelector('circle'), tip = el.querySelector('.spark-tip'), pts = sparkPts(k.spark), n = k.spark.length;
-    svg.addEventListener('pointermove', e => {
-      const r = svg.getBoundingClientRect(), idx = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * (n - 1))));
-      dot.setAttribute('cx', pts[idx][0]); dot.setAttribute('cy', pts[idx][1]); dot.style.display = '';
-      const day = new Date(Date.now() - (n - 1 - idx) * 864e5).toLocaleDateString([], { month: 'short', day: 'numeric' });
-      tip.textContent = `${day} · ${k.spark[idx]} ${k.sparkWhat || ''}`; tip.hidden = false;
+  // Each card: today's number, how it moved since yesterday (▲ / ▼), and a two-week mini chart of its daily values
+  // (from the daily record Lambda OS keeps). Hover the chart for any day's value. Open tickets also say how many came
+  // in and how many were closed since yesterday.
+  const DAYMS = 864e5, dayKeyOf = t => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+  const backfill = (key, h) => key === 'open' ? h.open : key === 'breached' ? h.breached : key === 'deps' ? (h.deps ? Object.keys(h.deps).length : undefined) : undefined;
+  function kpiHistory(hist) {
+    if (D.MODE === 'demo') { // demo: a steady made-up fortnight ending at today's number
+      let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => { let v = k.num; const pts = [k.num];
+        for (let i = 0; i < 13; i++) { v = Math.max(0, Math.round(v - (rnd() - 0.45) * Math.max(2, k.num * 0.06))); pts.unshift(v); }
+        return [k.key, pts.map((v, i) => ({ day: dayKeyOf(Date.now() - (13 - i) * DAYMS), v }))]; }));
+    }
+    const today = dayKeyOf(Date.now()), days = Object.keys(hist || {}).filter(x => x < today).sort().slice(-13);
+    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
+      .filter(p => Number.isFinite(p.v)), { day: today, v: k.num }]]));
+  }
+  const kDay = dd => new Date(dd + 'T12:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  function renderKpis(hist) {
+    const H = kpiHistory(hist), prevRec = hist && Object.keys(hist).filter(x => x < dayKeyOf(Date.now())).sort().pop();
+    $('#kpis').innerHTML = D.KPIS.map(k => {
+      const pts = H[k.key] || [], prev = pts.length > 1 ? pts[pts.length - 2] : null, dlt = prev ? k.num - prev.v : null;
+      const cls = !dlt ? 'flat' : !k.upBad ? 'neutral' : dlt > 0 ? 'bad' : 'good'; // red/green only where more is worse (tickets, breaches, waiting)
+      const amount = v => Math.abs(v) >= 1000 ? kfmt(Math.abs(v)) : Math.abs(v).toLocaleString();
+      const delta = dlt == null ? '<span class="kd flat" title="The day-by-day chart builds up as Lambda OS records each day">new: history starts today</span>'
+        : `<span class="kd ${cls}" title="Change since ${esc(kDay(prev.day))} (${prev.v.toLocaleString()})">${dlt > 0 ? '▲' : dlt < 0 ? '▼' : '='} ${dlt ? amount(dlt) : 'same'} <small>vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : esc(kDay(prev.day))}</small></span>`;
+      // Open tickets: what came in and what was closed since the last day on record.
+      let flow = '';
+      if (k.key === 'open' && hist && prevRec && hist[prevRec]?.keys) {
+        const was = new Set(hist[prevRec].keys), now = new Set(D.TICKETS.map(t => t.key));
+        const added = [...now].filter(x => !was.has(x)).length, closed = [...was].filter(x => !now.has(x)).length;
+        flow = `<span class="kflow"><b class="up-bad">+${added}</b> new · <b class="up-good">−${closed}</b> closed</span>`;
+      } else if (k.key === 'open' && D.MODE === 'demo') flow = '<span class="kflow"><b class="up-bad">+6</b> new · <b class="up-good">−4</b> closed</span>';
+      return `<div class="kpi" data-k="${esc(k.key || '')}">
+        <div class="kpi-label">${esc(k.label)}</div><div class="kpi-value">${esc(k.value)}</div>
+        <div class="kpi-delta">${delta}${flow}</div>
+        ${flow && k.key === 'open' ? '' : `<div class="kpi-sub"><span class="${k.tone === 'bad' ? 'up-bad' : k.tone === 'good' ? 'up-good' : ''}">${esc(k.sub || '')}</span></div>`}
+        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : ''}</div>`; }).join('');
+    document.querySelectorAll('.kpi').forEach((el, i) => {
+      const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
+      if (!svg) return;
+      const dot = svg.querySelector('circle'), tip = el.querySelector('.spark-tip'), xy = sparkPts(pts.map(p => p.v)), m = pts.length;
+      svg.addEventListener('pointermove', ev => {
+        const r = svg.getBoundingClientRect(), idx = Math.max(0, Math.min(m - 1, Math.round(((ev.clientX - r.left) / r.width) * (m - 1))));
+        dot.setAttribute('cx', xy[idx][0]); dot.setAttribute('cy', xy[idx][1]); dot.style.display = '';
+        const ch = idx ? pts[idx].v - pts[idx - 1].v : null;
+        tip.textContent = `${kDay(pts[idx].day)} · ${pts[idx].v.toLocaleString()}${ch ? ` (${ch > 0 ? '+' : ''}${ch.toLocaleString()})` : ''}`; tip.hidden = false;
+      });
+      svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; });
     });
-    svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; });
-  });
+  }
+  renderKpis(null);
+  if (isExt) chrome.storage.local.get('history').then(r => renderKpis(r.history || null)).catch(() => {});
 
   // A source that isn't connected says so, instead of looking empty. Returns '' when the source is fine.
   function sourceNote(key, what) {

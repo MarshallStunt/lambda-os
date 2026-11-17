@@ -174,10 +174,10 @@
     const waitingStocked = waiting.filter(t => t.part && t.site && (sitesByCode.get(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
     const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
     const KPIS = [
-      jr && { label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
-      jr && { label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
-      nb && { label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
-      jr && { label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },
+      jr && { key: 'open', num: TICKETS.length, upBad: true, label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
+      jr && { key: 'breached', num: breached, upBad: true, label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
+      nb && { key: 'devices', num: devs, label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
+      jr && { key: 'waiting', num: waiting.length, upBad: true, label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },
       !jr && { label: 'Sites', value: String(SITES.length), sub: `${live.length} live` },
     ].filter(Boolean);
 
@@ -477,8 +477,8 @@
       const gpus = DEPLOYMENTS.reduce((a, d) => a + (d.gpus || 0), 0);
       const next = DEPLOYMENTS.filter(d => d.end && d.end >= now).sort((a, b) => a.end - b.end)[0];
       D.KPIS.splice(2, 0,
-        { label: 'Active deployments', value: String(DEPLOYMENTS.length), sub: `${risky} at risk, off track or overdue`, tone: risky ? 'bad' : 'good' },
-        { label: 'GPUs in deployments', value: kfmt(gpus), sub: next ? `next due: ${next.site || next.key} · ${new Date(next.end).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '' });
+        { key: 'deps', num: DEPLOYMENTS.length, label: 'Active deployments', value: String(DEPLOYMENTS.length), sub: `${risky} at risk, off track or overdue`, tone: risky ? 'bad' : 'good' },
+        { key: 'gpus', num: gpus, label: 'GPUs in deployments', value: kfmt(gpus), sub: next ? `next due: ${next.site || next.key} · ${new Date(next.end).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '' });
     }
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
@@ -547,10 +547,10 @@
     }
     const series = (start, drift, noise) => { let v = start; return Array.from({ length: 14 }, () => Math.round(v = Math.max(0, v + drift + (rnd() - 0.5) * noise))); };
     const KPIS = [
-      { label: 'Open DC tickets', value: String(TICKETS.length), sub: '+6 opened today', spark: series(4, 0.1, 5), sparkWhat: 'opened' },
-      { label: 'SLA breached', value: String(TICKETS.filter(isBreached).length), sub: `${TICKETS.filter(t => !isBreached(t) && t.slaDue < now + DAY).length} more due in 24h`, tone: 'bad' },
-      { label: 'Devices in NetBox', value: kfmt(SITES.reduce((a, s) => a + (s.status === 'active' ? s.devices : 0), 0)), sub: `${SITES.filter(s => s.status === 'active').length} live sites` },
-      { label: 'Waiting on parts / RMA', value: String(TICKETS.filter(t => /part/i.test(t.status)).length), sub: '2 have the part on site', tone: 'bad' },
+      { key: 'open', num: TICKETS.length, upBad: true, label: 'Open DC tickets', value: String(TICKETS.length), sub: '+6 opened today', spark: series(4, 0.1, 5), sparkWhat: 'opened' },
+      { key: 'breached', num: TICKETS.filter(isBreached).length, upBad: true, label: 'SLA breached', value: String(TICKETS.filter(isBreached).length), sub: `${TICKETS.filter(t => !isBreached(t) && t.slaDue < now + DAY).length} more due in 24h`, tone: 'bad' },
+      { key: 'devices', num: SITES.reduce((a, s) => a + (s.status === 'active' ? s.devices : 0), 0), label: 'Devices in NetBox', value: kfmt(SITES.reduce((a, s) => a + (s.status === 'active' ? s.devices : 0), 0)), sub: `${SITES.filter(s => s.status === 'active').length} live sites` },
+      { key: 'waiting', num: TICKETS.filter(t => /part/i.test(t.status)).length, upBad: true, label: 'Waiting on parts / RMA', value: String(TICKETS.filter(t => /part/i.test(t.status)).length), sub: '2 have the part on site', tone: 'bad' },
     ];
     const FEED_T = [
       () => { const t = pick(TICKETS); return { src: 'jira', ref: t.key, text: `${t.key} · ${pick(STATUSES)} — ${t.summary}` }; },

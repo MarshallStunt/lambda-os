@@ -731,3 +731,12 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .urgent-row { background: color-mix(in srgb, var(--critical) 12%, transparent); }
 .htable td.hnodata { text-align: left; font-size: 12px; }
 .htable tr.lvl-nodata b { opacity: .6; }
+
+/* Top cards: change since yesterday + two-week mini chart */
+.kpi-delta { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.kd { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.kd small { font-weight: 500; color: var(--muted); }
+.kd.bad { color: var(--critical); } .kd.good { color: var(--good); } .kd.neutral { color: var(--accent); } .kd.flat { color: var(--muted); font-weight: 500; }
+.kflow { font-size: 11px; color: var(--text-2); white-space: nowrap; }
+.kpi-sub { font-size: 10.5px; color: var(--muted); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.kpi-strip .kpi-delta { -webkit-line-clamp: unset; display: flex; }
