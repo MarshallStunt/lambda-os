@@ -226,7 +226,8 @@ LambdaData.ready.then(D => {
         const r = svg.getBoundingClientRect(), idx = Math.max(0, Math.min(m - 1, Math.round(((ev.clientX - r.left) / r.width) * (m - 1))));
         dot.setAttribute('cx', xy[idx][0]); dot.setAttribute('cy', xy[idx][1]); dot.style.display = '';
         const ch = idx ? pts[idx].v - pts[idx - 1].v : null;
-        tip.textContent = `${kDay(pts[idx].day)} · ${pts[idx].v.toLocaleString()}${pts[idx].opened != null ? ` · +${pts[idx].opened} new · −${pts[idx].closed} closed` : ch ? ` (${ch > 0 ? '+' : ''}${ch.toLocaleString()})` : ''}`; tip.hidden = false;
+        const shortDay = new Date(pts[idx].day + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
+        tip.textContent = `${shortDay} · ${pts[idx].v.toLocaleString()}${pts[idx].opened != null ? `  +${pts[idx].opened} new −${pts[idx].closed} closed` : ch ? ` (${ch > 0 ? '+' : '−'}${Math.abs(ch).toLocaleString()})` : ''}`; tip.hidden = false;
       });
       svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; });
     });

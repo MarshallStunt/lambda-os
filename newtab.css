@@ -744,3 +744,7 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .kpi-strip .kpi svg { height: 26px; }
 .kflow { font-size: 10.5px; } .kflow b { margin-right: 1px; }
 .spark-wait { margin-top: 6px; height: 22px; display: flex; align-items: flex-end; font-size: 9.5px; color: var(--muted); border-bottom: 1px dashed var(--line-hi); }
+/* Chart hover label: a solid strip over the card's title (the title comes back when you move off the chart) */
+.kpi .spark-tip { left: 6px; right: 6px; top: 6px; padding: 5px 8px; border-radius: 8px; background: var(--panel-solid); border: 1px solid var(--line-hi);
+  color: var(--text); font: 600 11px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+.kpi .spark-tip { white-space: normal; line-height: 1.35; }
