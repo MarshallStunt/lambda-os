@@ -110,6 +110,22 @@ const LambdaAlerts = (() => {
           title: `${p.name} is past due · ${s.id}`, message: `${p.supplier || 'Supplier'} · due ${st.due} · ${[p.assets && `${p.assetsIn}/${p.assets} assets`, p.consumables && `${p.consumablesIn}/${p.consumables} consumables`].filter(Boolean).join(', ')} received` });
       }
     }
+    // Grafana: new critical hardware alerts at your sites, one notification per site. A site is only compared once it has
+    // been seen before, so a newly watched site (or the first run after an update) never floods you.
+    next.gf = {}; next.gfSites = [];
+    const fresh = {};
+    for (const s of D.SITES.filter(s => s.gf && sites.has(s.id))) {
+      next.gfSites.push(s.id);
+      const seenSite = (prev?.gfSites || []).includes(s.id);
+      for (const a of s.gf.alerts.filter(a => a.crit && a.hw)) {
+        const k = `${s.id}|${a.name}|${a.host || a.rack || ''}`; next.gf[k] = 1;
+        if (!first && cfg.grafana !== false && seenSite && !prev.gf?.[k]) (fresh[s.id] ||= []).push(a);
+      }
+    }
+    for (const [code, list] of Object.entries(fresh)) notes.push({
+      id: `gf:${code}:${list.map(a => a.name + a.host).join(',').length}:${now}`, urgent: true, url: D.siteById(code)?.gf?.url || '',
+      title: `${code}: ${list.length} new critical hardware alert${list.length > 1 ? 's' : ''}`,
+      message: `${[...new Set(list.map(a => a.name))].join(', ')} · ${list.slice(0, 3).map(a => [a.host, a.rack].filter(Boolean).join(' ')).join('; ')}${list.length > 3 ? '…' : ''}` });
     next.srcAlerted = {};
     for (const s of troubled(D)) {
       const since = s.since || now;
@@ -166,6 +182,9 @@ const LambdaAlerts = (() => {
       newTickets: newTickets.sort((a, b) => b.created - a.created), mySites: [...mySites],
       fleet: { open: D.TICKETS.length, breached: D.TICKETS.filter(t => breached(t, now)).length, openWas: prev?.open ?? null, breachedWas: prev?.breached ?? null },
       lowSpares, unread: D.MAIL?.unread ?? null,
+      hardware: (() => { const sites = yourSites(D), out = [];
+        for (const s of D.SITES.filter(s => s.gf && (sites.size ? sites.has(s.id) : true))) for (const c of s.gf.counts.filter(c => c.hw && c.crit)) out.push({ site: s.id, name: c.name, n: c.n, url: s.gf.url });
+        return out.sort((a, b) => b.n - a.n).slice(0, 10); })(),
       atium: (() => {
         const sites = yourSites(D), soon = now + 14 * DAY;
         const builds = myBuilds(D, sites).filter(b => b.late || (b.handoff && !b.handoff.done && b.handoff.at && b.handoff.at < soon) || (b.next?.at && b.next.at < now + 3 * DAY));

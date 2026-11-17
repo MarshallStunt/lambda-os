@@ -19,11 +19,12 @@ const LambdaLive = (() => {
     refreshMinutes: 10,                                    // background refresh; 0 = only when I click ↻
     appTabs: true,                                         // keep pinned background tabs for apps read from a page (apptabs.js)
     netsuiteUrl: 'https://4930164.app.netsuite.com',
-    atiumUrl: 'https://kelsier.aws.lambdalabs.cloud',         // Atium (Infrastructure Intelligence): builds, site assets
+    atiumUrl: 'https://kelsier.aws.lambdalabs.cloud',
+    grafanaUrl: 'https://grafana.aws.lambdalabs.cloud',        // Grafana (production): site power, temperatures, firing hardware alerts         // Atium (Infrastructure Intelligence): builds, site assets
     nsOnHandSearch: '3151',                                // ***Cloud: Material On Hand
     nsMovesSearch: '3152',                                 // ***Cloud: Material Transactions Full List
     calendarEmail: '',                                     // defaults to the Gmail / Jira account
-    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true },
+    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true, grafana: true },
     // AI assistant: provider 'off' | 'anthropic' | 'openai' | 'gemini' | 'local'. Keys stay in this browser and are never put in backups.
     ai: { provider: 'off', keys: { anthropic: '', openai: '', gemini: '', local: '' },
       models: { anthropic: 'claude-opus-5-5', openai: '', gemini: 'gemini-flash-lite-latest', local: '' },
@@ -34,7 +35,7 @@ const LambdaLive = (() => {
     // Appearance: theme 'system' | 'light' | 'dark'; accent; density; text size; glow; motion
     look: { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' },
     // Desktop alerts (checked after every background refresh) and the daily brief.
-    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true,
+    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
     // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
@@ -609,9 +610,90 @@ const LambdaLive = (() => {
     return atiumRun(s, atiumInPage, ['pos', Number(siteId)]);
   }
 
+  /* ---------------- Grafana (production monitoring) ----------------
+     Read with your Grafana sign-in: directly first, and if that's refused, inside a temporary Grafana tab. For every
+     site's metrics store ("Lambda ORD01-CL01", "…-LM01", "…-FACILITY") it asks four small instant queries: PDU power,
+     hottest host inlets, firing alerts (with host, rack, U and since-when) and unreachable network devices. Self-contained,
+     so the same function also runs inside a Grafana page. */
+  async function grafanaRead(base) {
+    try {
+      base = base || location.origin;
+      const get = async p => {
+        const r = await fetch(base + p, { credentials: 'include', headers: { Accept: 'application/json' } });
+        const type = r.headers.get('content-type') || '';
+        if (r.status === 401 || r.status === 403 || /\/login/.test(r.url) || type.includes('text/html')) throw Object.assign(new Error('Not signed in to Grafana.'), { auth: true });
+        if (!r.ok) throw new Error(`${p.split('?')[0]}: HTTP ${r.status}`);
+        return r.json();
+      };
+      const dsl = await get('/api/datasources');
+      const stores = dsl.filter(d => d.type === 'prometheus').map(d => ({ uid: d.uid, m: String(d.name).match(/^Lambda ([A-Z]{3}\d{2})-((?:CL|LM)\d+|FACILITY)$/) }))
+        .filter(x => x.m).map(x => ({ uid: x.uid, site: x.m[1], cluster: x.m[2] }));
+      const Q = {
+        pdu: 'sum(st4InputCordActivePower) / 1000',
+        inlet: "topk(3, max by (hostname, rack) (redfish_chassis_temperature_celsius{sensor=~'Inlet Temp|GPU Inlet Temp'} > 0))",
+        alerts: 'max by (alertname, severity, hostname, rack, rack_u_position, gpu_id, team) (ALERTS_FOR_STATE)',
+        unreach: "max by (hostname, rack, role) (probe_success{job='blackbox_net_network_devices'} == 0)",
+      };
+      const jobs = stores.flatMap(s => Object.entries(Q).map(([k, q]) => ({ s, k, q }))), done = [];
+      let next = 0;
+      const worker = async () => { while (next < jobs.length) { const j = jobs[next++];
+        try { const r = await get(`/api/datasources/proxy/uid/${encodeURIComponent(j.s.uid)}/api/v1/query?query=${encodeURIComponent(j.q)}`); done.push({ ...j, rows: r.data?.result || [] }); }
+        catch (e) { if (e.auth) throw e; done.push({ ...j, err: e.message }); } } };
+      await Promise.all(Array.from({ length: 8 }, worker));
+      const sites = {};
+      const S = code => sites[code] ||= { pduKw: null, inlet: [], alerts: [], counts: {}, unreachable: [], clusters: [], errors: 0, board: null };
+      for (const j of done) {
+        const x = S(j.s.site);
+        if (!x.clusters.includes(j.s.cluster)) x.clusters.push(j.s.cluster);
+        if (j.err) { x.errors++; continue; }
+        if (j.k === 'pdu') for (const r of j.rows) { const v = +r.value[1]; if (v > 0) x.pduKw = (x.pduKw || 0) + v; }
+        if (j.k === 'inlet') for (const r of j.rows) x.inlet.push({ temp: +r.value[1], host: r.metric.hostname || '', rack: r.metric.rack || '' });
+        if (j.k === 'unreach') for (const r of j.rows) x.unreachable.push({ host: r.metric.hostname || '', rack: r.metric.rack || '', role: r.metric.role || '' });
+        if (j.k === 'alerts') for (const r of j.rows) {
+          const m = r.metric, name = m.alertname || 'Alert';
+          x.counts[name] = (x.counts[name] || 0) + 1;
+          const al = { name, since: Math.round(+r.value[1] * 1000) }; // only non-empty fields, to keep the snapshot small
+          for (const [k, v] of [['severity', (m.severity || '').toLowerCase()], ['host', m.hostname], ['rack', m.rack], ['u', m.rack_u_position], ['gpu', m.gpu_id], ['team', m.team]]) if (v) al[k] = v;
+          x.alerts.push(al);
+        }
+      }
+      for (const x of Object.values(sites)) {
+        x.inlet.sort((a, b) => b.temp - a.temp); x.inlet = x.inlet.slice(0, 3); x.unreachable = x.unreachable.slice(0, 50);
+        x.alerts.sort((a, b) => (b.severity === 'critical') - (a.severity === 'critical') || b.since - a.since); x.alerts = x.alerts.slice(0, 400); // counts keep the full totals
+      }
+      // Dashboards: each site's "Site Health" board (or its board in the Datacenter folder), plus the fleet-wide ones.
+      const links = {};
+      try {
+        for (const d of await get('/api/search?type=dash-db&limit=5000')) {
+          const sh = String(d.title).match(/^([A-Z]{3}\d{2})\s*-\s*Site Health$/), dc = d.folderTitle === 'Datacenter' && String(d.title).match(/^([A-Z]{3}\d{2})$/);
+          if (sh) S(sh[1]).board = d.url; else if (dc && !S(dc[1]).board) S(dc[1]).board = d.url;
+          for (const [k, t] of [['dcOps', 'DC Ops Status'], ['rackHealth', 'Air-Cooled Pod Floor Plan & Rack Health'], ['pdu', 'PDU Power & Environmental'], ['gpuThermal', 'GPU Thermal & Throttling'], ['repair', 'Repair Priority'], ['dcAlerts', 'Alerts: DC Alerts']])
+            if (d.title === t && !links[k]) links[k] = d.url;
+        }
+      } catch (e) { if (e.auth) throw e; }
+      for (const [k, x] of Object.entries(sites)) if (!x.clusters.length && !x.board) delete sites[k];
+      return { ok: true, base, at: Date.now(), stores: stores.length, sites, links };
+    } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
+  }
+  async function grafana(s) {
+    const base = trim(s.grafanaUrl);
+    await needAccess([new URL(base).origin + '/*']);
+    const direct = await grafanaRead(base);
+    if (direct.ok) return direct;
+    if (!direct.auth) throw new Error(`Grafana: ${direct.error}`);
+    // Direct reading was refused (some sign-ins only work inside the page): read through a Grafana tab instead.
+    const app = LambdaTabs.apps(s).grafana;
+    let result;
+    try { ({ result } = await LambdaTabs.run(app, grafanaRead, [''], { useOwn: s.appTabs !== false })); }
+    catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Grafana: couldn't read through a Grafana tab (${e.message}).`); }
+    if (result?.ok) return result;
+    if (result?.auth) throw new AuthError('Not signed in to Grafana.', `${base}/login`);
+    throw new Error(`Grafana: ${result?.error || 'the Grafana tab did not answer.'}`);
+  }
+
   /* ---------------- Refresh ---------------- */
-  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium' };
-  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium' };
+  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium', grafana: 'Grafana' };
+  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium', grafana: 'grafana' };
   let inflight = null;
   function refresh(progress) {
     inflight ||= (async () => {
@@ -628,6 +710,7 @@ const LambdaLive = (() => {
         slack: on('slack') ? slack() : off,
         netsuite: on('netsuite') ? netsuite(s, progress) : off,
         atium: on('atium') ? atium(s) : off,
+        grafana: on('grafana') ? grafana(s) : off,
       }));
       const settled = await Promise.allSettled(Object.values(results));
       const snapshot = { at: Date.now(), version: 2, sources: {} };
@@ -691,7 +774,7 @@ const LambdaLive = (() => {
   function originsFor(s) {
     const o = k => { try { return new URL(s[k]).origin + '/*'; } catch { return null; } };
     const on = k => s.sources?.[k] !== false;
-    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'),
+    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
   return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite };

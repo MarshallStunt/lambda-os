@@ -25,9 +25,10 @@ const LambdaTabs = (() => {
 
   // The apps that are read from a page. `home` is the path our tab should stay under; `pinned: false` = temporary tab.
   function apps(s = {}) {
-    let ns = null, at = null;
+    let ns = null, at = null, gf = null;
     try { ns = new URL(s.netsuiteUrl).origin; } catch { /* not set */ }
     try { at = new URL(s.atiumUrl || 'https://kelsier.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
+    try { gf = new URL(s.grafanaUrl || 'https://grafana.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
     const list = [
       { key: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: '/client', pinned: true, always: true },
       { key: 'gmail', name: 'Gmail', url: 'https://mail.google.com/mail/u/0/', home: '/mail/', pinned: true },
@@ -36,6 +37,8 @@ const LambdaTabs = (() => {
       // Atium keeps its Okta sign-in in the page, so it's read from a tab like Slack.
       at && { key: 'atium', name: 'Atium', url: `${at}/builds`, home: '/', pinned: true, always: true },
       ns && { key: 'netsuite', name: 'NetSuite', url: `${ns}/app/center/card.nl`, home: '/app/', pinned: false },
+      // Grafana is normally read directly; a temporary tab is only used if its sign-in refuses direct reads.
+      gf && { key: 'grafana', name: 'Grafana', url: `${gf}/dashboards`, home: '/', pinned: false },
     ].filter(Boolean);
     return Object.fromEntries(list.map(a => [a.key, a]));
   }

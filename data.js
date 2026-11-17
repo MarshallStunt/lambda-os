@@ -199,15 +199,15 @@
     };
     const D = finish({
       MODE: 'live', AT: snap.at,
-      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'),
+      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'),
         { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
       ME: { name: jr?.me?.name || '' },
-      LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '' },
+      LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '', grafana: snap.grafana?.base || '' },
       SITES, PARTS: [...PARTS.values()], PEOPLE: [...PEOPLE.values()], DEVICES: [...DEVICES.values()], TICKETS, KPIS, FEED,
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
-    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, smart: snap.smart, codeOf, meId });
+    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, codeOf, meId });
   }
 
   /* ---------------- Projects, deployments, Slack, mail, calendar, NetSuite ---------------- */
@@ -247,6 +247,8 @@
     const siteIds = new Set(D.SITES.map(s => s.id));
     const codesIn = text => [...new Set((String(text).toUpperCase().replace(/[-_]/g, ' ').match(/\b[A-Z]{3}\d{2}\b/g) || []).filter(c => siteIds.has(c)))];
     const codeOf = x.codeOf;
+    // Grafana alerts about physical hardware (what DC Ops fixes), as opposed to software / platform alerts.
+    const HW = /psu|power ?supply|fan|pdu|gpu|xid|thermal|temp|overheat|memory|dimm|disk|nvme|drive|nvlink|fabric|link ?down|carrier|\bib\b|infiniband|bmc|redfish|chassis|cooling|leak|unreachable|optic|transceiver/i;
     // Answers from the optional AI step (Settings → Data → Smart processing), applied only where the rules found nothing.
     const SM = x.smart?.on ? (x.smart.cache || {}) : null, aiLink = (kind, id) => SM?.link?.[`${kind}:${id}`] || null;
 
@@ -396,10 +398,33 @@
       }).sort((a, b) => b.at - a.at).slice(0, 8);
     })();
 
+    // Grafana: each site's live health (PDU power, hottest inlets, firing alerts, unreachable network devices), and every
+    // firing alert tied to its device (by hostname, which matches NetBox) and so to that device's open tickets.
+    const GF = x.grafana, byHost = new Map();
+    for (const s of D.SITES) s.gf = null; // (site.health is the site's status colour; Grafana data lives in site.gf)
+    if (GF?.sites) for (const [code, h] of Object.entries(GF.sites)) {
+      const site = D.siteById(code);
+      const alerts = (h.alerts || []).map(a => ({ ...a, site: code, hw: HW.test(a.name), crit: a.severity === 'critical' }));
+      for (const a of alerts) if (a.host) { const k = a.host.toLowerCase(); if (!byHost.has(k)) byHost.set(k, []); byHost.get(k).push(a); }
+      const counts = Object.entries(h.counts || {}).map(([name, n]) => ({ name, n, hw: HW.test(name), crit: alerts.some(a => a.name === name && a.crit) }))
+        .sort((a, b) => b.crit - a.crit || b.hw - a.hw || b.n - a.n);
+      const gf = { pduKw: h.pduKw, inlet: h.inlet || [], unreachable: h.unreachable || [], alerts, counts, total: counts.reduce((t, c) => t + c.n, 0),
+        hwTotal: counts.filter(c => c.hw).reduce((t, c) => t + c.n, 0), clusters: h.clusters || [], url: h.board ? GF.base + h.board : `${GF.base}/dashboards?query=${code}` };
+      if (site) site.gf = gf;
+    }
+    for (const dv of D.DEVICES) dv.alerts = byHost.get(String(dv.id).toLowerCase()) || [];
+    for (const t of D.TICKETS) t.alerts = t.device ? byHost.get(String(t.device).toLowerCase()) || [] : [];
+    const GRAFANA = GF ? { base: GF.base, links: Object.fromEntries(Object.entries(GF.links || {}).map(([k, u]) => [k, GF.base + u])) } : null;
+
     // Feed and KPIs
     D.FEED.push(
       ...BUILDS.flatMap(b => (b.milestones || []).filter(m => m.status === 'completed' && m.done).map(m => ({ b, m, at: Date.parse(m.done + (m.done.length === 10 ? 'T12:00:00' : '')) })))
         .filter(e => e.at > now - 7 * DAY && e.at <= now).map(({ b, m, at }) => ({ src: 'atium', at, ref: b.deploymentKey || b.site, text: `${b.name} · ${m.name} done${b.customer ? ` · ${b.customer}` : ''}` })),
+      ...(() => { const g = new Map();
+        for (const a of [...byHost.values()].flat()) if (a.hw && a.since > now - DAY && a.since <= now + 60e3) {
+          const k = a.site + '|' + a.name, e = g.get(k) || { site: a.site, name: a.name, at: 0, hosts: [] }; e.at = Math.max(e.at, a.since); if (!e.hosts.includes(a.host)) e.hosts.push(a.host); g.set(k, e); }
+        return [...g.values()].sort((a, b) => b.at - a.at).slice(0, 20).map(e => ({ src: 'grafana', at: e.at, ref: e.site,
+          text: `${e.site} · ${e.name} on ${e.hosts.length > 1 ? `${e.hosts.length} hosts (${e.hosts.slice(0, 2).join(', ')}…)` : e.hosts[0]}` })); })(),
       ...MENTIONS.map(m => ({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}` })),
       ...(MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}` })),
       ...MOVES.filter(m => m.at > now - 7 * DAY).slice(0, 25).map(m => ({ src: 'netsuite', at: m.at, ref: m.deploymentKey || m.site, text: `${m.doc} · ${m.type}${m.deployment ? ` · ${m.deployment}` : ''}${m.status ? ` · ${m.status}` : ''}` })),
@@ -416,7 +441,7 @@
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
-      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER,
+      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER, GRAFANA,
       SMART: x.smart ? { on: !!x.smart.on, live: !!x.smart.live, label: x.smart.label || '', why: x.smart.why || '', at: x.smart.at || 0, calls: x.smart.calls || 0 } : null,
       AI_PRIORITY: SM?.prio?.order?.length ? SM.prio : null,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
@@ -497,7 +522,7 @@
       ME: { name: '' }, LINKS: { jira: '', netbox: '' }, SITES, PARTS, PEOPLE, DEVICES, TICKETS, KPIS, FEED,
       pollFeed: async () => [{ ...pick(FEED_T)(), at: Date.now() }], feedEveryMs: 6000,
     });
-    D.SOURCES.splice(3, 0, ...['NetSuite', 'Gmail', 'Calendar', 'Atium'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })));
+    D.SOURCES.splice(3, 0, ...['NetSuite', 'Gmail', 'Calendar', 'Atium', 'Grafana'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })));
     // Demo projects, deployments, Slack, mail, calendar and NetSuite in the same shapes live.js produces.
     const dd = (days) => new Date(now + days * 864e5).toISOString().slice(0, 10);
     const proj = (key, summary, status) => ({ key, url: '', source: 'PMO', kind: 'project', summary, status, cat: 'indeterminate', parentKey: '', siteRaw: [], assigneeId: 'p1', assigneeName: 'A. Rivera',
@@ -555,6 +580,19 @@
       .map(([type, name, d], i) => ({ type, name, status: i < done ? 'completed' : 'scheduled', done: i < done ? dd(d) : null, scheduled: dd(d) }));
     const build = (name, site, customer, gpus, model, racked, validated, steps, done) => ({ id: name, name, siteId: atIdOf(site), customer, gpuModel: model, planned: gpus, installed: Math.round(gpus * validated), gpus,
       mw: Math.round(gpus / 400) || null, racked: Math.round(gpus / 8 * 1.3 * racked), devices: Math.round(gpus / 8 * 1.3), validated: Math.round(gpus / 8 * validated), hosts: Math.round(gpus / 8), conversion: false, epic: null, milestones: ms(...steps, done) });
+    // Demo Grafana: live health for a few sites, with alerts on real demo devices (so tickets show them too).
+    const gfAlert = (name, sev, dv, ago) => ({ name, severity: sev, host: dv.id, rack: dv.rack, u: String(dv.u || ''), since: now - ago * 60e3 });
+    const devsAt = code => [...new Set([...D.TICKETS.filter(t => t.site === code).map(t => t.device), ...DEVICES_DEMO.filter(v => v.site === code).map(v => v.id)])].map(id => DEVICES_DEMO.find(v => v.id === id)).filter(Boolean); // ticket devices first
+    const gfSite = (code, kw, inlet, list, unreach = 0) => { const dv = devsAt(code); const alerts = list.map(([n, s, i, ago]) => dv[i % Math.max(1, dv.length)] && gfAlert(n, s, dv[i % dv.length], ago)).filter(Boolean);
+      const counts = {}; alerts.forEach(a => counts[a.name] = (counts[a.name] || 0) + 1); return { pduKw: kw, inlet: [{ temp: inlet, host: dv[0]?.id || '', rack: dv[0]?.rack || '' }], alerts, counts,
+        unreachable: Array.from({ length: unreach }, (_, i) => ({ host: `${code.toLowerCase()}-sw-${i + 1}`, rack: 'r0' + (i + 1), role: 'leaf' })), clusters: ['CL01'], board: `/d/${code.toLowerCase()}-site-health` }; };
+    const DEVICES_DEMO = D.DEVICES;
+    const gfMock = { base: 'https://grafana.aws.lambdalabs.cloud', links: { dcOps: '/d/dc-ops-status/dc-ops-status', rackHealth: '/d/air-cooled-pod-floorplan-v6', pdu: '/d/pdu', gpuThermal: '/d/fre-gpu-thermal-throttling', repair: '/d/repair', dcAlerts: '/d/dc-alerts' }, sites: {
+      ORD01: gfSite('ORD01', 1166, 28, [['PDUInputCordFault', 'critical', 0, 40], ['PDUInputCordFault', 'critical', 1, 55], ['GPUHealthFault', 'critical', 2, 180], ['ChassisPSUFault', 'warning', 3, 900], ['ChassisFanCritical', 'warning', 4, 3000]]),
+      SEA01: gfSite('SEA01', 2000, 23, [['ChassisFanCritical', 'warning', 0, 600]], 1),
+      DAL02: gfSite('DAL02', 1700, 41, [['GPUThermalThrottle', 'critical', 0, 25], ['FabricLinkDown', 'warning', 1, 120], ['MissingGPUIB', 'warning', 2, 300]]),
+      IAD03: gfSite('IAD03', 1242, 33, [['ChassisPSUFault', 'critical', 0, 15], ['SlotReclaimFailed', 'warning', 1, 50]]),
+    } };
     const atMock = { base: atBase, sites: atSites, builds: [
       build('QRO01-CL01 15624x VR200', 'QRO01', 'Anthropic', 15624, 'VR200', 0.04, 0, [-15, 30, 90, 200], 1),
       build('ORD01-DH02 5184x VR200 MaxQ', 'ORD01', 'Anthropic', 5184, 'VR200', 0.62, 0.31, [-60, -35, -10, 120], 3),
@@ -562,7 +600,7 @@
       build('YQB01-CL02 2048x B300', 'YQB01', 'Nvidia', 2048, 'B300', 0.52, 0.12, [-25, -12, -3, 85], 2),
       build('SEA01-CL01 2040x H100 conversion', 'SEA01', 'Anthropic', 2040, 'H100', 1, 0.94, [-75, -60, -30, -4], 4),
     ] };
-    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
+    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, grafana: gfMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 
   function finish(D) {

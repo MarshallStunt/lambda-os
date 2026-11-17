@@ -290,7 +290,7 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 .boot-src span { color: var(--text-2); }
 
 /* ---------- v0.3: deployments, second brain, agenda, inbox ---------- */
-:root { --src-mail: #c98500; --src-netsuite: #9085e9; --src-atium: #e0663a; --dep: #3ccf6e; }
+:root { --src-mail: #c98500; --src-netsuite: #9085e9; --src-atium: #e0663a; --src-grafana: #f2a01c; --dep: #3ccf6e; }
 .src-mail { background: var(--src-mail); color: #0b0b0b; } .src-netsuite { background: var(--src-netsuite); }
 .kpis { grid-template-columns: 1fr 1fr; }
 .kpi { padding: 10px 12px; } .kpi-value { font-size: 21px; }
@@ -683,3 +683,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 .smart-tag.warn { color: var(--warning); }
 .qmeta.ai-why { color: var(--accent); }
 .volai { margin: -6px 0 14px; font-size: 13px; color: var(--accent); }
+
+/* Grafana health */
+.src-grafana { background: var(--src-grafana); color: #1a1100; }
+.hstats .stat b { font-size: 18px; }
+.alert-dot { font: 600 10px var(--font); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent); border-radius: 99px; padding: 0 5px; margin-left: 4px; }
+.alert-dot.crit { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 50%, transparent); }

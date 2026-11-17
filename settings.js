@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
-const FIELDS = ['jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
-const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl'];
+const FIELDS = ['grafanaUrl', 'jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
+const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl', 'grafanaUrl'];
 const SOURCES = LambdaLive.NAMES; // { netbox: 'NetBox', jira: 'Jira', … }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const say = html => ($('result').innerHTML = html);

@@ -56,6 +56,12 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   Atium onsite schedules, with jokes and incident or engineering channels filtered out. Each shows who has signed up in
   that site's Atium onsite schedule for the next 4 weeks (and whether you have), with Sign up in Atium and Open in
   Slack buttons. Requests also appear on the site card and, for the last 7 days, in the daily brief.
+- **Grafana** (production, grafana.aws.lambdalabs.cloud): read with your Grafana sign-in (directly, or through a temporary
+  Grafana tab if direct reading is refused). For every site's metrics store it asks four small queries: PDU power,
+  hottest host inlets, firing alerts (host, rack, U, since when) and unreachable network devices. Site cards get a
+  **Health · Grafana** section; alerts are tied to their device (hostnames match NetBox) and so to open tickets (⚠ badge);
+  new hardware alerts appear in the live feed; Settings → Alerts can notify you of new critical hardware alerts at your
+  sites (one notification per site); ⌘K opens the main DC dashboards. The staging Grafana has no production sites.
 - **Smart processing (optional AI)**: Settings → Data → Smart processing chooses **Local only** (default: fixed rules,
   nothing sent anywhere) or **AI when available**. Fetching is always local. In AI mode, after each refresh your AI
   provider looks only at what the rules couldn't settle: which Slack messages are real volunteer requests (with dates and

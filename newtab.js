@@ -348,7 +348,7 @@ LambdaData.ready.then(D => {
       const st = slaStatus(t);
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
-        <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}</div><div class="qsum">${esc(t.summary)}</div>
+        <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="${esc(t.alerts.slice(0, 3).map(a => a.name).join(', '))} firing on this device (Grafana)">⚠ ${t.alerts.length}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
           <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
@@ -371,7 +371,7 @@ LambdaData.ready.then(D => {
   /* ---------------- Live feed ---------------- */
   const feed = [...D.FEED];
   const SRC = { jira: ['JR', 'Jira', '--src-jira'], netbox: ['NB', 'NetBox', '--src-netbox'], slack: ['SL', 'Slack', '--src-slack'],
-    mail: ['GM', 'Gmail', '--src-mail'], netsuite: ['NS', 'NetSuite', '--src-netsuite'], atium: ['AT', 'Atium', '--src-atium'] };
+    mail: ['GM', 'Gmail', '--src-mail'], netsuite: ['NS', 'NetSuite', '--src-netsuite'], atium: ['AT', 'Atium', '--src-atium'], grafana: ['GF', 'Grafana', '--src-grafana'] };
   const feedOn = Object.fromEntries(Object.keys(SRC).map(k => [k, true]));
   const present = Object.keys(SRC).filter(k => feed.some(f => f.src === k));
   $('#feedFilters').innerHTML = present.map(k => `<button class="chip on" data-src="${k}" aria-pressed="true" ><i style="background:var(${SRC[k][2]})"></i>${SRC[k][1]}</button>`).join('');
@@ -1491,6 +1491,24 @@ LambdaData.ready.then(D => {
     if (box()) box().innerHTML = r.pos.length ? poBlock(r.pos, r.url) : '';
   }
 
+  // Grafana health on a site card: power, hottest inlet, alerts by type (hardware first), unreachable network devices.
+  const tempSt = t => t >= 40 ? 'critical' : t >= 32 ? 'warning' : 'good';
+  const alertSince = a => a.since ? `since ${rel(a.since)} ago` : '';
+  const alertLine = a => `${esc(a.name)}${a.gpu ? ` · GPU ${esc(a.gpu)}` : ''}${a.rack ? ` · ${esc(a.rack)}${a.u ? ` U${esc(String(a.u).replace(/\.0$/, ''))}` : ''}` : ''}`;
+  const healthBlock = s => { const h = s.gf; if (!h) return '';
+    const hot = h.inlet[0], crit = h.counts.filter(c => c.crit).reduce((t, c) => t + c.n, 0);
+    return `<div class="section-title"><span>Health · Grafana</span><span>${h.clusters.join(' · ')}</span></div>
+      <div class="stats hstats">
+        <div class="stat"><b>${h.pduKw != null ? Math.round(h.pduKw).toLocaleString() : '—'}</b><span>PDU kW</span></div>
+        <div class="stat" title="${hot ? `${esc(hot.host)} · ${esc(hot.rack)}` : 'No inlet sensors reported'}"><b class="${hot ? 'st-' + tempSt(hot.temp) : ''}">${hot ? Math.round(hot.temp) + '°' : '—'}</b><span>Hottest inlet${hot?.rack ? ' · ' + esc(hot.rack) : ''}</span></div>
+        <div class="stat"><b class="${crit ? 'st-critical' : h.hwTotal ? 'st-warning' : ''}">${h.hwTotal.toLocaleString()}</b><span>Hardware alerts${crit ? ` · ${crit} critical` : ''}</span></div>
+        <div class="stat"><b class="${h.unreachable.length ? 'st-warning' : ''}">${h.unreachable.length}</b><span>Unreachable devices</span></div></div>
+      ${h.counts.slice(0, 7).map(c => `<div class="mini-ticket" data-href="${esc(h.url)}" title="Open the site's health board in Grafana"><span class="qkey">${c.n}×</span><span class="qsum">${esc(c.name)}${c.hw ? '' : ' <small class="muted">(software)</small>'}</span>${statusChip(c.crit ? 'critical' : c.hw ? 'warning' : 'idle', c.crit ? 'critical' : c.hw ? 'hardware' : 'other')}</div>`).join('')}
+      ${h.counts.length > 7 ? `<p class="muted small">+${h.counts.length - 7} more alert types</p>` : ''}
+      <div class="links">${btn('Site health in Grafana', h.url)}</div>`; };
+  const alertsBlock = list => list?.length ? `<div class="section-title"><span>Firing alerts · Grafana</span><span>${list.length}</span></div>${list.slice(0, 8).map(a =>
+      `<div class="mini-ticket"><span class="qkey">${statusChip(a.crit ? 'critical' : a.hw ? 'warning' : 'idle', a.severity || 'alert')}</span><span class="qsum">${alertLine(a)}</span><span class="small muted">${alertSince(a)}</span></div>`).join('')}` : '';
+
   const SiteCard = {
     open(s) {
       Fleet.focus(s);
@@ -1515,6 +1533,7 @@ LambdaData.ready.then(D => {
         <div class="stats">
           <div class="stat"><b>${kfmt(s.racks)}</b><span>Racks</span></div><div class="stat"><b>${kfmt(s.devices)}</b><span>Devices</span></div>
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
+        ${healthBlock(s)}
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
         ${(D.VOLUNTEER || []).filter(v => v.site === s.id).map(v => `<div class="section-title"><span>Volunteers wanted · Slack</span><span>${rel(v.askedAt)}</span></div><ul class="vol-in-card">${volRow(v)}</ul>`).join('')}
         ${s.builds?.length ? `<div class="section-title"><span>Builds · Atium</span><span>${s.builds.length}</span></div>${s.builds.map(buildRow).join('')}` : ''}
@@ -1605,15 +1624,17 @@ LambdaData.ready.then(D => {
           ${dev ? `<dt>Device</dt><dd><a data-open="device:${esc(dev.id)}" class="mono">${esc(dev.id)}</a></dd><dt>Location</dt><dd>${esc(dev.rack)}${dev.u ? ` · U${dev.u}` : ''}</dd><dt>Model</dt><dd>${esc(dev.model)}</dd>` : ''}
           ${part ? `<dt>Part</dt><dd><a data-open="part:${esc(part.id)}">${esc(partLabel(part))}</a>${stockHere ? ` · <b>${stockHere.stock} on hand at ${esc(site.id)}</b>` : site ? ` · none on hand at ${esc(site.id)}` : ''}</dd>` : ''}
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
-        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}</div>`);
+        ${alertsBlock(t.alerts)}
+        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
     }
     if (type === 'device') {
       const d = ref, ts = D.TICKETS.filter(t => t.device === d.id).sort(byUrgency);
       return Drawer.open(`<div class="qkey">DEVICE</div><h3 class="mono">${esc(d.id)}</h3>
         <dl class="kv"><dt>Model</dt><dd>${esc(d.model)}</dd>${d.serial ? `<dt>Serial</dt><dd class="mono">${esc(d.serial)}</dd>` : ''}
           <dt>Site</dt><dd>${d.site ? `<a data-open="site:${esc(d.site)}">${esc(d.site)}</a>` : '—'}</dd><dt>Rack / U</dt><dd>${esc(d.rack)}${d.u ? ` · U${d.u}` : ''}</dd></dl>
+        ${alertsBlock(d.alerts)}
         <div class="section-title"><span>Open tickets</span><span>${ts.length}</span></div>${ts.map(ticketRow).join('') || '<p class="muted">None.</p>'}
-        <div class="links">${btn('Open in NetBox', d.url, true)}</div>`);
+        <div class="links">${btn('Open in NetBox', d.url, true)}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
     }
     if (type === 'part') {
       const p = ref, rows = D.SITES.map(s => ({ s, i: s.inventory.find(x => x.part === p.id) })).filter(r => r.i).sort((a, b) => b.i.stock - a.i.stock);
@@ -2035,6 +2056,8 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ['NetSuite', 'Material transactions', `${ns}/app/common/search/searchresults.nl?searchid=${s.nsMovesSearch}`],
       ['Slack', 'Open Slack', L.slack || 'https://app.slack.com/client'], ['Gmail', 'Inbox', 'https://mail.google.com/'], ['Calendar', 'Google Calendar', 'https://calendar.google.com/'],
       ...(L.atium || s.atiumUrl ? [['Atium', 'Build portfolio', `${L.atium || s.atiumUrl}/builds`], ['Atium', 'Home', `${L.atium || s.atiumUrl}/`]] : []),
+      ...(D.GRAFANA ? [['Grafana', 'DC Ops Status', D.GRAFANA.links.dcOps], ['Grafana', 'Rack health floor plan', D.GRAFANA.links.rackHealth], ['Grafana', 'PDU power & environmental', D.GRAFANA.links.pdu],
+        ['Grafana', 'GPU thermal & throttling', D.GRAFANA.links.gpuThermal], ['Grafana', 'Repair priority', D.GRAFANA.links.repair], ['Grafana', 'DC alerts', D.GRAFANA.links.dcAlerts], ['Grafana', 'All dashboards', `${D.GRAFANA.base}/dashboards`]].filter(x => x[2]) : []),
       ['Lambda OS', 'Settings', '#settings'],
       ['Lambda OS', `Help, ideas, bugs: message ${LambdaUpdates.HELP.name} on Slack`, LambdaUpdates.HELP.slack],
     ];
@@ -2073,6 +2096,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         ${sec('Parts arrived for your tickets', b.partsArrived.length, b.partsArrived.map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(D.partById(t.part)?.name || t.part)} on hand at ${esc(t.site)}</span></div>`).join(''), 'Nothing new on hand.')}
         ${sec(`New tickets${b.mySites.length ? ' at your sites' : ''}`, b.newTickets.length, b.newTickets.slice(0, 8).map(ticketRow).join('') + (b.newTickets.length > 8 ? `<p class="muted small">+${b.newTickets.length - 8} more</p>` : ''), 'No new tickets.')}
         ${sec('Low spares at your sites', b.lowSpares.length, b.lowSpares.slice(0, 8).map(x => `<div class="mini-ticket" data-site="${esc(x.site)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.part)}</span><span class="small st-${x.stock === 0 ? 'critical' : 'warning'}">${x.stock} / alert ${x.alert}</span></div>`).join(''), 'Spares look fine.')}
+        ${b.hardware?.length ? sec('Critical hardware alerts · Grafana', b.hardware.reduce((t, x) => t + x.n, 0), b.hardware.map(x => `<div class="mini-ticket" data-href="${esc(x.url)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.name)}</span><span class="small st-critical">${x.n}×</span></div>`).join('')) : ''}
         ${(D.VOLUNTEER || []).some(v => v.at > Date.now() - 7 * 864e5) ? sec('Volunteer requests (7 days)', D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).length, D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).map(v => `<div class="mini-ticket" data-vol="${esc(v.site)}"><span class="qkey">${esc(v.site)}</span><span class="qsum">${esc(v.text.slice(0, 120))}${v.text.length > 120 ? '…' : ''}</span><span class="small muted">${esc(v.user)}</span></div>`).join('')) : ''}
         ${b.atium.on ? sec('Builds & purchase orders · Atium', b.atium.builds.length + b.atium.late.length + b.atium.dueSoon.length,
           b.atium.builds.map(buildRow).join('')
