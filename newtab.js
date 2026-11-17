@@ -306,6 +306,7 @@ LambdaData.ready.then(D => {
     const tracked = D.tracked(), inbox = inboxItems();
     const fresh = (D.MAIL?.unread || 0) + (D.MENTIONS || []).filter(m => m.at > Date.now() - 864e5).length;
     $('#trackCount').textContent = tracked.length || '';
+    $('#ticketCount').textContent = mineSorted().length || '';
     $('#inboxCount').textContent = fresh || '';
     $('#queueNote').hidden = true;
     if (qMode === 'tracking') {
@@ -331,7 +332,7 @@ LambdaData.ready.then(D => {
       return;
     }
     const mine = mineSorted(), list = mine.length ? mine.slice(0, 100) : [...D.TICKETS].sort(byUrgency).slice(0, 30);
-    $('#qTicketsLabel').textContent = mine.length ? 'My tickets' : 'Urgent';
+    $('#qTicketsLabel').textContent = mine.length ? 'Tickets' : 'Urgent'; $('#qTicketsLabel').parentElement.title = mine.length ? 'My tickets: assigned to, reported or watched by you' : 'Most urgent tickets fleet-wide';
     $('#queueCount').textContent = mine.length ? `${mine.length} open` : 'fleet-wide';
     $('#queueNote').hidden = !!mine.length || D.MODE !== 'live';
     $('#queue').innerHTML = list.map(t => {

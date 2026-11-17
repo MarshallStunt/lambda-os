@@ -652,3 +652,27 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 .vol-grid tr.me td i { background: var(--good); }
 .volcard .links { gap: 8px; margin-top: 4px; }
 .volcard .links .btn { font-size: 13px; padding: 7px 14px; }
+
+/* ---------- Layout v0.8.8: fleet numbers above the fleet; the left column is "my day" ---------- */
+.col-center { gap: 12px; }
+.col-center > .stage { flex: 1; min-height: 0; }
+.kpis.kpi-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; flex-shrink: 0; }
+.kpi-strip .kpi { padding: 8px 10px; }
+.kpi-strip .kpi-label { min-height: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-strip .kpi-delta { -webkit-line-clamp: 1; }
+.kpi-strip .kpi svg { height: 18px; margin-top: 2px; }
+@media (max-width: 1360px) { .kpis.kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.col-left { gap: 12px; }
+.greeting h1 { font-size: 21px; }
+.agenda-panel .agenda { max-height: 132px; overflow-y: auto; }
+.queue-panel { min-height: 260px; }
+.queue-panel .panel-head { padding: 10px 10px 6px; }
+.qtabs { display: grid; grid-template-columns: repeat(4, auto); gap: 3px; width: 100%; padding: 3px; border-radius: 10px; background: var(--panel-hi); }
+.qtabs button { padding: 7px 5px; text-align: center; letter-spacing: 0; text-transform: none; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qtabs b { display: inline-block; min-width: 16px; margin-left: 3px; padding: 0 4px; border-radius: 99px; font-size: 10px; line-height: 15px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.qtabs b:empty { display: none; }
+.queue-panel #queueCount { font-size: 11px; padding: 0 4px; }
+@media (min-width: 1281px) { .layout { grid-template-columns: 350px minmax(0, 1fr) 340px; } }
+.qtabs { display: flex; }
+.qtabs button { flex: 1 1 auto; padding: 7px 4px; overflow: visible; text-overflow: clip; }
+.qtabs b { margin-left: 2px; }

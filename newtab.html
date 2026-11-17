@@ -42,21 +42,20 @@
   </div>
 
   <main class="layout">
-    <!-- Left: me -->
+    <!-- Left: my day (greeting, today, my work) -->
     <section class="col col-left">
       <div class="greeting">
         <h1 id="greeting">Good day</h1>
         <p id="greetingSub" class="muted"></p>
       </div>
-      <div class="kpis" id="kpis"></div>
       <div class="panel agenda-panel" id="agendaPanel" hidden>
         <div class="panel-head"><h2 id="agendaTitle">Today</h2><span class="muted" id="agendaNext"></span></div>
         <ul class="agenda" id="agenda"></ul>
       </div>
       <div class="panel queue-panel">
         <div class="panel-head"><div class="qtabs" id="qtabs" role="tablist">
-            <button data-q="tickets" class="on" role="tab" aria-selected="true"><span id="qTicketsLabel">Tickets</span></button>
-            <button data-q="tracking" role="tab" aria-selected="false">★ Tracking <b id="trackCount"></b></button>
+            <button data-q="tickets" class="on" role="tab" aria-selected="true"><span id="qTicketsLabel">Tickets</span> <b id="ticketCount"></b></button>
+            <button data-q="tracking" role="tab" aria-selected="false">Tracking <b id="trackCount"></b></button>
             <button data-q="inbox" role="tab" aria-selected="false">Inbox <b id="inboxCount"></b></button>
             <button data-q="volunteer" role="tab" aria-selected="false" title="Requests for people to help at another site's deployment">Volunteer <b id="volCount"></b></button></div>
           <span class="muted" id="queueCount"></span></div>
@@ -65,8 +64,10 @@
       </div>
     </section>
 
-    <!-- Center: stage -->
-    <section class="col col-center panel stage">
+    <!-- Center: fleet numbers above the fleet view -->
+    <section class="col col-center">
+      <div class="kpis kpi-strip" id="kpis"></div>
+      <div class="panel stage">
       <div class="stage-head">
         <div class="tabs" role="tablist">
           <button role="tab" class="tab active" data-view="globe" aria-selected="true">Fleet</button>
@@ -85,6 +86,7 @@
         <aside class="site-card" id="siteCard" hidden></aside>
         <div class="map-attrib" id="mapAttrib" hidden></div>
         <div class="stage-hint muted" id="stageHint">Drag to rotate · click a site</div>
+      </div>
       </div>
     </section>
 
