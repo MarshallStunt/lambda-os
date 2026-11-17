@@ -212,16 +212,22 @@ LambdaData.ready.then(D => {
         const added = [...now].filter(x => !was.has(x)).length, closed = [...was].filter(x => !now.has(x)).length;
         flow = `<span class="kflow"><b class="up-bad">+${added}</b> new · <b class="up-good">−${closed}</b> closed</span>`;
       }
-      return `<div class="kpi" data-k="${esc(k.key || '')}">
-        <div class="kpi-label">${esc(k.label)}</div><div class="kpi-value">${esc(k.value)}</div>
-        <div class="kpi-delta">${delta}${flow}</div>
-        ${flow && k.key === 'open' ? '' : `<div class="kpi-sub"><span class="${k.tone === 'bad' ? 'up-bad' : k.tone === 'good' ? 'up-good' : ''}">${esc(k.sub || '')}</span></div>`}
-        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : '<div class="spark-wait" title="Lambda OS records this number once a day; the 30-day chart grows from today">30-day chart starts tomorrow</div>'}</div>`; }).join('');
+      // Slim card: a short label, the number with a small change arrow, and the 30-day chart. Everything else
+      // (what changed since when, new/closed, the context line) is in the card's hover text.
+      const SHORT = { open: 'Open tickets', breached: 'SLA breached', deps: 'Deployments', gpus: 'GPUs', devices: 'Devices', waiting: 'Waiting parts' };
+      const arrow = dlt == null || !dlt ? '' : `<span class="kd ${cls}">${dlt > 0 ? '▲' : '▼'}${amount(dlt)}</span>`;
+      const strip = h => String(h).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      const why = [k.label, `${k.value}`, dlt == null ? 'history starts today' : dlt ? `${dlt > 0 ? '+' : '−'}${amount(dlt)} vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : kDay(prev.day)}` : 'same as yesterday',
+        strip(flow), k.sub, pts.length > 1 ? `hover the chart for any of the last ${pts.length} days` : ''].filter(Boolean).join(' · ');
+      return `<div class="kpi slim" data-k="${esc(k.key || '')}" title="${esc(why)}">
+        <div class="kpi-label">${esc(SHORT[k.key] || k.label)}</div>
+        <div class="kpi-row"><span class="kpi-value">${esc(k.value)}</span>${arrow}</div>
+        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : '<div class="spark-wait">chart starts tomorrow</div>'}</div>`; }).join('');
     document.querySelectorAll('.kpi').forEach((el, i) => {
       const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
       if (!svg) return;
       const dot = svg.querySelector('circle'), tip = el.querySelector('.spark-tip'), xy = sparkPts(pts.map(p => p.v)), m = pts.length;
-      svg.setAttribute('aria-label', `Last ${m} days`); el.title = `${k.label}: last ${m} days (hover the chart for any day)`;
+      svg.setAttribute('aria-label', `Last ${m} days`);
       svg.addEventListener('pointermove', ev => {
         const r = svg.getBoundingClientRect(), idx = Math.max(0, Math.min(m - 1, Math.round(((ev.clientX - r.left) / r.width) * (m - 1))));
         dot.setAttribute('cx', xy[idx][0]); dot.setAttribute('cy', xy[idx][1]); dot.style.display = '';

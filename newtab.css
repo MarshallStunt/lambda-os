@@ -748,3 +748,12 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .kpi .spark-tip { left: 6px; right: 6px; top: 6px; padding: 5px 8px; border-radius: 8px; background: var(--panel-solid); border: 1px solid var(--line-hi);
   color: var(--text); font: 600 11px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
 .kpi .spark-tip { white-space: normal; line-height: 1.35; }
+
+/* Slim top cards: label, number + arrow, chart */
+.kpi.slim { padding: 7px 10px 6px; }
+.kpi.slim .kpi-label { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 0; }
+.kpi.slim .kpi-row { display: flex; align-items: baseline; gap: 6px; margin-top: 1px; }
+.kpi.slim .kpi-value { font-size: 20px; font-weight: 600; line-height: 1.15; }
+.kpi.slim .kd { font-size: 11px; }
+.kpi.slim svg { height: 20px; margin-top: 3px; }
+.kpi.slim .spark-wait { height: 20px; margin-top: 3px; }
