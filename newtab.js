@@ -216,7 +216,7 @@ LambdaData.ready.then(D => {
         <div class="kpi-label">${esc(k.label)}</div><div class="kpi-value">${esc(k.value)}</div>
         <div class="kpi-delta">${delta}${flow}</div>
         ${flow && k.key === 'open' ? '' : `<div class="kpi-sub"><span class="${k.tone === 'bad' ? 'up-bad' : k.tone === 'good' ? 'up-good' : ''}">${esc(k.sub || '')}</span></div>`}
-        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : ''}</div>`; }).join('');
+        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : '<div class="spark-wait" title="Lambda OS records this number once a day; the 30-day chart grows from today">30-day chart starts tomorrow</div>'}</div>`; }).join('');
     document.querySelectorAll('.kpi').forEach((el, i) => {
       const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
       if (!svg) return;

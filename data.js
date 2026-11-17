@@ -710,7 +710,7 @@
     if (s.mode === 'demo' || sessionStorage.getItem('lambdaos-demo')) return buildMock();
     const { snapshot } = await chrome.storage.local.get('snapshot');
     if (snapshot && (snapshot.nb || snapshot.jira)) {
-      if (Date.now() - snapshot.at > 2 * 60e3) {
+      if (Date.now() - snapshot.at > 2 * 60e3 || (snapshot.jira && !('closed30' in snapshot.jira))) { // old snapshot, or one from before the 30-day ticket history
         LambdaLive.refresh().then(snap => window.dispatchEvent(new CustomEvent('lambda:snapshot', { detail: snap })));
       }
       return buildLive(snapshot);

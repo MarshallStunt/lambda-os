@@ -743,3 +743,4 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .kpi .spark-span { position: absolute; right: 9px; top: 8px; font-size: 9px; color: var(--muted); opacity: .7; pointer-events: none; }
 .kpi-strip .kpi svg { height: 26px; }
 .kflow { font-size: 10.5px; } .kflow b { margin-right: 1px; }
+.spark-wait { margin-top: 6px; height: 22px; display: flex; align-items: flex-end; font-size: 9.5px; color: var(--muted); border-bottom: 1px dashed var(--line-hi); }
