@@ -689,3 +689,11 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 .hstats .stat b { font-size: 18px; }
 .alert-dot { font: 600 10px var(--font); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent); border-radius: 99px; padding: 0 5px; margin-left: 4px; }
 .alert-dot.crit { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 50%, transparent); }
+
+/* Bigger view (expand button on the middle panel) */
+.stage-head { position: relative; padding-right: 52px; }
+.stage-expand { position: absolute; right: 12px; top: 10px; width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--line); background: rgba(5,7,13,.5); color: var(--text-2); font-size: 15px; line-height: 1; cursor: pointer; }
+.stage-expand:hover { color: var(--text); border-color: var(--line-hi); }
+body.stage-max .layout { grid-template-columns: minmax(0, 1fr) !important; }
+body.stage-max .col-left, body.stage-max .col-right, body.stage-max .kpi-strip { display: none !important; }
+body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }

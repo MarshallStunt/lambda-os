@@ -95,7 +95,7 @@ instead and update with the one-line command in Settings → Updates.
 
 ## Using it
 - **⌘K** (Ctrl+K on Windows/Linux) or **/** opens search; **⌘J** / Ctrl+J opens the AI panel. Try `CMH01`, a hostname, `DC-33191`, `low stock at LAX01`, `203-000536`, `waiting parts on site`, `what breaches SLA today`, or start with `?` to force a question.
-- **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, and **Esc** closes things.
+- **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, **e** (or the ⤢ button) makes the middle panel fill the screen, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.
 

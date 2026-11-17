@@ -1448,6 +1448,16 @@ LambdaData.ready.then(D => {
       : activeView === 'graph' ? `${Brain.nodeCount()} neurons · hover to fire and trace links · ${Brain.is3d() ? 'drag to turn · Shift+drag to pan' : 'drag to pan'} · scroll to zoom · click to open`
       : `${(D.DEPLOYMENTS || []).length} deployments · ☆ to track · click a row for workstreams, meetings, Slack and shipments`;
   }
+  // Bigger view: the middle panel takes the whole screen (side columns and the number strip hide). Button, E key, Esc.
+  function setStageMax(on) {
+    document.body.classList.toggle('stage-max', on);
+    const b = $('#stageExpand'); b.textContent = on ? '⤡' : '⤢'; b.setAttribute('aria-pressed', on);
+    b.title = on ? 'Back to the normal layout (E or Esc)' : 'Bigger view: hide the side columns (E). Esc to go back.';
+    try { sessionStorage.setItem('lambdaos-stagemax', on ? '1' : '0'); } catch { /* ignore */ }
+    requestAnimationFrame(() => { if (activeView === 'globe') { Fleet.resize(); } else if (activeView === 'graph') { Brain.resize(); Brain.fit(); } else Deploys.render(); });
+  }
+  $('#stageExpand').addEventListener('click', () => setStageMax(!document.body.classList.contains('stage-max')));
+
   function setView(v) {
     activeView = v;
     try { sessionStorage.setItem('lambdaos-view', v); } catch { /* ignore */ }
@@ -1465,6 +1475,7 @@ LambdaData.ready.then(D => {
   let startView = 'globe';
   try { startView = sessionStorage.getItem('lambdaos-view') || 'globe'; } catch { /* ignore */ }
   setView(['globe', 'graph', 'deploys'].includes(startView) ? startView : 'globe');
+  try { if (sessionStorage.getItem('lambdaos-stagemax') === '1') setStageMax(true); } catch { /* ignore */ }
   (function frame(now) { if (activeView === 'globe') Fleet.draw(now); else if (activeView === 'graph') Brain.draw(now); requestAnimationFrame(frame); })(performance.now());
   window.__lambdaOS = { land: Land, data: D, map: FlatMap, tiles: Tiles, globeGL: GlobeGL, step: (n = 1) => { for (let i = 0; i < n; i++) { const t = performance.now() + i * 16; if (activeView === 'globe') Fleet.draw(t); else if (activeView === 'graph') Brain.draw(t); } } };
 
@@ -2215,10 +2226,11 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); closePalette(); AIPanel.toggle(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); pal.hidden ? openPalette() : closePalette(); return; }
-    if (e.key === 'Escape') { if (AIPanel.isOpen() && document.activeElement?.id !== 'aipText' && pal.hidden) AIPanel.close(); else if (!alertPop.hidden) alertPop.hidden = true; else if (!briefBox.hidden) closeBrief(); else if (!pal.hidden) closePalette(); else if (!$('#drawer').hidden) Drawer.close(); else if (!$('#siteCard').hidden) SiteCard.close(); return; }
+    if (e.key === 'Escape') { if (AIPanel.isOpen() && document.activeElement?.id !== 'aipText' && pal.hidden) AIPanel.close(); else if (!alertPop.hidden) alertPop.hidden = true; else if (!briefBox.hidden) closeBrief(); else if (!pal.hidden) closePalette(); else if (!$('#drawer').hidden) Drawer.close(); else if (!$('#siteCard').hidden) SiteCard.close(); else if (document.body.classList.contains('stage-max')) setStageMax(false); return; }
     if (e.key === '/' && pal.hidden && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openPalette(); }
     if (pal.hidden && !e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
       if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys');
+      if (e.key === 'e') setStageMax(!document.body.classList.contains('stage-max'));
     }
   });
 }).catch(err => {
