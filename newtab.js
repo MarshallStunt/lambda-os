@@ -429,8 +429,8 @@ LambdaData.ready.then(D => {
         labels: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`,
         attr: 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community' },
     }; // Satellite + "Dots" (offline, no imagery). A saved choice that's no longer offered falls back to Satellite.
-    let name = 'satellite';
-    try { const v = localStorage.getItem('lambdaos-basemap'); if (PROVIDERS[v] || v === 'off') name = v; } catch { /* per-viewer convenience */ }
+    // Every new tab starts on Dots (no imagery); Exact location switches to Satellite on its own.
+    let name = 'off';
     const cache = new Map(), listeners = new Set();
     let version = 0, failures = 0, loads = 0;
     const key = (kind, z, x, y) => `${name}|${kind}|${z}|${x}|${y}`;
@@ -461,7 +461,7 @@ LambdaData.ready.then(D => {
     return {
       PROVIDERS, get, on: () => name !== 'off', name: () => name, provider: () => PROVIDERS[name] || null,
       version: () => version, broken: () => failures > 8 && failures > loads, onLoad: f => listeners.add(f),
-      set: n => { name = n; version++; failures = 0; loads = 0; try { localStorage.setItem('lambdaos-basemap', n); } catch { /* ignore */ } listeners.forEach(f => f('reset')); },
+      set: n => { if (n === name) return; name = n; version++; failures = 0; loads = 0; listeners.forEach(f => f('reset')); },
     };
   })();
 
@@ -997,19 +997,20 @@ LambdaData.ready.then(D => {
     return api;
   })();
 
-  // Fleet view shows the globe by default; the flat map is one click away.
-  let fleetMode = 'globe';
-  try { fleetMode = localStorage.getItem('lambdaos-fleet') === 'map' ? 'map' : 'globe'; } catch { /* per-viewer convenience only */ }
+  // Every new tab starts on the globe, fitted to the live sites, with Dots; the flat map is one click away.
+  let fleetMode = 'globe', autoSat = false; // autoSat: Satellite was switched on by Exact location, so leaving goes back to Dots
+  const backToDots = () => { if (autoSat) { autoSat = false; Tiles.set('off'); } };
   const fleetImpl = () => fleetMode === 'globe' ? Globe : FlatMap;
   const Fleet = {
     get selected() { return fleetImpl().selected; }, get placedCount() { return fleetImpl().placedCount; },
     focus: s => { FlatMap.focus(s); Globe.focus(s); }, clear: () => { FlatMap.clear(); Globe.clear(); },
     home: () => fleetImpl().home(), world: () => fleetImpl().world(), toggle: k => { Globe.toggle(k); return FlatMap.toggle(k); },
     draw: t => fleetImpl().draw(t), resize: () => fleetImpl().resize(), canvasId: () => fleetMode === 'globe' ? 'globe' : 'flatmap',
-    setMode: (m, remember = true) => { fleetMode = m; if (m === 'globe') FlatMap.fromGlobe = false; if (remember) try { localStorage.setItem('lambdaos-fleet', m); } catch { /* ignore */ } },
+    setMode: m => { fleetMode = m; if (m === 'globe') { FlatMap.fromGlobe = false; backToDots(); } },
     mode: () => fleetMode,
     exact: s => { // fly to the site's exact coordinates on the street-level map
       if (s.lat == null) return toast('No coordinates for this site in NetBox.');
+      if (!Tiles.on()) { Tiles.set('satellite'); autoSat = true; }
       FlatMap.fromGlobe = fleetMode === 'globe'; fleetMode = 'map'; FlatMap.selected = s;
       setView('globe'); FlatMap.flyTo(s.lat, s.lon, 17);
     },
@@ -1022,7 +1023,7 @@ LambdaData.ready.then(D => {
   });
   window.addEventListener('fleet:shallower', () => { // zoomed back out of the map → return to the globe
     if (activeView !== 'globe' || fleetMode !== 'map' || !FlatMap.fromGlobe) return;
-    fleetMode = 'globe'; FlatMap.fromGlobe = false; setView('globe');
+    fleetMode = 'globe'; FlatMap.fromGlobe = false; backToDots(); setView('globe');
   });
 
   /* ---------------- Second brain (neurons) ---------------- */
@@ -1384,7 +1385,7 @@ LambdaData.ready.then(D => {
     if (b.dataset.globe === 'home') Fleet.home();
     if (b.dataset.globe === 'world') Fleet.world();
     if (b.dataset.fleet) { Fleet.setMode(b.dataset.fleet); setView('globe'); }
-    if (b.dataset.basemap) { Tiles.set(b.dataset.basemap); setView('globe'); }
+    if (b.dataset.basemap) { autoSat = false; Tiles.set(b.dataset.basemap); setView('globe'); }
     if (b.dataset.btype) { Brain.toggle(b.dataset.btype); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === 'fit') Brain.fit();
   });
