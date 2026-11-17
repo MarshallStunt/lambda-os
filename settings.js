@@ -282,6 +282,7 @@ async function showUpdate(force) {
   u ||= await LambdaUpdates.check(force);
   $('updStatus').innerHTML = !u.ok ? `You have ${esc(u.current)}. <span class="st-critical">Couldn't check: ${esc(u.error)}.</span>`
     : u.available ? `<b class="st-good">🆕 Version ${esc(u.latest)} is available</b> (you have ${esc(u.current)}).` : `✓ You have the latest version (${esc(u.current)}).`;
+  if (u.latest) $('updZipName').textContent = `lambda-os-${u.latest}.zip`;
   $('updHow').hidden = !u.available; $('updLater').hidden = !u.available; $('updLater').dataset.version = u.latest || '';
 }
 $('updCmdLabel').textContent = `Paste this in ${{ win: 'PowerShell', mac: 'Terminal', linux: 'a terminal', cros: 'the Linux terminal' }[window.LambdaPlatform?.os || 'linux']}. It finds your Lambda OS folder, then pulls if it's a git copy, or downloads the ZIP and opens the folder.`;

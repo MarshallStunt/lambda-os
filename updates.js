@@ -10,7 +10,7 @@ const LambdaUpdates = (() => {
     repo: `https://github.com/${REPO}`,
     changes: `https://github.com/${REPO}/commits/main`,
     zip: `https://github.com/${REPO}/archive/refs/heads/main.zip`,
-    // The simple download for non-technical users: the Lambda OS folder on Google Drive, holding the latest lambda-os.zip.
+    // The simple download for non-technical users: the Lambda OS folder on Google Drive, holding the latest zip, named with its version (lambda-os-0.8.9.zip); unzipping gives a lambda-os folder.
     download: 'https://drive.google.com/drive/folders/1RoYPMbG7DTKtXErXekowG0LrXoRWGj0s',
   };
   // Help, ideas and bug reports go to the maintainer on Slack.
