@@ -1348,8 +1348,8 @@ LambdaData.ready.then(D => {
   // Every site against the "Site Health" board checks in one table; worst sites first. Click a number for the exact
   // hosts, racks and U positions. Leaks and newly tripped breakers are the ones to act on now.
   const Health = (() => {
-    let scope = 'mine', onlyProblems = false;
-    try { scope = localStorage.getItem('lambdaos-health-scope') || 'mine'; onlyProblems = localStorage.getItem('lambdaos-health-problems') === '1'; } catch { /* ignore */ }
+    let scope = 'all', onlyProblems = false; // every site by default; "Your sites" is one click away
+    try { scope = localStorage.getItem('lambdaos-health-scope2') || 'all'; onlyProblems = localStorage.getItem('lambdaos-health-problems') === '1'; } catch { /* ignore */ }
     const COLS = [['leak', 'Leaks'], ['breaker', 'Breakers'], ['pdu', 'PDU alarms'], ['shelf', 'Shelf PSU 0 W'], ['hw', 'HW faults'], ['hot', 'Hottest inlet'], ['net', 'Net down'], ['blind', "Can't monitor"]];
     const TITLES = { leak: 'Leak detectors alarming', breaker: 'Breakers tripped', pdu: 'PDU alarms', shelf: 'Power-shelf PSUs drawing 0 W', hw: 'Hosts with hardware faults', hot: 'Hot inlets (over the amber line)', net: 'Network devices not answering ping', blind: "Devices we can't monitor" };
     const val = (s, k) => { const c = s.checks[k];
@@ -1363,7 +1363,7 @@ LambdaData.ready.then(D => {
       const H = D.HEALTH; if (!H) return [];
       const mine = LambdaAlerts.mySites(D);
       let list = scope === 'mine' && mine.size ? H.sites.filter(s => mine.has(s.code)) : H.sites;
-      return onlyProblems ? list.filter(s => s.level !== 'good') : list;
+      return onlyProblems ? list.filter(s => s.level === 'critical' || s.level === 'warning') : list;
     }
     function render() {
       const H = D.HEALTH, box = $('#health');
@@ -1376,11 +1376,11 @@ LambdaData.ready.then(D => {
       const errs = Object.keys(H.errors || {});
       box.innerHTML = `<div class="hhead">
           <div class="hsums">${chip(sum('leak'), 'leaks', sum('leak') ? 'crit' : 'ok')}${chip(fresh, 'breakers newly tripped', fresh ? 'crit' : 'ok')}${chip(sum('pdu'), 'PDU alarms', sum('pdu') ? 'warn' : 'ok')}${chip(sum('shelf'), 'shelf PSUs at 0 W', sum('shelf') ? 'warn' : 'ok')}${chip(sum('hw'), 'hosts with HW faults', sum('hw') ? 'warn' : 'ok')}${chip(sum('net'), 'network devices down', sum('net') ? 'warn' : 'ok')}</div>
-          <div class="hctl"><span class="seg">${mine.size ? [['mine', 'Your sites'], ['all', 'All sites']].map(([k, l]) => `<button class="chip ${scope === k ? 'on' : ''}" data-hscope="${k}">${l}</button>`).join('') : '<button class="chip on">All sites</button>'}</span>
+          <div class="hctl"><span class="seg">${mine.size ? [['all', 'All sites'], ['mine', 'Your sites']].map(([k, l]) => `<button class="chip ${scope === k ? 'on' : ''}" data-hscope="${k}">${l}</button>`).join('') : '<button class="chip on">All sites</button>'}</span>
             <button class="chip ${onlyProblems ? 'on' : ''}" data-hproblems aria-pressed="${onlyProblems}">Only problems</button>
             <span class="muted small">Grafana · ${rel(H.at)} ago${errs.length ? ` · <span class="st-warning" title="${esc(Object.entries(H.errors).map(([k, e]) => k + ': ' + e).join('; '))}">${errs.length} check${errs.length > 1 ? 's' : ''} failed</span>` : ''}</span></div></div>
         <div class="htable-wrap"><table class="htable"><thead><tr><th>Site</th>${COLS.map(([, l]) => `<th>${l}</th>`).join('')}<th>Power</th></tr></thead><tbody>
-        ${sites.map(s => `<tr class="lvl-${s.level}"><td class="hsite" ${s.site ? `data-site="${esc(s.code)}"` : ''}><span class="dot st-${s.level}">●</span><b>${esc(s.code)}</b> <span class="muted">${esc(s.name)}</span></td>
+        ${sites.map(s => s.level === 'nodata' ? `<tr class="lvl-nodata"><td class="hsite" ${s.site ? `data-site="${esc(s.code)}"` : ''}><span class="dot muted">○</span><b>${esc(s.code)}</b> <span class="muted">${esc(s.name)}</span></td><td colspan="${COLS.length + 1}" class="muted hnodata">No data in Grafana for this site yet (no metrics reported)</td></tr>` : `<tr class="lvl-${s.level}"><td class="hsite" ${s.site ? `data-site="${esc(s.code)}"` : ''}><span class="dot st-${s.level}">●</span><b>${esc(s.code)}</b> <span class="muted">${esc(s.name)}</span></td>
           ${COLS.map(([k]) => `<td class="hcell" ${s.checks[k].n || k === 'hot' && s.checks[k].top ? `data-hcell="${esc(s.code)}|${k}"` : ''}>${val(s, k)}</td>`).join('')}
           <td class="hpow">${s.kw != null ? Math.round(s.kw).toLocaleString() + ' kW' : '<span class="muted">—</span>'}</td></tr>`).join('') || `<tr><td colspan="${COLS.length + 2}" class="muted" style="padding:18px">${onlyProblems ? 'No problems at these sites right now.' : 'No sites.'}</td></tr>`}
         </tbody></table></div>
@@ -1400,7 +1400,7 @@ LambdaData.ready.then(D => {
     }
     $('#health').addEventListener('click', e => {
       const c = e.target.closest('[data-hcell]'); if (c) { const [code, k] = c.dataset.hcell.split('|'); return detail(code, k); }
-      const sc = e.target.closest('[data-hscope]'); if (sc) { scope = sc.dataset.hscope; try { localStorage.setItem('lambdaos-health-scope', scope); } catch { /* ignore */ } return render(); }
+      const sc = e.target.closest('[data-hscope]'); if (sc) { scope = sc.dataset.hscope; try { localStorage.setItem('lambdaos-health-scope2', scope); } catch { /* ignore */ } return render(); }
       if (e.target.closest('[data-hproblems]')) { onlyProblems = !onlyProblems; try { localStorage.setItem('lambdaos-health-problems', onlyProblems ? '1' : '0'); } catch { /* ignore */ } return render(); }
     });
     return { render, detail };

@@ -729,3 +729,5 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .htable .hsite .muted { font-size: 12px; }
 @media (max-width: 1500px) { .htable .hsite .muted { display: none; } }
 .urgent-row { background: color-mix(in srgb, var(--critical) 12%, transparent); }
+.htable td.hnodata { text-align: left; font-size: 12px; }
+.htable tr.lvl-nodata b { opacity: .6; }

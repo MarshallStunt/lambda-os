@@ -444,8 +444,14 @@
         return { code, site: s || null, name: s?.name || '', kw: F.power?.[code] ?? null, checks: c, level,
           board: GF.sites?.[code]?.board ? GF.base + GF.sites[code].board : null };
       });
-      const rank = { critical: 0, warning: 1, good: 2 };
-      sites.sort((a, b) => rank[a.level] - rank[b.level] || b.checks.leak.n - a.checks.leak.n || b.checks.hw.n - a.checks.hw.n);
+      // Every data center Lambda runs (NetBox active, staging or planned) is listed, even with no metrics in Grafana yet,
+      // so a missing site reads "no data" instead of silently not being there.
+      const none = () => ({ items: [], n: 0, fresh: 0 });
+      for (const s of D.SITES.filter(s => s.kind === 'dc' && ['active', 'staging', 'planned'].includes(s.status) && !codes.has(s.id)))
+        sites.push({ code: s.id, site: s, name: s.name, kw: null, level: 'nodata', board: null,
+          checks: { leak: none(), breaker: none(), pdu: none(), shelf: none(), hw: none(), hot: { ...none(), top: null, level: 'none' }, net: none(), blind: { ...none(), byJob: {} } } });
+      const rank = { critical: 0, warning: 1, good: 2, nodata: 3 };
+      sites.sort((a, b) => rank[a.level] - rank[b.level] || b.checks.leak.n - a.checks.leak.n || b.checks.hw.n - a.checks.hw.n || a.code.localeCompare(b.code));
       const total = k => sites.reduce((t, s) => t + (s.checks[k].n || 0), 0);
       return { at: F.at, sites, CHECKS, totals: Object.fromEntries(CHECKS.map(([k]) => [k, total(k)])), errors: F.errors || {},
         freshBreakers: sites.reduce((t, s) => t + s.checks.breaker.fresh, 0), freshLeaks: sites.reduce((t, s) => t + s.checks.leak.fresh, 0) };
