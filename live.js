@@ -320,8 +320,22 @@ const LambdaLive = (() => {
         channels = channels.concat(r.channels || []);
         cursor = r.response_metadata?.next_cursor || '';
       } while (cursor && channels.length < 5000);
+      // Volunteer requests: call-outs for people to travel to another site's deployment, plus links to a site's Atium
+      // onsite schedule (where volunteers sign up). Last 45 days; the dashboard decides which ones are real requests.
+      const after = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10), seen = new Set(), volunteer = [];
+      for (const q of ['volunteer', 'volunteers', 'onsite-schedule']) {
+        const r = await call('search.messages', { query: `${q} after:${after}`, count: 40, sort: 'timestamp' }).catch(() => null);
+        for (const m of r?.messages?.matches || []) {
+          const id = (m.channel?.id || '') + m.ts;
+          if (seen.has(id) || m.channel?.is_im || m.channel?.is_mpim) continue;
+          seen.add(id);
+          volunteer.push({ at: Math.round(parseFloat(m.ts) * 1000), channel: m.channel?.name || '', channelId: m.channel?.id || '',
+            user: m.username || m.user_name || '', text: clean(m.text).slice(0, 600), link: m.permalink || '',
+            atiumSites: [...new Set([...String(m.text || '').matchAll(/\/sites\/(\d+)\/deployment\/onsite-schedule/g)].map(x => Number(x[1])))] });
+        }
+      }
       return {
-        ok: true, me: { id: me.user_id, name: me.user }, url: String(me.url || '').replace(/\/$/, ''), team: team.name, mentions,
+        ok: true, me: { id: me.user_id, name: me.user }, url: String(me.url || '').replace(/\/$/, ''), team: team.name, mentions, volunteer,
         channels: channels.map(c => ({ id: c.id, name: c.name, members: c.num_members || 0, topic: String(c.topic?.value || '').slice(0, 140), purpose: String(c.purpose?.value || '').slice(0, 200) })),
       };
     } catch (e) {
@@ -493,6 +507,17 @@ const LambdaLive = (() => {
           return r.json();
         }
       };
+      if (what === 'onsite') {
+        // Who is signed up to be on site (Atium Onsite Schedule) from a week ago to 4 weeks ahead, for each site asked.
+        const day = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10), bySite = {};
+        for (const id of [].concat(siteId).slice(0, 8)) {
+          try {
+            const j = await get(`/api/ui/sites/${id}/deployment/onsite-schedule?start_date=${day(-7)}&end_date=${day(28)}`);
+            bySite[id] = (j.entries || []).map(e => ({ name: e.user_name, date: e.schedule_date, hours: e.hours || 0 }));
+          } catch (e) { if (e.auth) throw e; bySite[id] = null; }
+        }
+        return { ok: true, base: location.origin, me: auth.user?.name || '', bySite };
+      }
       if (what === 'pos') {
         // Atium pages at 100 orders / 200 lines; read at most 5 pages of each. No prices: receiving progress and dates.
         const all = async (path, key, size) => {
@@ -567,6 +592,11 @@ const LambdaLive = (() => {
       catch { if (had) posBySite[id] = had; } // keep the last good read; a PO read never fails the whole refresh
     }
     return { ...result, posBySite };
+  }
+  async function atiumOnsite(siteIds) {
+    const s = await settings();
+    if (s.sources?.atium === false) throw new Error('Atium is turned off in Settings.');
+    return atiumRun(s, atiumInPage, ['onsite', siteIds.map(Number)]);
   }
   async function atiumPOs(siteId) {
     const s = await settings();
@@ -653,7 +683,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs };
+  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;

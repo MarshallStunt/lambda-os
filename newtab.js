@@ -229,6 +229,40 @@ LambdaData.ready.then(D => {
     ...(D.MENTIONS || []).map(m => ({ src: 'slack', at: m.at, url: m.link, who: m.user, where: m.isDm ? 'DM' : '#' + m.channel, text: m.text })),
     ...(D.MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, who: e.from, where: 'Gmail', text: e.title })),
   ].sort((a, b) => b.at - a.at);
+  // Volunteer requests (Slack call-outs) with who has signed up in the site's Atium onsite schedule.
+  let ONSITE = null, onsiteAt = 0, onsiteBusy = false;
+  const fmtDay = d => new Date(d + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const span = ds => { const s = [...new Set(ds)].sort(); return s.length ? (s.length === 1 ? fmtDay(s[0]) : `${fmtDay(s[0])}–${fmtDay(s[s.length - 1])}`) : ''; };
+  function signups(v) {
+    if (v.demoSignups) return { me: v.demoMe || '', list: v.demoSignups };
+    const list = ONSITE?.bySite?.[v.atiumId];
+    return list === undefined || list === null ? null : { me: ONSITE.me, list };
+  }
+  function signupLine(v) {
+    if (!v.atiumId) return '<span class="muted">No Atium onsite schedule found for this site</span>';
+    const s = signups(v);
+    if (!s) return `<span class="muted">${onsiteBusy ? 'Checking the Atium schedule…' : 'Atium schedule not loaded'}</span>`;
+    const today = new Date().toISOString().slice(0, 10), ahead = s.list.filter(e => e.date >= today && e.hours > 0);
+    const people = [...new Set(ahead.map(e => e.name))], mine = ahead.filter(e => s.me && e.name === s.me).map(e => e.date);
+    const you = mine.length ? `<b class="st-good">You're on it: ${span(mine)}</b> · ` : '';
+    return people.length ? `${you}${people.length} signed up for the next 4 weeks: ${esc(people.slice(0, 4).join(', '))}${people.length > 4 ? ` +${people.length - 4}` : ''}`
+      : `${you}<span class="st-warning">No one signed up yet</span>`;
+  }
+  async function loadOnsite() {
+    if (D.MODE !== 'live' || !isExt || onsiteBusy || Date.now() - onsiteAt < 10 * 60e3) return;
+    const ids = [...new Set((D.VOLUNTEER || []).map(v => v.atiumId).filter(Boolean))];
+    if (!ids.length) return;
+    onsiteBusy = true;
+    try { ONSITE = await LambdaLive.atiumOnsite(ids); onsiteAt = Date.now(); } catch { /* the rows say "not loaded" */ }
+    onsiteBusy = false; if (qMode === 'volunteer') renderQueue();
+  }
+  const volRow = v => `<li class="qitem vol">
+      <div style="min-width:0"><div class="qkey"><button class="tagchip" ${v.known ? `data-site="${esc(v.site)}"` : ''}>${esc(v.site)}</button> ${esc(v.known ? D.siteById(v.site)?.name || '' : '')} · ${esc(v.user)} in #${esc(v.channel)}</div>
+        <div class="qsum vol-text">${esc(v.text)}</div>
+        <div class="qmeta">${signupLine(v)}</div>
+        <div class="links">${v.scheduleUrl ? btn('Sign up in Atium', v.scheduleUrl, true) : ''}${btn('Open in Slack', v.link)}</div></div>
+      <span class="ftime">${rel(v.askedAt)}</span></li>`;
+
   function renderQueue() {
     const tracked = D.tracked(), inbox = inboxItems();
     const fresh = (D.MAIL?.unread || 0) + (D.MENTIONS || []).filter(m => m.at > Date.now() - 864e5).length;
@@ -238,6 +272,15 @@ LambdaData.ready.then(D => {
     if (qMode === 'tracking') {
       $('#queueCount').textContent = tracked.length ? `${tracked.length} deployments` : '';
       $('#queue').innerHTML = tracked.map(depRow).join('') || '<li class="muted small" style="padding:10px 14px">Star ☆ a deployment (in the Deployments view, a drawer or search) to track it here. Deployments assigned to you or that you watch in Jira appear automatically.</li>';
+      return;
+    }
+    const vols = D.VOLUNTEER || [];
+    $('#volCount').textContent = vols.filter(v => v.at > Date.now() - 14 * 864e5).length || '';
+    if (qMode === 'volunteer') {
+      $('#queueCount').textContent = vols.length ? `${vols.length} site${vols.length > 1 ? 's' : ''} · 45 days` : '';
+      $('#queue').innerHTML = vols.map(volRow).join('') || (sourceNote('slack', 'volunteer requests') ? '' : '<li class="muted small" style="padding:10px 14px">No requests for volunteers in Slack in the last 45 days.</li>');
+      $('#queue').insertAdjacentHTML('afterbegin', sourceNote('slack', 'volunteer requests'));
+      loadOnsite();
       return;
     }
     if (qMode === 'inbox') {
@@ -1410,6 +1453,7 @@ LambdaData.ready.then(D => {
           <div class="stat"><b>${kfmt(s.racks)}</b><span>Racks</span></div><div class="stat"><b>${kfmt(s.devices)}</b><span>Devices</span></div>
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
+        ${(D.VOLUNTEER || []).filter(v => v.site === s.id).map(v => `<div class="section-title"><span>Volunteers wanted · Slack</span><span>${rel(v.askedAt)}</span></div><ul class="vol-in-card">${volRow(v)}</ul>`).join('')}
         ${s.builds?.length ? `<div class="section-title"><span>Builds · Atium</span><span>${s.builds.length}</span></div>${s.builds.map(buildRow).join('')}` : ''}
         ${s.atium && (s.atium.pos || isExt && D.MODE === 'live') ? `<div id="sitePOs" data-site="${esc(s.id)}"><div class="section-title"><span>Purchase orders · Atium</span><span>loading…</span></div></div>` : ''}
         ${s.atium ? `<p class="muted small">Atium: ${s.atium.assets.toLocaleString()} assets tracked${s.atium.consumables ? ` · ${s.atium.consumables.toLocaleString()} consumables` : ''} · <a class="linkish" data-url="${esc(s.atium.url)}" data-what="Atium">open inventory</a></p>` : ''}
@@ -1966,6 +2010,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         ${sec('Parts arrived for your tickets', b.partsArrived.length, b.partsArrived.map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(D.partById(t.part)?.name || t.part)} on hand at ${esc(t.site)}</span></div>`).join(''), 'Nothing new on hand.')}
         ${sec(`New tickets${b.mySites.length ? ' at your sites' : ''}`, b.newTickets.length, b.newTickets.slice(0, 8).map(ticketRow).join('') + (b.newTickets.length > 8 ? `<p class="muted small">+${b.newTickets.length - 8} more</p>` : ''), 'No new tickets.')}
         ${sec('Low spares at your sites', b.lowSpares.length, b.lowSpares.slice(0, 8).map(x => `<div class="mini-ticket" data-site="${esc(x.site)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.part)}</span><span class="small st-${x.stock === 0 ? 'critical' : 'warning'}">${x.stock} / alert ${x.alert}</span></div>`).join(''), 'Spares look fine.')}
+        ${(D.VOLUNTEER || []).some(v => v.at > Date.now() - 7 * 864e5) ? sec('Volunteer requests (7 days)', D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).length, D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).map(v => `<div class="mini-ticket" data-href="${esc(v.scheduleUrl || v.link)}"><span class="qkey">${esc(v.site)}</span><span class="qsum">${esc(v.text.slice(0, 120))}${v.text.length > 120 ? '…' : ''}</span><span class="small muted">${esc(v.user)}</span></div>`).join('')) : ''}
         ${b.atium.on ? sec('Builds & purchase orders · Atium', b.atium.builds.length + b.atium.late.length + b.atium.dueSoon.length,
           b.atium.builds.map(buildRow).join('')
           + [...b.atium.late, ...b.atium.dueSoon].slice(0, 8).map(x => `<div class="mini-ticket" data-href="${esc(x.url)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.p.name)} · ${esc(x.p.supplier || '')}</span>${statusChip(x.st.state === 'late' ? 'warning' : 'idle', `${x.st.state === 'late' ? 'was due' : 'due'} ${fmtDate(x.st.dueAt)}`)}</div>`).join('')

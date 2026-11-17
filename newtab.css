@@ -618,3 +618,11 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.btn.primary, a.btn.primary:visited { color: #04060c; }
 
 .mini-ticket.po-stale { opacity: .6; }
+
+.qitem.vol { cursor: default; align-items: start; grid-template-columns: 1fr auto; }
+.qitem.vol .vol-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 3px 0; }
+.qitem.vol .links { margin-top: 6px; gap: 6px; }
+.qitem.vol .links .btn { padding: 3px 9px; font-size: 11px; }
+.vol-in-card { list-style: none; margin: 0; padding: 0; }
+.queue-panel .panel-head { flex-wrap: wrap; row-gap: 4px; }
+.queue-panel #queueCount { margin-left: auto; white-space: nowrap; }

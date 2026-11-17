@@ -352,6 +352,39 @@
       for (const s of D.SITES) s.builds.sort((a, c) => (a.handoff?.done - c.handoff?.done) || ((a.handoff?.at || Infinity) - (c.handoff?.at || Infinity)));
     }
 
+    // Volunteer requests: Slack call-outs for people to go and help at another site's deployment. One per site (the
+    // strongest message in the last 45 days), with the site's Atium onsite schedule where volunteers sign up.
+    const VOLUNTEER = (() => {
+      const atName = new Map((x.atium?.sites || []).map(a => [a.id, a.name]));
+      const code5 = t => (String(t).toUpperCase().match(/\b[A-Z]{3}\d{2}\b/) || [])[0] || null;
+      const JOKE = /as tribute|volun-?told|volunteered (you|him|her|them|@)|thanks for volunteering|you volunteer\?/i;
+      const ASK = /volunteer|need (some |more )?(help|hands|people|folks)|asking for (your )?help|come (out|help)|head (over|out)|add yourself|ready and willing|sign ?up/i;
+      const TRIP = /on-?site|deployment|schedule|access ticket|travel|trip|weeks?\b|\b\d{1,2}\/\d{1,2}\b|convers|troubleshoot|cabl|rack|repair/i;
+      const bySite = new Map();
+      for (const m of x.slack?.volunteer || []) {
+        if (/^(inc-|support|eng|security|general|announce|leandata|ll_|zanker)/i.test(m.channel) || JOKE.test(m.text)) continue;
+        const atId = m.atiumSites?.[0] || null, link = !!atId;
+        const ask = ASK.test(m.text), trip = TRIP.test(m.text);
+        if (!(link || (ask && trip))) continue;
+        const site = (atId && code5(atName.get(atId) || '')) || codesIn(m.text)[0] || code5(m.text) || codesIn(m.channel)[0] || code5(m.channel.replace(/[-_]/g, ' '));
+        if (!site) continue;
+        const score = (/volunteer/i.test(m.text) ? 3 : 0) + (ask ? 2 : 0) + (link ? 2 : 0) + (trip ? 1 : 0) + (m.text.length > 120 ? 1 : 0);
+        const cur = bySite.get(site) || { site, atiumId: null, at: 0, best: null, count: 0 };
+        cur.count++; cur.at = Math.max(cur.at, m.at); if (atId) cur.atiumId = atId;
+        if (!cur.best || score > cur.best.score || (score === cur.best.score && m.at > cur.best.at)) cur.best = { ...m, score };
+        bySite.set(site, cur);
+      }
+      const atByCode = new Map((x.atium?.sites || []).map(a => [code5(a.name), a.id]));
+      return [...bySite.values()].filter(v => v.best.score >= 3).map(v => {
+        const atiumId = v.atiumId || atByCode.get(v.site) || null;
+        return { site: v.site, known: !!D.siteById(v.site), at: v.at, askedAt: v.best.at, user: v.best.user, channel: v.best.channel, link: v.best.link, messages: v.count,
+          // A message that is only the schedule link reads better as a sentence.
+          text: v.best.text.replace(/\S*(kelsier|onsite-schedule)\S*/gi, '').replace(/\s+/g, ' ').trim().length < 25 ? `Shared the ${v.site} onsite schedule: sign up there if you can help with the deployment.` : v.best.text,
+          atiumId, scheduleUrl: atiumId && x.atium?.base ? `${x.atium.base}/sites/${atiumId}/deployment/onsite-schedule` : null,
+          demoSignups: v.best.demoSignups, demoMe: v.best.demoMe };
+      }).sort((a, b) => b.at - a.at).slice(0, 8);
+    })();
+
     // Feed and KPIs
     D.FEED.push(
       ...BUILDS.flatMap(b => (b.milestones || []).filter(m => m.status === 'completed' && m.done).map(m => ({ b, m, at: Date.parse(m.done + (m.done.length === 10 ? 'T12:00:00' : '')) })))
@@ -372,7 +405,7 @@
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
-      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS,
+      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
       isTracked: k => TRACKED.has(k), toggleTrack: k => { TRACKED.has(k) ? TRACKED.delete(k) : TRACKED.add(k); saveTracked(); return TRACKED.has(k); },
       tracked: () => DEPLOYMENTS.filter(d => TRACKED.has(d.key) || d.mine).sort((a, b) => (a.end || Infinity) - (b.end || Infinity)),
@@ -475,6 +508,20 @@
     const channels = [...SITES.filter(s => s.kind === 'dc').map((s, i) => ({ id: 'C0' + i, name: `dc_ops-${s.id.toLowerCase()}`, members: int(8, 60), topic: '', purpose: '' })),
       { id: 'C90', name: 'prj-2026-09_qro01_new_15624xvr200', members: 48, topic: '', purpose: '' }, { id: 'C91', name: 'prj-2026-06_ord01_new_5184xvr200', members: 33, topic: '', purpose: '' }];
     const slackMock = { url: '', channels, mentions: Array.from({ length: 6 }, (_, i) => { const c = pick(channels); return { at: now - (i + 1) * int(20, 120) * 60000, channel: c.name, channelId: c.id, isDm: i === 2, user: pick(PEOPLE.slice(1)).name, text: pick(['can you check the cabling plan for row 4?', 'parts landed at the dock', 'standup moved to 10:30', 'need sign-off on the RMA batch']), link: '' }; }) };
+    // Demo volunteer requests (shape of live.js's Slack search), with demo Atium onsite sign-ups.
+    const dday = n => new Date(now + n * 864e5).toISOString().slice(0, 10);
+    const who = (names, from, to) => names.flatMap(nm => Array.from({ length: to - from + 1 }, (_, k) => ({ name: nm, date: dday(from + k), hours: 8 })));
+    slackMock.volunteer = [
+      { at: now - 2 * 864e5, channel: 'onsite-dc-ops', user: 'K. Jasso', link: '', atiumSites: [],
+        text: 'Hey all, going to put a call out to all my DC Ops people: can we have some volunteers head over to QRO01 for the next 2 weeks as racking begins? We need 3-4 volunteers. Check with your managers, add yourself to the onsite schedule and let me know so I can make your access tickets.',
+        demoSignups: who(['K. Jasso', 'B. Bui'], 0, 9), demoMe: 'You' },
+      { at: now - 6 * 864e5, channel: 'dc_ops-ord01', user: 'T. Bond', link: '', atiumSites: [],
+        text: 'ORD01 deployment could use extra hands for cabling next week. If you can help, add yourself to the onsite schedule: kelsier onsite-schedule link',
+        demoSignups: [...who(['T. Bond', 'K. Doan'], 0, 4), ...who(['You'], 2, 4)], demoMe: 'You' },
+      { at: now - 20 * 864e5, channel: 'onsite-dc-ops', user: 'B. Peters', link: '', atiumSites: [],
+        text: 'DAL02 conversion: we are asking for your help from next week through the end of the month, mostly hardware repair. Speak with your manager if you are ready and willing to volunteer.',
+        demoSignups: [], demoMe: 'You' },
+    ];
     const gmailMock = { email: 'you@lambdal.com', unread: 4, entries: ['Weekly Ops Review agenda', 'PO approved: OSFP optics', 'QRO01 site visit logistics', 'Re: DAL02 power audit'].map((t, i) => ({ title: t, summary: '', from: pick(PEOPLE.slice(1)).name, fromEmail: '', at: now - (i + 1) * 3600e3 * 2, link: '' })) };
     const calMock = { events: [['9:00am', 'Standup_ORD01-5184xVR200'], ['10:00am', 'Superintelligence: Deployments Standup'], ['1:30pm', 'QRO01 15624xVR200 tranche review'], ['4:00pm', 'Weekly Ops Review']].map(([t, title], i) => {
       const d = new Date(); const [, h, m, ap] = t.match(/(\d+):(\d+)(am|pm)/); d.setHours((+h % 12) + (ap === 'pm' ? 12 : 0), +m, 0, 0); return { date: '', time: t, title, link: '', at: d.getTime() + (i > 2 ? 864e5 : 0), allDay: false }; }) };
