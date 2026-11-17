@@ -78,6 +78,21 @@
   const statusRank = st => ['active', 'staging', 'planned', 'decommissioning', 'retired'].indexOf(st) + 1 || 9;
 
   /* ---------------- Live build ---------------- */
+  // Open DC tickets for each of the last 30 days, rebuilt from Jira: tickets open now (by created date) plus tickets
+  // closed in the last 31 days (created → resolved). Each day: open at its end, new that day, closed that day.
+  function ticketTrend(openCreated, closed, now = Date.now()) {
+    if (!closed) return null;
+    const DAYMS = 864e5, out = [];
+    for (let i = 29; i >= 0; i--) {
+      const end = new Date(now - i * DAYMS); end.setHours(23, 59, 59, 999); const e = Math.min(end.getTime(), now), s0 = end.getTime() - DAYMS + 1;
+      const open = openCreated.filter(c => c && c <= e).length + closed.filter(([c, r]) => c <= e && r > e).length;
+      const opened = openCreated.filter(c => c >= s0 && c <= e).length + closed.filter(([c]) => c >= s0 && c <= e).length;
+      const shut = closed.filter(([, r]) => r >= s0 && r <= e).length;
+      const k = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+      out.push({ day: k, v: open, opened, closed: shut });
+    }
+    return out;
+  }
   function buildLive(snap) {
     const nb = snap.nb, jr = snap.jira, now = Date.now();
     const sitesByCode = new Map();
@@ -174,7 +189,7 @@
     const waitingStocked = waiting.filter(t => t.part && t.site && (sitesByCode.get(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
     const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
     const KPIS = [
-      jr && { key: 'open', num: TICKETS.length, upBad: true, label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
+      jr && { key: 'open', num: TICKETS.length, upBad: true, trend: ticketTrend(TICKETS.map(t => t.created), jr.closed30, now), label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
       jr && { key: 'breached', num: breached, upBad: true, label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
       nb && { key: 'devices', num: devs, label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
       jr && { key: 'waiting', num: waiting.length, upBad: true, label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },

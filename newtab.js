@@ -187,11 +187,11 @@ LambdaData.ready.then(D => {
     if (D.MODE === 'demo') { // demo: a steady made-up fortnight ending at today's number
       let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
       return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => { let v = k.num; const pts = [k.num];
-        for (let i = 0; i < 13; i++) { v = Math.max(0, Math.round(v - (rnd() - 0.45) * Math.max(2, k.num * 0.06))); pts.unshift(v); }
-        return [k.key, pts.map((v, i) => ({ day: dayKeyOf(Date.now() - (13 - i) * DAYMS), v }))]; }));
+        for (let i = 0; i < 29; i++) { v = Math.max(0, Math.round(v - (rnd() - 0.45) * Math.max(2, k.num * 0.05))); pts.unshift(v); }
+        return [k.key, pts.map((v, i) => ({ day: dayKeyOf(Date.now() - (29 - i) * DAYMS), v, ...(k.key === 'open' ? { opened: Math.round(3 + rnd() * 8), closed: Math.round(2 + rnd() * 8) } : {}) }))]; }));
     }
-    const today = dayKeyOf(Date.now()), days = Object.keys(hist || {}).filter(x => x < today).sort().slice(-13);
-    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
+    const today = dayKeyOf(Date.now()), days = Object.keys(hist || {}).filter(x => x < today).sort().slice(-29);
+    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, k.trend?.length ? k.trend : [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
       .filter(p => Number.isFinite(p.v)), { day: today, v: k.num }]]));
   }
   const kDay = dd => new Date(dd + 'T12:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
@@ -205,11 +205,13 @@ LambdaData.ready.then(D => {
         : `<span class="kd ${cls}" title="Change since ${esc(kDay(prev.day))} (${prev.v.toLocaleString()})">${dlt > 0 ? '▲' : dlt < 0 ? '▼' : '='} ${dlt ? amount(dlt) : 'same'} <small>vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : esc(kDay(prev.day))}</small></span>`;
       // Open tickets: what came in and what was closed since the last day on record.
       let flow = '';
-      if (k.key === 'open' && hist && prevRec && hist[prevRec]?.keys) {
+      const tday = pts.length && pts[pts.length - 1].opened != null ? pts[pts.length - 1] : null;
+      if (k.key === 'open' && tday) flow = `<span class="kflow" title="Today, from Jira: ${tday.opened} new, ${tday.closed} closed"><b class="up-bad">+${tday.opened}</b> new <b class="up-good">−${tday.closed}</b> closed</span>`;
+      else if (k.key === 'open' && hist && prevRec && hist[prevRec]?.keys) {
         const was = new Set(hist[prevRec].keys), now = new Set(D.TICKETS.map(t => t.key));
         const added = [...now].filter(x => !was.has(x)).length, closed = [...was].filter(x => !now.has(x)).length;
         flow = `<span class="kflow"><b class="up-bad">+${added}</b> new · <b class="up-good">−${closed}</b> closed</span>`;
-      } else if (k.key === 'open' && D.MODE === 'demo') flow = '<span class="kflow"><b class="up-bad">+6</b> new · <b class="up-good">−4</b> closed</span>';
+      }
       return `<div class="kpi" data-k="${esc(k.key || '')}">
         <div class="kpi-label">${esc(k.label)}</div><div class="kpi-value">${esc(k.value)}</div>
         <div class="kpi-delta">${delta}${flow}</div>
@@ -219,11 +221,12 @@ LambdaData.ready.then(D => {
       const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
       if (!svg) return;
       const dot = svg.querySelector('circle'), tip = el.querySelector('.spark-tip'), xy = sparkPts(pts.map(p => p.v)), m = pts.length;
+      svg.setAttribute('aria-label', `Last ${m} days`); el.title = `${k.label}: last ${m} days (hover the chart for any day)`;
       svg.addEventListener('pointermove', ev => {
         const r = svg.getBoundingClientRect(), idx = Math.max(0, Math.min(m - 1, Math.round(((ev.clientX - r.left) / r.width) * (m - 1))));
         dot.setAttribute('cx', xy[idx][0]); dot.setAttribute('cy', xy[idx][1]); dot.style.display = '';
         const ch = idx ? pts[idx].v - pts[idx - 1].v : null;
-        tip.textContent = `${kDay(pts[idx].day)} · ${pts[idx].v.toLocaleString()}${ch ? ` (${ch > 0 ? '+' : ''}${ch.toLocaleString()})` : ''}`; tip.hidden = false;
+        tip.textContent = `${kDay(pts[idx].day)} · ${pts[idx].v.toLocaleString()}${pts[idx].opened != null ? ` · +${pts[idx].opened} new · −${pts[idx].closed} closed` : ch ? ` (${ch > 0 ? '+' : ''}${ch.toLocaleString()})` : ''}`; tip.hidden = false;
       });
       svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; });
     });

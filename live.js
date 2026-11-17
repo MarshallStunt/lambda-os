@@ -220,22 +220,43 @@ const LambdaLive = (() => {
     return [...items.map(i => map(i, 'PMO')), ...intake.map(i => map(i, 'CI'))];
   }
 
+  // Tickets closed in the last 31 days as [created, resolved, key]. Jira closes ~2,000 a month at 100 per page, so the
+  // full read happens once a day; every other refresh only asks for what closed since the last one and merges it in.
+  async function closedTickets(get, jql) {
+    let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none yet */ }
+    const now = Date.now(), cut = now - 31 * 864e5, old = prev?.closed30, at = prev?.closed30At || 0, fullAt = prev?.closed30Full || 0;
+    const row = i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.key];
+    let rows, full = fullAt;
+    if (old && now - fullAt < 864e5 && old.every(x => x.length === 3)) {
+      const mins = Math.ceil((now - at) / 60e3) + 10;
+      const fresh = (await search(get, `${jql.replace(/resolved >= -31d$/, '')}resolved >= "-${mins}m"`, 2000, 'created,resolutiondate', null, 'closed tickets')).map(row);
+      const byKey = new Map(old.map(x => [x[2], x])); fresh.forEach(x => byKey.set(x[2], x));
+      rows = [...byKey.values()];
+    } else { rows = (await search(get, jql, 6000, 'created,resolutiondate', null, 'closed tickets')).map(row); full = now; }
+    const out = rows.filter(([c, r]) => c && r && r >= cut); out.fullAt = full;
+    return out;
+  }
   async function jira(s, progress) {
     const base = trim(s.jiraUrl);
     const get = p => getJson(base + p, { login: base, name: 'Jira' });
     const me = await get('/rest/api/3/myself');
     const F = await jiraFields(get);
     const want = ['summary', 'status', 'priority', 'assignee', 'created', 'updated', ...fieldList(F, TICKET_FIELDS)].join(',');
-    const [issues, mineIssues, port] = await Promise.all([
+    // Tickets closed in the last 31 days (only their open/close dates), so the Open DC tickets card can draw a real
+    // 30-day history: open count, new and closed for every day.
+    const closedJql = `(${stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '')}) AND resolved >= -31d`;
+    const [issues, mineIssues, port, closed] = await Promise.all([
       search(get, s.fleetJql, s.maxTickets, want, progress),
       search(get, s.mineJql, 500, 'summary').catch(() => []),
       portfolio(get, F, s, base, progress).then(v => ({ v }), e => ({ e })),
+      closedTickets(get, closedJql).catch(() => null),
     ]);
     const mine = new Set(mineIssues.map(i => i.key));
     return {
       base, me: { id: me.accountId, name: me.displayName, email: me.emailAddress || '', tz: me.timeZone },
       tickets: issues.map(i => mapIssue(i, F, base, mine)),
       portfolio: port.v || [], portfolioError: port.e ? String(port.e.message || port.e) : '',
+      closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null,
     };
   }
 

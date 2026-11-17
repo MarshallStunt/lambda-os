@@ -171,7 +171,7 @@ const LambdaAlerts = (() => {
     const h = { ...(history || {}) };
     const today = dayKey(now);
     h[today] = { ...record(D, now), first: h[today]?.first || now }; // keep the day's first sighting too
-    const keep = Object.keys(h).sort().slice(-21);
+    const keep = Object.keys(h).sort().slice(-35);
     return Object.fromEntries(keep.map(k => [k, h[k]]));
   }
 
