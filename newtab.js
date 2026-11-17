@@ -75,7 +75,7 @@ LambdaData.ready.then(D => {
   badge.title = D.MODE === 'live' ? 'Live NetBox and Jira data, using your own sign-ins' : (D.NOTE || 'Demo data. Switch to live in Settings.');
   // Healthy sources are just dots (name on hover); only sources that need you get a labeled, clickable pill.
   const needsYou = s => s.access || s.state === 'error' || s.state === 'stale';
-  const pillLabel = s => s.access ? `${s.name} · allow` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`;
+  const pillLabel = s => s.access ? `${s.name} · allow` : s.auth ? `${s.name} · sign in` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`; // a sign-in problem says so, even with older data on screen
   // Every data source by name in the status strip; the ones that need you say why and are clickable.
   // (AI isn't listed here: its status lives in the ✨ Ask AI panel.)
   $('#sources').innerHTML = D.SOURCES.filter(s => s.key !== 'claude').map(s => needsYou(s)

@@ -486,12 +486,15 @@ const LambdaLive = (() => {
       if (!auth?.access_token) return { ok: false, error: /okta|login|signin/i.test(location.href) ? 'Not signed in to Atium in that tab.' : 'LOADING' };
       let renewing = null;
       const renew = () => renewing ||= (async () => {
+        // A page that just loaded with an expired token renews it itself. Okta accepts each renewal only once, so give
+        // the page a moment first and use its new token; only renew ourselves if nothing changes.
+        const changed = () => { const c = stored(); return c?.access_token && c.access_token !== auth.access_token ? c : null; };
+        for (let i = 0; i < 8 && !changed(); i++) await wait(400);
+        if (changed()) { auth = changed(); return true; }
         const cur = stored() || auth;
-        // The page may have renewed it already (another request of its own): use that.
-        if (cur.access_token !== auth.access_token) { auth = cur; return true; }
         if (!cur.refresh_token) return false;
         const r = await fetch('/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: cur.refresh_token }) });
-        if (!r.ok) return false;
+        if (!r.ok) { await wait(800); if (changed()) { auth = changed(); return true; } return false; } // lost the race: the page's renewal won
         const nu = await r.json();
         if (!nu?.access_token) return false;
         auth = { ...cur, ...nu, refresh_token: nu.refresh_token ?? cur.refresh_token };
@@ -546,7 +549,7 @@ const LambdaLive = (() => {
           }),
         };
       }
-      const sites = await get('/api/ui/sites'), port = await get('/api/ui/builds/portfolio'); // one after the other, so a renewal happens once
+      const [sites, port] = await Promise.all([get('/api/ui/sites'), get('/api/ui/builds/portfolio')]); // a renewal is shared; Atium's site list can take ~20 s
       return {
         ok: true, base: location.origin,
         sites: (sites.sites || []).map(x => ({ id: x.id, name: x.name, slug: x.slug, assets: x.asset_count || 0, consumables: x.consumable_count || 0 })),
