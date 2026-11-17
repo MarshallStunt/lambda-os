@@ -126,6 +126,25 @@ const LambdaAlerts = (() => {
       id: `gf:${code}:${list.map(a => a.name + a.host).join(',').length}:${now}`, urgent: true, url: D.siteById(code)?.gf?.url || '',
       title: `${code}: ${list.length} new critical hardware alert${list.length > 1 ? 's' : ''}`,
       message: `${[...new Set(list.map(a => a.name))].join(', ')} · ${list.slice(0, 3).map(a => [a.host, a.rack].filter(Boolean).join(' ')).join('; ')}${list.length > 3 ? '…' : ''}` });
+    // Site health (Grafana): a leak detector alarming, or a breaker / power-shelf PSU that newly went down, at your sites
+    // (every site if you have none). Urgent, one notification per site; the first look at a site is only a baseline.
+    next.sh = {}; next.shSites = [];
+    const shFresh = {}, shSites = sites.size ? sites : new Set((D.HEALTH?.sites || []).map(s => s.code));
+    for (const s of (D.HEALTH?.sites || []).filter(s => shSites.has(s.code))) {
+      next.shSites.push(s.code);
+      const seenSite = (prev?.shSites || []).includes(s.code);
+      for (const [k, label] of [['leak', 'Leak'], ['breaker', 'Breaker tripped'], ['shelf', 'Shelf PSU at 0 W']]) for (const it of s.checks[k].items) {
+        if (k !== 'leak' && !it.since) continue; // already down before Lambda OS looked
+        const key = `${k}|${s.code}|${it.h || ''}|${it.w || ''}`; next.sh[key] = 1;
+        if (!first && cfg.siteHealth !== false && seenSite && !prev.sh?.[key]) (shFresh[s.code] ||= []).push({ ...it, label, k });
+      }
+    }
+    for (const [code, list] of Object.entries(shFresh)) {
+      const leaks = list.filter(x => x.k === 'leak');
+      notes.push({ id: `sh:${code}:${list.length}:${now}`, urgent: true, url: D.HEALTH.sites.find(s => s.code === code)?.board || '',
+        title: leaks.length ? `💧 ${code}: leak detector alarming${leaks.length > 1 ? ` (${leaks.length})` : ''}` : `${code}: ${list.length} ${list[0].label.toLowerCase()}${list.length > 1 ? ' and more' : ''}`,
+        message: list.slice(0, 3).map(x => [x.label, x.h, x.r && `rack ${x.r}`, x.u && `U${x.u}`, x.w].filter(Boolean).join(' · ')).join('\n') });
+    }
     next.srcAlerted = {};
     for (const s of troubled(D)) {
       const since = s.since || now;

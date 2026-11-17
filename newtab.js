@@ -1344,6 +1344,70 @@ LambdaData.ready.then(D => {
   })();
 
   /* ---------------- Deployments timeline ---------------- */
+  /* ---------------- Site health (fleet-wide, from Grafana) ---------------- */
+  // Every site against the "Site Health" board checks in one table; worst sites first. Click a number for the exact
+  // hosts, racks and U positions. Leaks and newly tripped breakers are the ones to act on now.
+  const Health = (() => {
+    let scope = 'mine', onlyProblems = false;
+    try { scope = localStorage.getItem('lambdaos-health-scope') || 'mine'; onlyProblems = localStorage.getItem('lambdaos-health-problems') === '1'; } catch { /* ignore */ }
+    const COLS = [['leak', 'Leaks'], ['breaker', 'Breakers'], ['pdu', 'PDU alarms'], ['shelf', 'Shelf PSU 0 W'], ['hw', 'HW faults'], ['hot', 'Hottest inlet'], ['net', 'Net down'], ['blind', "Can't monitor"]];
+    const TITLES = { leak: 'Leak detectors alarming', breaker: 'Breakers tripped', pdu: 'PDU alarms', shelf: 'Power-shelf PSUs drawing 0 W', hw: 'Hosts with hardware faults', hot: 'Hot inlets (over the amber line)', net: 'Network devices not answering ping', blind: "Devices we can't monitor" };
+    const val = (s, k) => { const c = s.checks[k];
+      if (k === 'hot') return c.top ? `<b class="st-${c.level === 'good' ? 'good' : c.level}">${Math.round(c.top.v)}°</b><small>${c.top.kind === 'GPU tray' ? 'tray' : 'air'}</small>` : '<span class="muted">—</span>';
+      if (!c.n) return '<span class="ok">✓</span>';
+      if (k === 'leak') return `<b class="st-critical">💧 ${c.n}</b>`;
+      if (k === 'breaker') return `<b class="${c.fresh ? 'st-critical' : 'st-warning'}">${c.n}</b>${c.fresh ? `<small class="st-critical">${c.fresh} new</small>` : ''}`;
+      if (k === 'blind') return `<span class="muted">${c.n}</span>`;
+      return `<b class="st-warning">${c.n}</b>`; };
+    function sitesShown() {
+      const H = D.HEALTH; if (!H) return [];
+      const mine = LambdaAlerts.mySites(D);
+      let list = scope === 'mine' && mine.size ? H.sites.filter(s => mine.has(s.code)) : H.sites;
+      return onlyProblems ? list.filter(s => s.level !== 'good') : list;
+    }
+    function render() {
+      const H = D.HEALTH, box = $('#health');
+      $('#healthBadge').hidden = !(H && (H.totals.leak || H.freshBreakers)); if (H) $('#healthBadge').textContent = H.totals.leak + H.freshBreakers || '';
+      if (activeView !== 'health') return;
+      if (!H) { box.innerHTML = `<div class="hempty"><h3>Site health</h3><p class="muted">Leaks, tripped breakers, PDU alarms, power shelves, hardware faults, hot inlets, network devices down and monitoring gaps for every site come from Grafana. Turn on <b>Grafana</b> in Settings → Sources and sign in to grafana.aws.lambdalabs.cloud once.</p></div>`; return; }
+      const sites = sitesShown(), mine = LambdaAlerts.mySites(D);
+      const sum = k => sites.reduce((t, s) => t + (s.checks[k].n || 0), 0), fresh = sites.reduce((t, s) => t + s.checks.breaker.fresh, 0);
+      const chip = (k, label, cls) => `<span class="hsum ${cls}"><b>${k}</b>${label}</span>`;
+      const errs = Object.keys(H.errors || {});
+      box.innerHTML = `<div class="hhead">
+          <div class="hsums">${chip(sum('leak'), 'leaks', sum('leak') ? 'crit' : 'ok')}${chip(fresh, 'breakers newly tripped', fresh ? 'crit' : 'ok')}${chip(sum('pdu'), 'PDU alarms', sum('pdu') ? 'warn' : 'ok')}${chip(sum('shelf'), 'shelf PSUs at 0 W', sum('shelf') ? 'warn' : 'ok')}${chip(sum('hw'), 'hosts with HW faults', sum('hw') ? 'warn' : 'ok')}${chip(sum('net'), 'network devices down', sum('net') ? 'warn' : 'ok')}</div>
+          <div class="hctl"><span class="seg">${mine.size ? [['mine', 'Your sites'], ['all', 'All sites']].map(([k, l]) => `<button class="chip ${scope === k ? 'on' : ''}" data-hscope="${k}">${l}</button>`).join('') : '<button class="chip on">All sites</button>'}</span>
+            <button class="chip ${onlyProblems ? 'on' : ''}" data-hproblems aria-pressed="${onlyProblems}">Only problems</button>
+            <span class="muted small">Grafana · ${rel(H.at)} ago${errs.length ? ` · <span class="st-warning" title="${esc(Object.entries(H.errors).map(([k, e]) => k + ': ' + e).join('; '))}">${errs.length} check${errs.length > 1 ? 's' : ''} failed</span>` : ''}</span></div></div>
+        <div class="htable-wrap"><table class="htable"><thead><tr><th>Site</th>${COLS.map(([, l]) => `<th>${l}</th>`).join('')}<th>Power</th></tr></thead><tbody>
+        ${sites.map(s => `<tr class="lvl-${s.level}"><td class="hsite" ${s.site ? `data-site="${esc(s.code)}"` : ''}><span class="dot st-${s.level}">●</span><b>${esc(s.code)}</b> <span class="muted">${esc(s.name)}</span></td>
+          ${COLS.map(([k]) => `<td class="hcell" ${s.checks[k].n || k === 'hot' && s.checks[k].top ? `data-hcell="${esc(s.code)}|${k}"` : ''}>${val(s, k)}</td>`).join('')}
+          <td class="hpow">${s.kw != null ? Math.round(s.kw).toLocaleString() + ' kW' : '<span class="muted">—</span>'}</td></tr>`).join('') || `<tr><td colspan="${COLS.length + 2}" class="muted" style="padding:18px">${onlyProblems ? 'No problems at these sites right now.' : 'No sites.'}</td></tr>`}
+        </tbody></table></div>
+        <p class="muted small hnote">Same checks as Grafana's Site Health boards, for every site at once. Click a number for the hosts, racks and U positions. Breakers count everything tripped now; "new" means it tripped in the last 24 hours (since Lambda OS has been watching).</p>`;
+    }
+    function detail(code, k) {
+      const s = D.HEALTH?.sites.find(x => x.code === code); if (!s) return;
+      const c = s.checks[k], items = k === 'hot' ? (c.items.length ? c.items : [c.top].filter(Boolean)) : c.items;
+      const host = x => { const dv = x.h && D.deviceById(x.h); return dv ? `<a data-open="device:${esc(dv.id)}" class="mono">${esc(x.h)}</a>` : `<span class="mono">${esc(x.h || '—')}</span>`; };
+      const what = x => k === 'hot' ? `<b class="st-${x.v >= x.crit ? 'critical' : x.v >= x.warn ? 'warning' : 'good'}">${x.v.toFixed(1)} °C</b> ${esc(x.kind)}` : esc(x.w || '');
+      const extra = k === 'blind' && c.n > c.items.length ? `<p class="muted small">Showing ${c.items.length} of ${c.n}. By type: ${Object.entries(c.byJob).map(([j, v]) => `${esc(j)} ${v}`).join(' · ')}</p>` : '';
+      Drawer.open(`<div class="qkey">${esc(code)} · SITE HEALTH · GRAFANA</div><h3>${esc(TITLES[k])} <span class="muted">(${k === 'hot' ? items.length : c.n})</span></h3>${extra}
+        <div class="answer" style="margin:0"><table><tr><th>Host</th><th>Rack</th><th>U</th><th>${k === 'hot' ? 'Inlet' : 'What'}</th><th>${k === 'leak' || k === 'breaker' || k === 'shelf' ? 'Seen since' : ''}</th></tr>
+        ${items.slice(0, 300).map(x => `<tr><td>${host(x)}</td><td class="mono">${esc(x.r || '')}</td><td>${esc(x.u || '')}</td><td>${what(x)}</td><td class="muted">${x.since ? rel(x.since) + ' ago' : k === 'leak' || k === 'breaker' || k === 'shelf' ? 'before Lambda OS looked' : ''}</td></tr>`).join('')}</table></div>
+        ${items.length > 300 ? `<p class="muted small">+${items.length - 300} more</p>` : ''}
+        <div class="links">${s.board ? btn('Site health in Grafana', s.board, true) : ''}${s.site ? `<button class="btn" data-site="${esc(code)}">Site card</button>` : ''}</div>`);
+    }
+    $('#health').addEventListener('click', e => {
+      const c = e.target.closest('[data-hcell]'); if (c) { const [code, k] = c.dataset.hcell.split('|'); return detail(code, k); }
+      const sc = e.target.closest('[data-hscope]'); if (sc) { scope = sc.dataset.hscope; try { localStorage.setItem('lambdaos-health-scope', scope); } catch { /* ignore */ } return render(); }
+      if (e.target.closest('[data-hproblems]')) { onlyProblems = !onlyProblems; try { localStorage.setItem('lambdaos-health-problems', onlyProblems ? '1' : '0'); } catch { /* ignore */ } return render(); }
+    });
+    return { render, detail };
+  })();
+
+  document.addEventListener('click', e => { const c = e.target.closest('#siteCard [data-hcell]'); if (c) { const [code, k] = c.dataset.hcell.split('|'); Health.detail(code, k); } });
+
   const Deploys = (() => {
     const el = $('#deploys');
     let filter = 'all', tag = 'all';
@@ -1426,6 +1490,7 @@ LambdaData.ready.then(D => {
         + '<button class="chip" data-brain="fit" title="Fit everything (double-click)">Fit</button>'
         + `<span class="seg" title="View">${[['2d', '2D'], ['3d', '3D']].map(([k, l]) => `<button class="chip ${(k === '3d') === Brain.is3d() ? 'on' : ''}" data-brain="${k}" aria-pressed="${(k === '3d') === Brain.is3d()}">${l}</button>`).join('')}</span>`;
     },
+    health: () => '<span class="muted">Leaks · breakers · PDUs · power shelves · hardware · heat · network · monitoring gaps</span>',
     deploys: () => [['good', 'On track'], ['warning', 'At risk'], ['critical', 'Off track / overdue'], ['idle', 'Not started']].map(([s, l]) =>
       `<span><svg viewBox="0 0 10 10"><rect x="0" y="2" width="10" height="6" rx="2" fill="${s === 'idle' ? C.accent : C[s]}"/></svg>${l}</span>`).join('')
       + `<span><svg viewBox="0 0 10 10"><line x1="5" y1="0" x2="5" y2="10" stroke="${C.accent}" stroke-width="2"/></svg>Today</span>`,
@@ -1446,6 +1511,7 @@ LambdaData.ready.then(D => {
     $('#stageHint').textContent = activeView === 'globe'
       ? `${Fleet.placedCount} sites · drag to ${Fleet.mode() === 'globe' ? 'rotate' : 'pan'} · scroll to zoom · double-click to fit · click a site${unplaced ? ` · ${unplaced} without coordinates are in the list` : ''}`
       : activeView === 'graph' ? `${Brain.nodeCount()} neurons · hover to fire and trace links · ${Brain.is3d() ? 'drag to turn · Shift+drag to pan' : 'drag to pan'} · scroll to zoom · click to open`
+      : activeView === 'health' ? 'Worst sites first · click a number for hosts, racks and U positions · H opens this view'
       : `${(D.DEPLOYMENTS || []).length} deployments · ☆ to track · click a row for workstreams, meetings, Slack and shipments`;
   }
   // Bigger view: the middle panel takes the whole screen (side columns and the number strip hide). Button, E key, Esc.
@@ -1454,7 +1520,7 @@ LambdaData.ready.then(D => {
     const b = $('#stageExpand'); b.textContent = on ? '⤡' : '⤢'; b.setAttribute('aria-pressed', on);
     b.title = on ? 'Back to the normal layout (E or Esc)' : 'Bigger view: hide the side columns (E). Esc to go back.';
     try { sessionStorage.setItem('lambdaos-stagemax', on ? '1' : '0'); } catch { /* ignore */ }
-    requestAnimationFrame(() => { if (activeView === 'globe') { Fleet.resize(); } else if (activeView === 'graph') { Brain.resize(); Brain.fit(); } else Deploys.render(); });
+    requestAnimationFrame(() => { if (activeView === 'globe') { Fleet.resize(); } else if (activeView === 'graph') { Brain.resize(); Brain.fit(); } else if (activeView === 'health') Health.render(); else Deploys.render(); });
   }
   $('#stageExpand').addEventListener('click', () => setStageMax(!document.body.classList.contains('stage-max')));
 
@@ -1469,12 +1535,13 @@ LambdaData.ready.then(D => {
     attrib.hidden = v !== 'globe' || !P; attrib.textContent = P ? P.attr : '';
     $('#stageLegend').innerHTML = LEGENDS[v]();
     hint(); hideTip();
-    if (v === 'globe') Fleet.resize(); else if (v === 'graph') Brain.resize(); else Deploys.render();
+    if (v === 'globe') Fleet.resize(); else if (v === 'graph') Brain.resize(); else if (v === 'health') Health.render(); else Deploys.render();
   }
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
   let startView = 'globe';
   try { startView = sessionStorage.getItem('lambdaos-view') || 'globe'; } catch { /* ignore */ }
-  setView(['globe', 'graph', 'deploys'].includes(startView) ? startView : 'globe');
+  setView(['globe', 'graph', 'deploys', 'health'].includes(startView) ? startView : 'globe');
+  Health.render(); // badge on the Health tab
   try { if (sessionStorage.getItem('lambdaos-stagemax') === '1') setStageMax(true); } catch { /* ignore */ }
   (function frame(now) { if (activeView === 'globe') Fleet.draw(now); else if (activeView === 'graph') Brain.draw(now); requestAnimationFrame(frame); })(performance.now());
   window.__lambdaOS = { land: Land, data: D, map: FlatMap, tiles: Tiles, globeGL: GlobeGL, step: (n = 1) => { for (let i = 0; i < n; i++) { const t = performance.now() + i * 16; if (activeView === 'globe') Fleet.draw(t); else if (activeView === 'graph') Brain.draw(t); } } };
@@ -1536,9 +1603,13 @@ LambdaData.ready.then(D => {
   const tempSt = t => t >= 40 ? 'critical' : t >= 32 ? 'warning' : 'good';
   const alertSince = a => a.since ? `since ${rel(a.since)} ago` : '';
   const alertLine = a => `${esc(a.name)}${a.gpu ? ` · GPU ${esc(a.gpu)}` : ''}${a.rack ? ` · ${esc(a.rack)}${a.u ? ` U${esc(String(a.u).replace(/\.0$/, ''))}` : ''}` : ''}`;
-  const healthBlock = s => { const h = s.gf; if (!h) return '';
+  const healthBlock = s => { const h = s.gf;
+    const hs = D.HEALTH?.sites.find(x => x.code === s.id), urgent = hs ? [...hs.checks.leak.items.map(x => ['💧 Leak', x]), ...hs.checks.breaker.items.filter(x => x.since).map(x => ['⚡ Breaker newly tripped', x])] : [];
+    const urgentRows = urgent.map(([l, x]) => `<div class="mini-ticket urgent-row" data-hcell="${esc(s.id)}|${l.includes('Leak') ? 'leak' : 'breaker'}"><span class="qkey st-critical">${l}</span><span class="qsum mono">${esc(x.h || '')} · ${esc(x.r || '')}${x.u ? ' U' + esc(x.u) : ''}</span><span class="small muted">${x.since ? rel(x.since) + ' ago' : ''}</span></div>`).join('');
+    if (!h) return urgentRows ? `<div class="section-title"><span>Health · Grafana</span><span></span></div>${urgentRows}` : '';
     const hot = h.inlet[0], crit = h.counts.filter(c => c.crit).reduce((t, c) => t + c.n, 0);
     return `<div class="section-title"><span>Health · Grafana</span><span>${h.clusters.join(' · ')}</span></div>
+      ${urgentRows}
       <div class="stats hstats">
         <div class="stat"><b>${h.pduKw != null ? Math.round(h.pduKw).toLocaleString() : '—'}</b><span>PDU kW</span></div>
         <div class="stat" title="${hot ? `${esc(hot.host)} · ${esc(hot.rack)}` : 'No inlet sensors reported'}"><b class="${hot ? 'st-' + tempSt(hot.temp) : ''}">${hot ? Math.round(hot.temp) + '°' : '—'}</b><span>Hottest inlet${hot?.rack ? ' · ' + esc(hot.rack) : ''}</span></div>
@@ -2229,7 +2300,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     if (e.key === 'Escape') { if (AIPanel.isOpen() && document.activeElement?.id !== 'aipText' && pal.hidden) AIPanel.close(); else if (!alertPop.hidden) alertPop.hidden = true; else if (!briefBox.hidden) closeBrief(); else if (!pal.hidden) closePalette(); else if (!$('#drawer').hidden) Drawer.close(); else if (!$('#siteCard').hidden) SiteCard.close(); else if (document.body.classList.contains('stage-max')) setStageMax(false); return; }
     if (e.key === '/' && pal.hidden && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openPalette(); }
     if (pal.hidden && !e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
-      if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys');
+      if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys'); if (e.key === 'h') setView('health');
       if (e.key === 'e') setStageMax(!document.body.classList.contains('stage-max'));
     }
   });

@@ -414,6 +414,42 @@
     }
     for (const dv of D.DEVICES) dv.alerts = byHost.get(String(dv.id).toLowerCase()) || [];
     for (const t of D.TICKETS) t.alerts = t.device ? byHost.get(String(t.device).toLowerCase()) || [] : [];
+    // Site health: the "Site Health" board's checks for every site at once (from Grafana's fleet-wide store).
+    const HEALTH = (() => {
+      const F = GF?.fleet; if (!F) return null;
+      const DAY = 864e5, CHECKS = [
+        ['leak', 'Leaks', 'critical'], ['breaker', 'Breakers tripped', 'warning'], ['pdu', 'PDU alarms', 'warning'], ['shelf', 'Shelf PSUs at 0 W', 'warning'],
+        ['hw', 'Hosts with HW faults', 'warning'], ['hot', 'Hottest inlet', 'warning'], ['net', 'Network down', 'warning'], ['blind', "Can't monitor", 'idle']];
+      const codes = new Set(); Object.values(F.checks).forEach(rows => rows.forEach(x => codes.add(x.s))); Object.keys(F.power || {}).forEach(c => codes.add(c));
+      const sites = [...codes].sort().map(code => {
+        const of = k => (F.checks[k] || []).filter(x => x.s === code);
+        const c = {};
+        c.leak = { items: of('leak') }; c.leak.n = c.leak.items.length; c.leak.fresh = c.leak.items.filter(x => x.since && now - x.since < DAY).length;
+        c.breaker = { items: of('breaker') }; c.breaker.n = c.breaker.items.length; c.breaker.fresh = c.breaker.items.filter(x => x.since && now - x.since < DAY).length;
+        c.pdu = { items: of('pdu') }; c.pdu.n = c.pdu.items.length;
+        c.shelf = { items: of('shelf') }; c.shelf.n = c.shelf.items.length;
+        const hw = of('hw'), hosts = new Map(); hw.forEach(x => { const k = x.h || x.r; const e = hosts.get(k) || { ...x, parts: [] }; if (x.w && !e.parts.includes(x.w)) e.parts.push(x.w); hosts.set(k, e); });
+        c.hw = { items: [...hosts.values()].map(x => ({ ...x, w: x.parts.join(', ') })), n: hosts.size };
+        // Hottest inlet: liquid-cooled GPU trays (amber 55 °C, red 65 °C) and air-cooled host inlets (amber 32 °C, red 40 °C).
+        const tray = of('tray').map(x => ({ ...x, kind: 'GPU tray', warn: 55, crit: 65 })), air = of('air').map(x => ({ ...x, kind: 'Host inlet', warn: 32, crit: 40 }));
+        const hotAll = [...tray, ...air].sort((a, b) => (b.v - b.warn) - (a.v - a.warn));
+        c.hot = { items: hotAll.filter(x => x.v >= x.warn), top: hotAll[0] || null }; c.hot.n = c.hot.items.length;
+        c.hot.level = !c.hot.top ? 'none' : c.hot.top.v >= c.hot.top.crit ? 'critical' : c.hot.top.v >= c.hot.top.warn ? 'warning' : 'good';
+        c.net = { items: of('net') }; c.net.n = c.net.items.length;
+        const bc = of('blindCount'); c.blind = { items: of('blind'), n: bc.reduce((t, x) => t + x.v, 0), byJob: Object.fromEntries(bc.map(x => [x.w, x.v])) };
+        // Worst first: a leak or a new breaker trip is critical, then heat over red, then everything amber.
+        const level = c.leak.n || c.breaker.fresh || c.hot.level === 'critical' ? 'critical'
+          : c.pdu.n || c.shelf.n || c.hw.n || c.net.n || c.hot.level === 'warning' ? 'warning' : 'good';
+        const s = D.siteById(code);
+        return { code, site: s || null, name: s?.name || '', kw: F.power?.[code] ?? null, checks: c, level,
+          board: GF.sites?.[code]?.board ? GF.base + GF.sites[code].board : null };
+      });
+      const rank = { critical: 0, warning: 1, good: 2 };
+      sites.sort((a, b) => rank[a.level] - rank[b.level] || b.checks.leak.n - a.checks.leak.n || b.checks.hw.n - a.checks.hw.n);
+      const total = k => sites.reduce((t, s) => t + (s.checks[k].n || 0), 0);
+      return { at: F.at, sites, CHECKS, totals: Object.fromEntries(CHECKS.map(([k]) => [k, total(k)])), errors: F.errors || {},
+        freshBreakers: sites.reduce((t, s) => t + s.checks.breaker.fresh, 0), freshLeaks: sites.reduce((t, s) => t + s.checks.leak.fresh, 0) };
+    })();
     const GRAFANA = GF ? { base: GF.base, links: Object.fromEntries(Object.entries(GF.links || {}).map(([k, u]) => [k, GF.base + u])) } : null;
 
     // Feed and KPIs
@@ -441,7 +477,7 @@
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
-      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER, GRAFANA,
+      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER, GRAFANA, HEALTH,
       SMART: x.smart ? { on: !!x.smart.on, live: !!x.smart.live, label: x.smart.label || '', why: x.smart.why || '', at: x.smart.at || 0, calls: x.smart.calls || 0 } : null,
       AI_PRIORITY: SM?.prio?.order?.length ? SM.prio : null,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
@@ -587,7 +623,20 @@
       const counts = {}; alerts.forEach(a => counts[a.name] = (counts[a.name] || 0) + 1); return { pduKw: kw, inlet: [{ temp: inlet, host: dv[0]?.id || '', rack: dv[0]?.rack || '' }], alerts, counts,
         unreachable: Array.from({ length: unreach }, (_, i) => ({ host: `${code.toLowerCase()}-sw-${i + 1}`, rack: 'r0' + (i + 1), role: 'leaf' })), clusters: ['CL01'], board: `/d/${code.toLowerCase()}-site-health` }; };
     const DEVICES_DEMO = D.DEVICES;
-    const gfMock = { base: 'https://grafana.aws.lambdalabs.cloud', links: { dcOps: '/d/dc-ops-status/dc-ops-status', rackHealth: '/d/air-cooled-pod-floorplan-v6', pdu: '/d/pdu', gpuThermal: '/d/fre-gpu-thermal-throttling', repair: '/d/repair', dcAlerts: '/d/dc-alerts' }, sites: {
+    const fx = (s, h, r, u, w, v = 1, extra = {}) => ({ s, h, r, ...(u ? { u } : {}), ...(w ? { w } : {}), v, ...extra });
+    const fleetMock = { at: now, power: { ORD01: 1166, SEA01: 2000, DAL02: 1700, IAD03: 1242, QRO01: 840, ATL01: 646 }, errors: {}, checks: {
+      leak: [fx('QRO01', 'qro01-cl01-mgx-01620', 'p02c14', '37', 'Chassis_0_LeakDetector_1_Manifold', 3, { since: now - 25 * 60e3 })],
+      breaker: [fx('ORD01', 'ord01-p01c02-pdu-a1', 'p01c02', '', 'AA:L1-N-BR4', 12, { since: now - 50 * 60e3 }), fx('ORD01', 'ord01-p03c11-pdu-b1', 'p03c11', '', 'AA:L2-N-BR7', 12), fx('DAL02', 'dal02-p02c05-pdu-a2', 'p02c05', '', 'AA:L3-N-BR2', 13)],
+      pdu: [fx('ORD01', 'ord01-p01c02-pdu-a1', 'p01c02', '', 'InputCord', 9), fx('DAL02', 'dal02-p04c09-pdu-a1', 'p04c09', '', 'PhaseVoltage', 9)],
+      shelf: [fx('QRO01', 'qro01-cl01-pwr-01137', 'p05c19', '6', 'PSU 3', 0)],
+      hw: [...D.DEVICES.filter(v => ['ORD01', 'DAL02', 'IAD03'].includes(v.site)).slice(0, 9).map((v, i) => fx(v.site, v.id, v.rack, String(v.u || ''), ['PSU', 'Fan', 'GPU', 'DIMM', 'BMC'][i % 5], 3))],
+      tray: [fx('QRO01', 'qro01-cl01-mgx-00595', 'p04c06', '', '', 56.3), fx('QRO01', 'qro01-cl01-mgx-00412', 'p03c02', '', '', 48.1)],
+      air: [fx('ORD01', 'ord01-r026-u4', 'r026', '', '', 28), fx('DAL02', 'dal02-r100-u15', 'r100', '', '', 41.2), fx('SEA01', 'sea01-r040-u20', 'r040', '', '', 23), fx('IAD03', 'iad03-r061-u18', 'r061', '', '', 33.5)],
+      net: [fx('SEA01', 'sea01-sw-leaf-12', 'r12', '', 'leaf', 0)],
+      blindCount: [fx('ORD01', '', '', '', 'pdu-snmp', 4), fx('SEA01', '', '', '', 'redfish-gpu-hosts', 12), fx('QRO01', '', '', '', 'powershelf-snmp', 2)],
+      blind: [fx('ORD01', 'ord01-p02c08-pdu-b1', 'p02c08', '', 'pdu-snmp', 0), fx('SEA01', 'sea01-r033-u12', 'r033', '', 'redfish-gpu-hosts', 0)],
+    } };
+    const gfMock = { base: 'https://grafana.aws.lambdalabs.cloud', fleet: fleetMock, links: { dcOps: '/d/dc-ops-status/dc-ops-status', rackHealth: '/d/air-cooled-pod-floorplan-v6', pdu: '/d/pdu', gpuThermal: '/d/fre-gpu-thermal-throttling', repair: '/d/repair', dcAlerts: '/d/dc-alerts' }, sites: {
       ORD01: gfSite('ORD01', 1166, 28, [['PDUInputCordFault', 'critical', 0, 40], ['PDUInputCordFault', 'critical', 1, 55], ['GPUHealthFault', 'critical', 2, 180], ['ChassisPSUFault', 'warning', 3, 900], ['ChassisFanCritical', 'warning', 4, 3000]]),
       SEA01: gfSite('SEA01', 2000, 23, [['ChassisFanCritical', 'warning', 0, 600]], 1),
       DAL02: gfSite('DAL02', 1700, 41, [['GPUThermalThrottle', 'critical', 0, 25], ['FabricLinkDown', 'warning', 1, 120], ['MissingGPUIB', 'warning', 2, 300]]),

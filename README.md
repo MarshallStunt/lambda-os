@@ -63,6 +63,12 @@ own browser sign-in, and no tokens are stored. Every NetBox site is on the globe
   **Health · Grafana** section; alerts are tied to their device (hostnames match NetBox) and so to open tickets (⚠ badge);
   new hardware alerts appear in the live feed; Settings → Alerts can notify you of new critical hardware alerts at your
   sites (one notification per site); ⌘K opens the main DC dashboards. The staging Grafana has no production sites.
+- **Health view** (4th tab in the middle panel, or **H**): every site against the checks from Grafana's Site Health boards,
+  asked once for the whole fleet: leaks, breakers tripped ("new" = in the last 24 h), PDU alarms, power-shelf PSUs at 0 W,
+  hosts with hardware faults (fan, PSU, GPU, HBM, NVLink, DIMM, drive, NIC, BMC…), hottest inlet (GPU tray 55/65 °C, air
+  32/40 °C), network devices down and devices that can't be monitored, plus site power. Worst sites first; click any number
+  for the hosts, racks and U positions. Leaks and newly tripped breakers also show on the site card and, at your sites,
+  send an urgent notification (Settings → Alerts → Site health).
 - **Smart processing (optional AI)**: Settings → Data → Smart processing chooses **Local only** (default: fixed rules,
   nothing sent anywhere) or **AI when available**. Fetching is always local. In AI mode, after each refresh your AI
   provider looks only at what the rules couldn't settle: which Slack messages are real volunteer requests (with dates and

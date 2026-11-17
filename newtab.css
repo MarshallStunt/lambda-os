@@ -697,3 +697,35 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 body.stage-max .layout { grid-template-columns: minmax(0, 1fr) !important; }
 body.stage-max .col-left, body.stage-max .col-right, body.stage-max .kpi-strip { display: none !important; }
 body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+/* Site health view */
+.hview { padding: 14px 16px 40px; }
+.tab-badge { margin-left: 4px; padding: 0 6px; border-radius: 99px; font-size: 10px; background: var(--critical); color: #fff; }
+.hhead { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.hsums { display: flex; flex-wrap: wrap; gap: 8px; }
+.hsum { display: flex; align-items: baseline; gap: 6px; padding: 6px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--text-2); }
+.hsum b { font-size: 17px; color: var(--text); }
+.hsum.crit { border-color: color-mix(in srgb, var(--critical) 55%, transparent); } .hsum.crit b { color: var(--critical); }
+.hsum.warn b { color: var(--warning); } .hsum.ok b { color: var(--good); }
+.hctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.htable-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+.htable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.htable th { position: sticky; top: 0; background: var(--panel-solid); color: var(--muted); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; text-align: center; padding: 9px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.htable th:first-child { text-align: left; }
+.htable td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+.htable tr:last-child td { border-bottom: 0; }
+.htable tr.lvl-critical td:first-child { box-shadow: inset 3px 0 0 var(--critical); }
+.htable tr.lvl-warning td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+.hsite { text-align: left !important; cursor: pointer; } .hsite .dot { font-size: 10px; margin-right: 6px; }
+.hsite b { font-family: var(--mono); color: var(--accent); }
+.hcell[data-hcell] { cursor: pointer; } .hcell[data-hcell]:hover { background: var(--panel-hi); }
+.hcell b { font-size: 15px; } .hcell small { display: block; font-size: 10px; color: var(--muted); }
+.hcell .ok { color: var(--good); opacity: .7; }
+.hpow { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.hnote { margin-top: 10px; }
+.hempty { max-width: 560px; margin: 40px auto; text-align: center; }
+.htable th { white-space: normal; line-height: 1.25; padding: 8px 5px; font-size: 10px; letter-spacing: .05em; }
+.htable td { padding: 8px 5px; }
+.htable .hsite .muted { font-size: 12px; }
+@media (max-width: 1500px) { .htable .hsite .muted { display: none; } }
+.urgent-row { background: color-mix(in srgb, var(--critical) 12%, transparent); }

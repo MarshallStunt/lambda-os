@@ -35,7 +35,7 @@ const LambdaLive = (() => {
     // Appearance: theme 'system' | 'light' | 'dark'; accent; density; text size; glow; motion
     look: { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' },
     // Desktop alerts (checked after every background refresh) and the daily brief.
-    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true,
+    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true, siteHealth: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
     // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
@@ -672,21 +672,76 @@ const LambdaLive = (() => {
         }
       } catch (e) { if (e.auth) throw e; }
       for (const [k, x] of Object.entries(sites)) if (!x.clusters.length && !x.board) delete sites[k];
-      return { ok: true, base, at: Date.now(), stores: stores.length, sites, links };
+      // Fleet health: the same checks as the "Site Health" boards (leaks, tripped breakers, PDU alarms, power-shelf PSUs
+      // at 0 W, hosts with hardware faults, hottest inlets, network devices down, devices we can't monitor), asked once
+      // for every site at once from the shared "Lambda Private Cloud Metrics" store, each problem with host, rack and U.
+      let fleet = null;
+      const pc = dsl.find(d => d.type === 'prometheus' && /private cloud metrics/i.test(d.name));
+      if (pc) {
+        const HWM = [['redfish_chassis_leak_detector_health', '', 'Leak detector'], ['redfish_chassis_fan_health', '', 'Fan'], ['redfish_chassis_power_powersupply_health', '', 'PSU'],
+          ['redfish_chassis_temperature_sensor_health', '', 'Temp sensor'], ['redfish_chassis_health', "chassis_id!~'HGX_GPU.*'", 'Chassis'], ['redfish_gpu_health', '', 'GPU'],
+          ['redfish_gpu_memory_health', '', 'GPU memory'], ['redfish_gpu_nvlink_health', '', 'NVLink'], ['redfish_system_health_state', '', 'System'],
+          ['redfish_system_processor_health_state', "processor_id!~'GPU.*'", 'CPU'], ['redfish_system_memory_health_state', "memory_id!~'GPU.*'", 'DIMM'],
+          ['redfish_system_storage_drive_health_state', '', 'Drive'], ['redfish_system_ethernet_interface_health_state', '', 'NIC'], ['redfish_manager_health_state', '', 'BMC']];
+        const BL = "job=~'net-snmp-entity|net-snmp-if|pdu-snmp|pdu-snmp-raritan|powershelf-snmp|redfish-gpu-hosts|redfish-nvlink-switches|redfish-weka-hosts'";
+        const FQ = {
+          leak: 'max by (dc, hostname, rack, rack_u_position, leak_detector_id) (redfish_chassis_leak_detector_health > 1)',
+          breaker: 'max by (dc, hostname, rack, st4BranchLabel) ((st4BranchStatus >= 12) <= 13)',
+          pdu: "max by (dc, hostname, rack, metric) (label_replace({__name__=~'st4InputCordStatus|st4InputCordActivePowerStatus|st4LineCurrentStatus|st4PhaseVoltageStatus|st4TempSensorStatus'} >= 8 != 15 != 16, \"metric\", \"$1\", \"__name__\", \"st4(.+)Status\") or label_replace(st4BranchStatus >= 8 != 12 != 13 != 15 != 16, \"metric\", \"Branch\", \"\", \"\") or label_replace(measurementsInletSensorState == 2 or measurementsInletSensorState == 6 or measurementsInletSensorState == 8 or measurementsInletSensorState == 11, \"metric\", \"Raritan inlet\", \"\", \"\"))",
+          shelf: 'max by (dc, hostname, rack, rack_u_position, obmcPowerUnitName) (obmcPowerUnitInputPower <= 0)',
+          hw: 'max by (dc, hostname, rack, rack_u_position, component) (' + HWM.map(([m, s, c]) => `label_replace(${m}${s ? '{' + s + '}' : ''} > 1, "component", "${c}", "", "")`).join(' or ') + ')',
+          tray: 'topk by (dc) (10, max by (dc, hostname, rack) (redfish_telemetry_ambient_inlet_temperature_celsius > 0))',
+          air: "topk by (dc) (10, max by (dc, hostname, rack) (redfish_chassis_temperature_celsius{sensor=~'Inlet Temp|GPU Inlet Temp'} > 0))",
+          net: "max by (dc, hostname, rack, role) (probe_success{job='blackbox_net_network_devices'} == 0)",
+          blindCount: `count by (dc, job) (up{${BL}} == 0)`,
+          blind: `topk by (dc) (25, max by (dc, job, hostname, rack) (up{${BL}} == 0))`,
+          power: 'sum by (dc) (st4InputCordActivePower) / 1000',
+          shelfPower: 'sum by (dc) (obmcPowerUnitInputPower) / 1000',
+        };
+        const code = dc => (String(dc || '').match(/^[a-z]{3}\d{2}/) || [])[0]?.toUpperCase() || null;
+        const fr = await Promise.all(Object.entries(FQ).map(async ([k, q]) => {
+          try { return [k, (await get(`/api/datasources/proxy/uid/${encodeURIComponent(pc.uid)}/api/v1/query?query=${encodeURIComponent(q)}`)).data?.result || [], null]; }
+          catch (e) { if (e.auth) throw e; return [k, [], e.message]; } }));
+        fleet = { at: Date.now(), checks: {}, power: {}, errors: {} };
+        for (const [k, rows, err] of fr) {
+          if (err) { fleet.errors[k] = err; continue; }
+          if (k === 'power' || k === 'shelfPower') { for (const x of rows) { const c = code(x.metric.dc); if (c) fleet.power[c] = (fleet.power[c] || 0) + (+x.value[1] || 0); } continue; }
+          fleet.checks[k] = rows.map(x => { const m = x.metric, c = code(m.dc); if (!c) return null;
+            const it = { s: c, v: +x.value[1] };
+            for (const [kk, v] of [['h', m.hostname], ['r', m.rack], ['u', String(m.rack_u_position || '').replace(/\.0$/, '')],
+              ['w', m.leak_detector_id || m.st4BranchLabel || m.metric || m.obmcPowerUnitName && 'PSU ' + m.obmcPowerUnitName || m.component || m.role || m.job]]) if (v) it[kk] = v;
+            return it; }).filter(Boolean).slice(0, 2000);
+        }
+      }
+      return { ok: true, base, at: Date.now(), stores: stores.length, sites, links, fleet };
     } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
+  }
+  // "Newly tripped" and "new leak" are worked out against what earlier refreshes saw (first seen times), so a breaker
+  // that was already off before Lambda OS ever looked isn't called new.
+  async function firstSeen(result) {
+    if (!result?.fleet) return result;
+    let prev = null; try { ({ snapshot: { grafana: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none yet */ }
+    const was = prev?.fleet?.seen || null, now = Date.now(), seen = {};
+    for (const k of ['leak', 'breaker', 'shelf']) for (const it of result.fleet.checks[k] || []) {
+      const key = `${k}|${it.s}|${it.h || ''}|${it.w || ''}`;
+      seen[key] = was ? (was[key] ?? now) : 0; // 0 = already there the first time we looked
+      if (seen[key]) it.since = seen[key];
+    }
+    result.fleet.seen = seen;
+    return result;
   }
   async function grafana(s) {
     const base = trim(s.grafanaUrl);
     await needAccess([new URL(base).origin + '/*']);
     const direct = await grafanaRead(base);
-    if (direct.ok) return direct;
+    if (direct.ok) return firstSeen(direct);
     if (!direct.auth) throw new Error(`Grafana: ${direct.error}`);
     // Direct reading was refused (some sign-ins only work inside the page): read through a Grafana tab instead.
     const app = LambdaTabs.apps(s).grafana;
     let result;
     try { ({ result } = await LambdaTabs.run(app, grafanaRead, [''], { useOwn: s.appTabs !== false })); }
     catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Grafana: couldn't read through a Grafana tab (${e.message}).`); }
-    if (result?.ok) return result;
+    if (result?.ok) return firstSeen(result);
     if (result?.auth) throw new AuthError('Not signed in to Grafana.', `${base}/login`);
     throw new Error(`Grafana: ${result?.error || 'the Grafana tab did not answer.'}`);
   }
