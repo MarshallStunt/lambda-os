@@ -104,6 +104,21 @@ const LambdaLive = (() => {
       get('/api/core/object-changes/?limit=400&ordering=-time&fields=id,time,user_name,action,changed_object_type,object_repr')
         .then(r => (r.results || []).filter(isPerson).slice(0, 40)).catch(() => []),
     ]);
+    // Device history for the Devices card: how many devices were created after each of the last 30 days (one small
+    // count query per day, read once a day and kept), so the card can show the count on each of those days.
+    let devHist = null;
+    try {
+      let prev = null; try { ({ snapshot: { nb: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none */ }
+      const dk = t => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+      if (prev?.devHist && dk(prev.devHist.at) === dk(Date.now())) devHist = prev.devHist;
+      else {
+        const days = Array.from({ length: 29 }, (_, i) => dk(Date.now() - (i + 1) * 864e5));
+        const after = {};
+        for (let i = 0; i < days.length; i += 6) await Promise.all(days.slice(i, i + 6).map(async d => {
+          const r = await get(`/api/dcim/devices/?created__gt=${d}T23:59:59&limit=1&brief=1`); after[d] = r.count || 0; }));
+        devHist = { at: Date.now(), after };
+      }
+    } catch { devHist = null; }
     const locSite = new Map(locations.map(l => [l.id, l.site?.name || '']));
     const types = {};
     const stock = [];
@@ -122,7 +137,7 @@ const LambdaLive = (() => {
         address: (x.physical_address || '').replace(/\s+/g, ' ').trim(), region: x.region?.name || '', tz: x.time_zone || '',
         lat: x.latitude, lon: x.longitude, racks: x.rack_count || 0, devices: x.device_count || 0,
       })),
-      stock, types,
+      stock, types, devHist,
       changes: changes.map(c => ({ at: Date.parse(c.time), user: c.user_name || '', action: c.action?.label || c.action?.value || '',
         type: String(c.changed_object_type || '').split('.').pop(), repr: c.object_repr || '' })),
     };
@@ -222,19 +237,30 @@ const LambdaLive = (() => {
 
   // Tickets closed in the last 31 days as [created, resolved, key]. Jira closes ~2,000 a month at 100 per page, so the
   // full read happens once a day; every other refresh only asks for what closed since the last one and merges it in.
-  async function closedTickets(get, jql) {
+  async function closedTickets(get, jql, slaIds = []) {
     let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none yet */ }
     const now = Date.now(), cut = now - 31 * 864e5, old = prev?.closed30, at = prev?.closed30At || 0, fullAt = prev?.closed30Full || 0;
-    const row = i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.key];
+    // [created, resolved, key, SLA deadline] (the deadline lets the SLA breached card rebuild its 30 days too)
+    const slaOf = f => { for (const id of slaIds) { const v = f[id]; const c = v?.completedCycles?.at?.(-1) || v?.ongoingCycle; const t = c?.breachTime?.epochMillis; if (t) return t; } return 0; };
+    const fields = ['created', 'resolutiondate', ...slaIds].join(',');
+    const row = i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.key, slaOf(i.fields)];
     let rows, full = fullAt;
-    if (old && now - fullAt < 864e5 && old.every(x => x.length === 3)) {
+    if (old && now - fullAt < 864e5 && old.every(x => x.length === 4)) {
       const mins = Math.ceil((now - at) / 60e3) + 10;
-      const fresh = (await search(get, `${jql.replace(/resolved >= -31d$/, '')}resolved >= "-${mins}m"`, 2000, 'created,resolutiondate', null, 'closed tickets')).map(row);
+      const fresh = (await search(get, `${jql.replace(/resolved >= -31d$/, '')}resolved >= "-${mins}m"`, 2000, fields, null, 'closed tickets')).map(row);
       const byKey = new Map(old.map(x => [x[2], x])); fresh.forEach(x => byKey.set(x[2], x));
       rows = [...byKey.values()];
-    } else { rows = (await search(get, jql, 6000, 'created,resolutiondate', null, 'closed tickets')).map(row); full = now; }
+    } else { rows = (await search(get, jql, 6000, fields, null, 'closed tickets')).map(row); full = now; }
     const out = rows.filter(([c, r]) => c && r && r >= cut); out.fullAt = full;
     return out;
+  }
+  // Deployment epics closed in the last 31 days ([created, resolved, summary]), so Active deployments and GPUs in
+  // deployments can rebuild their 30 days: a deployment counts on the days between its creation and its close.
+  async function closedEpics(get, s) {
+    const noDone = j => stripOrder(j).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '');
+    const jqls = [s.portfolioJql, s.intakeJql].filter(Boolean).map(j => `(${noDone(j)}) AND resolved >= -31d`);
+    const rows = (await Promise.all(jqls.map(j => search(get, j, 1000, 'summary,created,resolutiondate,issuetype').catch(() => [])))).flat();
+    return rows.filter(i => !/initiative/i.test(i.fields.issuetype?.name || '')).map(i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.fields.summary || '']).filter(([c, r]) => c && r);
   }
   async function jira(s, progress) {
     const base = trim(s.jiraUrl);
@@ -245,18 +271,19 @@ const LambdaLive = (() => {
     // Tickets closed in the last 31 days (only their open/close dates), so the Open DC tickets card can draw a real
     // 30-day history: open count, new and closed for every day.
     const closedJql = `(${stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '')}) AND resolved >= -31d`;
-    const [issues, mineIssues, port, closed] = await Promise.all([
+    const [issues, mineIssues, port, closed, epicsClosed] = await Promise.all([
       search(get, s.fleetJql, s.maxTickets, want, progress),
       search(get, s.mineJql, 500, 'summary').catch(() => []),
       portfolio(get, F, s, base, progress).then(v => ({ v }), e => ({ e })),
-      closedTickets(get, closedJql).catch(() => null),
+      closedTickets(get, closedJql, F.sla || []).catch(() => null),
+      closedEpics(get, s).catch(() => null),
     ]);
     const mine = new Set(mineIssues.map(i => i.key));
     return {
       base, me: { id: me.accountId, name: me.displayName, email: me.emailAddress || '', tz: me.timeZone },
       tickets: issues.map(i => mapIssue(i, F, base, mine)),
       portfolio: port.v || [], portfolioError: port.e ? String(port.e.message || port.e) : '',
-      closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null,
+      closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null, closedEpics: epicsClosed,
     };
   }
 

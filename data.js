@@ -80,18 +80,25 @@
   /* ---------------- Live build ---------------- */
   // Open DC tickets for each of the last 30 days, rebuilt from Jira: tickets open now (by created date) plus tickets
   // closed in the last 31 days (created → resolved). Each day: open at its end, new that day, closed that day.
-  function ticketTrend(openCreated, closed, now = Date.now()) {
-    if (!closed) return null;
+  // The last 30 days, each as { day: 'YYYY-MM-DD', s: start ms, e: end ms (now for today) }.
+  function last30(now = Date.now()) {
     const DAYMS = 864e5, out = [];
     for (let i = 29; i >= 0; i--) {
-      const end = new Date(now - i * DAYMS); end.setHours(23, 59, 59, 999); const e = Math.min(end.getTime(), now), s0 = end.getTime() - DAYMS + 1;
-      const open = openCreated.filter(c => c && c <= e).length + closed.filter(([c, r]) => c <= e && r > e).length;
-      const opened = openCreated.filter(c => c >= s0 && c <= e).length + closed.filter(([c]) => c >= s0 && c <= e).length;
-      const shut = closed.filter(([, r]) => r >= s0 && r <= e).length;
-      const k = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
-      out.push({ day: k, v: open, opened, closed: shut });
+      const end = new Date(now - i * DAYMS); end.setHours(23, 59, 59, 999);
+      out.push({ day: `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`, s: end.getTime() - DAYMS + 1, e: Math.min(end.getTime(), now) });
     }
     return out;
+  }
+  function ticketTrend(tickets, closed, now = Date.now()) {
+    if (!closed) return null;
+    return last30(now).map(({ day, s: s0, e }) => {
+      const open = tickets.filter(t => t.created && t.created <= e).length + closed.filter(([c, r]) => c <= e && r > e).length;
+      const opened = tickets.filter(t => t.created >= s0 && t.created <= e).length + closed.filter(([c]) => c >= s0 && c <= e).length;
+      const shut = closed.filter(([, r]) => r >= s0 && r <= e).length;
+      // breached at the end of that day: open then, and past its SLA deadline by then
+      const breached = tickets.filter(t => t.created && t.created <= e && t.slaDue && t.slaDue <= e).length + closed.filter(([c, r, , b]) => c <= e && r > e && b && b <= e).length;
+      return { day, v: open, opened, closed: shut, breached };
+    });
   }
   function buildLive(snap) {
     const nb = snap.nb, jr = snap.jira, now = Date.now();
@@ -188,10 +195,12 @@
     const waiting = TICKETS.filter(t => /part|rma/i.test(t.status));
     const waitingStocked = waiting.filter(t => t.part && t.site && (sitesByCode.get(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
     const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
+    const tTrend = jr ? ticketTrend(TICKETS, jr.closed30, now) : null;
+    const devTrend = nb?.devHist ? last30(now).map(({ day }, i, a) => ({ day, v: i === a.length - 1 ? null : nb.devHist.after[day] })) : null;
     const KPIS = [
-      jr && { key: 'open', num: TICKETS.length, upBad: true, trend: ticketTrend(TICKETS.map(t => t.created), jr.closed30, now), label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
-      jr && { key: 'breached', num: breached, upBad: true, label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
-      nb && { key: 'devices', num: devs, label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
+      jr && { key: 'open', num: TICKETS.length, upBad: true, trend: tTrend, label: 'Open DC tickets', value: TICKETS.length.toLocaleString(), sub: `+${opened[13]} opened today`, spark: opened, sparkWhat: 'opened' },
+      jr && { key: 'breached', num: breached, upBad: true, trend: tTrend && tTrend[0].breached != null ? tTrend.map((x, i) => ({ day: x.day, v: i === tTrend.length - 1 ? breached : x.breached })) : null, label: 'SLA breached', value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good' },
+      nb && { key: 'devices', num: devs, trend: devTrend ? devTrend.map((x, i) => ({ day: x.day, v: x.v == null ? devs : Math.max(0, devs - x.v) })) : null, label: 'Devices in NetBox', value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${live.length} live sites` },
       jr && { key: 'waiting', num: waiting.length, upBad: true, label: 'Waiting on parts / RMA', value: waiting.length.toLocaleString(), sub: `${waitingStocked.length} have the part on site`, tone: waitingStocked.length ? 'bad' : 'good' },
       !jr && { label: 'Sites', value: String(SITES.length), sub: `${live.length} live` },
     ].filter(Boolean);
@@ -222,7 +231,7 @@
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
-    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, codeOf, meId });
+    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, codeOf, meId });
   }
 
   /* ---------------- Projects, deployments, Slack, mail, calendar, NetSuite ---------------- */
@@ -491,9 +500,13 @@
       const risky = DEPLOYMENTS.filter(d => d.health === 'critical' || d.health === 'warning').length;
       const gpus = DEPLOYMENTS.reduce((a, d) => a + (d.gpus || 0), 0);
       const next = DEPLOYMENTS.filter(d => d.end && d.end >= now).sort((a, b) => a.end - b.end)[0];
+      // 30 days rebuilt from the epics: open now (by created date) plus those closed in the last 31 days.
+      const CE = x.closedEpics, depTrend = CE ? last30(now).map(({ day, e }) => { const live = DEPLOYMENTS.filter(dd => dd.created && dd.created <= e), gone = CE.filter(([c, r]) => c <= e && r > e);
+        return { day, v: live.length + gone.length, g: live.reduce((a, dd) => a + (dd.gpus || 0), 0) + gone.reduce((a, [, , sm]) => a + (parseDeploy(sm).gpus || 0), 0) }; }) : null;
+      if (depTrend) { depTrend[depTrend.length - 1].v = DEPLOYMENTS.length; depTrend[depTrend.length - 1].g = gpus; }
       D.KPIS.splice(2, 0,
-        { key: 'deps', num: DEPLOYMENTS.length, label: 'Active deployments', value: String(DEPLOYMENTS.length), sub: `${risky} at risk, off track or overdue`, tone: risky ? 'bad' : 'good' },
-        { key: 'gpus', num: gpus, label: 'GPUs in deployments', value: kfmt(gpus), sub: next ? `next due: ${next.site || next.key} · ${new Date(next.end).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '' });
+        { key: 'deps', num: DEPLOYMENTS.length, trend: depTrend, label: 'Active deployments', value: String(DEPLOYMENTS.length), sub: `${risky} at risk, off track or overdue`, tone: risky ? 'bad' : 'good' },
+        { key: 'gpus', num: gpus, trend: depTrend && depTrend.map(x => ({ day: x.day, v: x.g })), label: 'GPUs in deployments', value: kfmt(gpus), sub: next ? `next due: ${next.site || next.key} · ${new Date(next.end).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '' });
     }
 
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
