@@ -785,3 +785,7 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .sp-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); margin-top: 6px; }
 .sp-foot .btn[disabled] { opacity: .5; cursor: default; }
 :root[data-theme="light"] .sitebtn { background: var(--field); }
+.sp-why { font-size: 10px; color: var(--muted); padding: 0 6px 4px 30px; line-height: 1.35; }
+.sp-star { font-size: 13px; line-height: 1; padding: 0 2px; color: var(--muted); }
+.sp-star.on { color: var(--warning); }
+.sp-star:hover { color: var(--warning); }

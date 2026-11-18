@@ -28,8 +28,9 @@ const LambdaAlerts = (() => {
     const dueAt = Date.parse(due + 'T23:59:59'), days = Math.floor((now - dueAt) / DAY);
     return { open: true, due, dueAt, days, state: dueAt >= now ? 'due' : days > 30 ? 'stale' : 'late' };
   }
-  // "Your" sites: where your tickets are, plus the sites of deployments you track (or own).
-  const yourSites = D => new Set([...D.TICKETS.filter(t => t.mine || t.assignee === 'me').map(t => t.site),
+  // "Your" sites: where you work (your last 90 days of Jira tickets, see LambdaData.yourSitesInfo), plus the sites of
+  // deployments you track (or own).
+  const yourSites = D => new Set([...(typeof LambdaData !== 'undefined' && LambdaData.yourSitesInfo ? LambdaData.yourSitesInfo(D.ALL || D).codes : D.TICKETS.filter(t => t.mine || t.assignee === 'me').map(t => t.site)),
     ...(D.tracked ? D.tracked() : []).flatMap(d => d.sites || [])].filter(Boolean));
   // Atium builds you'd care about: at your sites, or linked to a deployment you track.
   const myBuilds = (D, sites = yourSites(D)) => { const tk = new Set((D.tracked ? D.tracked() : []).map(d => d.key));

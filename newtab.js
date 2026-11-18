@@ -138,7 +138,11 @@ LambdaData.ready.then(D => {
   }).catch(() => {});
   /* ---------------- Site picker: everything on the page follows it (search still covers every site) ---------------- */
   {
-    const ALL = D.ALL || D, btn = $('#siteBtn'), pop = $('#sitePop'), mine = ALL.yourSites ? ALL.yourSites() : [];
+    const ALL = D.ALL || D, btn = $('#siteBtn'), pop = $('#sitePop');
+    let info, mine, why, starsChanged = false;
+    const reinfo = () => { info = ALL.yourSitesInfo ? ALL.yourSitesInfo() : { codes: [], picked: [], from: '' }; mine = info.codes;
+      why = info.picked.map(x => x.starred ? `${x.code} ★` : x.dep ? `${x.code} (deployment ${x.dep})` : `${x.code} ${Math.round(x.share * 100)}%`).join(', '); };
+    reinfo();
     const choice = D.SCOPE_CHOICE || 'all', chosen = D.SCOPE ? [...D.SCOPE] : [];
     const pickable = ALL.SITES.filter(s => s.kind === 'dc' || s.openTickets).sort((a, b) => a.id.localeCompare(b.id));
     btn.textContent = `📍 ${!D.SCOPE ? 'All sites' : choice === 'mine' ? `Your sites (${chosen.length})` : chosen.length === 1 ? chosen[0] : `${chosen.length} sites`} ▾`;
@@ -149,17 +153,19 @@ LambdaData.ready.then(D => {
     const paint = () => {
       pop.innerHTML = `<div class="sp-head">Show</div>
         <label class="sp-row ${!D.SCOPE ? 'cur' : ''}"><input type="radio" name="spm" data-sp="all" ${!D.SCOPE ? 'checked' : ''}> All sites</label>
-        ${mine.length ? `<label class="sp-row ${choice === 'mine' && D.SCOPE ? 'cur' : ''}" title="Sites of your tickets and tracked deployments"><input type="radio" name="spm" data-sp="mine" ${choice === 'mine' && D.SCOPE ? 'checked' : ''}> Your sites <small>${esc(mine.join(', '))}</small></label>` : ''}
+        ${mine.length ? `<label class="sp-row ${choice === 'mine' && D.SCOPE ? 'cur' : ''}" title="Where you work: ${esc(why)} of ${esc(info.from)}. The busiest site counts, plus any with at least 25%."><input type="radio" name="spm" data-sp="mine" ${choice === 'mine' && D.SCOPE ? 'checked' : ''}> Your sites <small>${esc(mine.join(', '))}</small></label>
+        <div class="sp-why">${esc(why)}${info.from ? ` · from ${esc(info.from)}` : ''} · ★ a site to add it</div>` : '<div class="sp-why">★ the sites you belong to and pick “Your sites”.</div>'}
         <div class="sp-sep"></div>
         <input class="sp-find" placeholder="Find a site…" aria-label="Find a site">
         <div class="sp-list">${pickable.map(s => `<label class="sp-row site" data-q="${esc((s.id + ' ' + s.name + ' ' + (s.city || '')).toLowerCase())}">
-          <input type="checkbox" data-site="${esc(s.id)}" ${pending.has(s.id) ? 'checked' : ''}> <b>${esc(s.id)}</b> <span>${esc(s.name)}</span><button class="sp-only" data-only="${esc(s.id)}" title="Show only ${esc(s.id)}">only</button></label>`).join('')}</div>
+          <input type="checkbox" data-site="${esc(s.id)}" ${pending.has(s.id) ? 'checked' : ''}> <b>${esc(s.id)}</b> <span>${esc(s.name)}</span><button class="sp-star ${mine.includes(s.id) ? 'on' : ''}" data-star="${esc(s.id)}" title="${mine.includes(s.id) ? `Remove ${esc(s.id)} from your sites` : `Add ${esc(s.id)} to your sites`}">${mine.includes(s.id) ? '★' : '☆'}</button><button class="sp-only" data-only="${esc(s.id)}" title="Show only ${esc(s.id)}">only</button></label>`).join('')}</div>
         <div class="sp-foot"><button class="btn" data-sp-clear>Clear</button><button class="btn primary" data-sp-apply ${pending.size ? '' : 'disabled'}>Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}</button></div>`;
     };
     const open = () => { paint(); pop.hidden = false; setTimeout(() => pop.querySelector('.sp-find')?.focus(), 0); };
-    btn.addEventListener('click', e => { e.stopPropagation(); pop.hidden ? open() : (pop.hidden = true); });
-    document.addEventListener('click', e => { if (!pop.hidden && !e.target.closest('.sitepick')) pop.hidden = true; });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
+    btn.addEventListener('click', e => { e.stopPropagation(); pop.hidden ? open() : close(); });
+    const close = () => { pop.hidden = true; if (starsChanged && choice === 'mine' && D.SCOPE) location.reload(); };
+    document.addEventListener('click', e => { if (!pop.hidden && e.target.isConnected && !e.target.closest('.sitepick')) close(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) close(); });
     pop.addEventListener('input', e => {
       if (e.target.matches('.sp-find')) { const q = e.target.value.trim().toLowerCase(); pop.querySelectorAll('.sp-row.site').forEach(r => { r.hidden = !!q && !r.dataset.q.includes(q); }); }
     });
@@ -171,6 +177,13 @@ LambdaData.ready.then(D => {
         const b = pop.querySelector('[data-sp-apply]'); b.disabled = !pending.size; b.textContent = `Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}`; }
     });
     pop.addEventListener('click', e => {
+      const star = e.target.closest('[data-star]');
+      if (star) { e.preventDefault(); e.stopPropagation(); const c = star.dataset.star, P = info.prefs || { add: [], remove: [] };
+        const add = new Set(P.add), rm = new Set(P.remove), isMine = mine.includes(c), guessed = (info.guessed || []).includes(c);
+        if (isMine) { add.delete(c); if (guessed) rm.add(c); } else { rm.delete(c); if (!guessed) add.add(c); }
+        const v = { add: [...add].sort(), remove: [...rm].sort() }; ALL.RAW = ALL.RAW || {}; ALL.RAW.myPrefs = v; LambdaData.saveMySites(v);
+        starsChanged = true; reinfo(); const q = pop.querySelector('.sp-find')?.value || ''; paint(); const f = pop.querySelector('.sp-find'); if (f) { f.value = q; f.dispatchEvent(new Event('input', { bubbles: true })); }
+        return; }
       const only = e.target.closest('[data-only]'); if (only) { e.preventDefault(); return apply([only.dataset.only]); }
       if (e.target.closest('[data-sp-apply]') && pending.size) return apply([...pending].sort());
       if (e.target.closest('[data-sp-clear]')) { pending = new Set(); pop.querySelectorAll('[data-site]').forEach(c => { c.checked = false; }); const b = pop.querySelector('[data-sp-apply]'); b.disabled = true; b.textContent = 'Show sites'; }
@@ -1448,7 +1461,7 @@ LambdaData.ready.then(D => {
       return `<b class="st-warning">${c.n}</b>`; };
     function sitesShown() {
       const H = D.HEALTH; if (!H) return [];
-      const mine = LambdaAlerts.mySites(D);
+      const mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : LambdaAlerts.mySites(D));
       let list = scope === 'mine' && mine.size ? H.sites.filter(s => mine.has(s.code)) : H.sites;
       return onlyProblems ? list.filter(s => s.level === 'critical' || s.level === 'warning') : list;
     }
@@ -1457,7 +1470,7 @@ LambdaData.ready.then(D => {
       $('#healthBadge').hidden = !(H && (H.totals.leak || H.freshBreakers)); if (H) $('#healthBadge').textContent = H.totals.leak + H.freshBreakers || '';
       if (activeView !== 'health') return;
       if (!H) { box.innerHTML = `<div class="hempty"><h3>Site health</h3><p class="muted">Leaks, tripped breakers, PDU alarms, power shelves, hardware faults, hot inlets, network devices down and monitoring gaps for every site come from Grafana. Turn on <b>Grafana</b> in Settings → Sources and sign in to grafana.aws.lambdalabs.cloud once.</p></div>`; return; }
-      const sites = sitesShown(), mine = LambdaAlerts.mySites(D);
+      const sites = sitesShown(), mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : LambdaAlerts.mySites(D));
       const sum = k => sites.reduce((t, s) => t + (s.checks[k].n || 0), 0), fresh = sites.reduce((t, s) => t + s.checks.breaker.fresh, 0);
       const chip = (k, label, cls) => `<span class="hsum ${cls}"><b>${k}</b>${label}</span>`;
       const errs = Object.keys(H.errors || {});

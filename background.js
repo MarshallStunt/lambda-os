@@ -71,7 +71,9 @@ scheduleRefresh();
 /* ---------------- Alerts ---------------- */
 async function buildD(snap) {
   await LambdaData.prepare(); // load tracked deployments
-  return LambdaData.buildLive(snap);
+  const D = LambdaData.buildLive(snap);
+  (D.RAW ||= {}).myPrefs = await LambdaData.loadMySites(); // sites you starred as yours in the site picker
+  return D;
 }
 // Notifications and the brief follow the site picker in the top bar (all sites, your sites, or chosen ones).
 const scoped = async D => LambdaData.scope(D, await LambdaData.loadScope());

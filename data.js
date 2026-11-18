@@ -231,7 +231,7 @@
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
-    D.RAW = { closed30: jr?.closed30 || null, closedEpics: jr?.closedEpics || null, codeOf };
+    D.RAW = { closed30: jr?.closed30 || null, closedEpics: jr?.closedEpics || null, workHist: jr?.workHist || null, codeOf };
     return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, codeOf, meId });
   }
 
@@ -708,9 +708,45 @@
     try { localStorage.setItem('lambdaos-' + SCOPE_KEY, JSON.stringify(v)); } catch { /* ignore */ }
     try { if (typeof chrome !== 'undefined' && chrome.storage?.local) await chrome.storage.local.set({ [SCOPE_KEY]: v }); } catch { /* ignore */ }
   }
-  // Sites of your own tickets and tracked deployments (same idea as the Health tab's "Your sites").
-  const yourSiteCodes = D => [...new Set([...D.TICKETS.filter(t => t.mine || t.assignee === 'me').map(t => t.site),
-    ...(D.tracked ? D.tracked() : []).flatMap(d => d.sites || [])].filter(Boolean))].sort();
+  // Sites you've starred as yours (or unstarred from the suggestion), for sites you belong to but haven't worked at yet.
+  const MINE_KEY = 'mySites';
+  async function loadMySites() {
+    let v = null;
+    try { if (typeof chrome !== 'undefined' && chrome.storage?.local) v = (await chrome.storage.local.get(MINE_KEY))[MINE_KEY]; } catch { /* fall back */ }
+    if (!v) try { v = JSON.parse(localStorage.getItem('lambdaos-' + MINE_KEY)); } catch { /* none */ }
+    return { add: [...(v?.add || [])], remove: [...(v?.remove || [])] };
+  }
+  async function saveMySites(v) {
+    try { localStorage.setItem('lambdaos-' + MINE_KEY, JSON.stringify(v)); } catch { /* ignore */ }
+    try { if (typeof chrome !== 'undefined' && chrome.storage?.local) await chrome.storage.local.set({ [MINE_KEY]: v }); } catch { /* ignore */ }
+  }
+  // Your sites, from where you actually work: the tickets assigned to you over the last 90 days (closed ones too),
+  // counted by site. The busiest site always counts; another counts when it has at least 25% of your tickets.
+  // Without that history yet, it falls back to the sites of tickets assigned to you right now.
+  const MIN_SHARE = 0.25;
+  function yourSitesInfo(D) {
+    const W = D.RAW?.workHist, codeOf = D.RAW?.codeOf;
+    const tally = new Map(); let total = 0, from = '';
+    if (W?.counts && codeOf) {
+      for (const [raw, n] of Object.entries(W.counts)) { const c = codeOf(raw.replace(/^host:/, '')); if (c) { tally.set(c, (tally.get(c) || 0) + n); total += n; } }
+      from = `your last ${W.days || 90} days in Jira (${total} tickets)`;
+    }
+    if (!total) {
+      for (const t of D.TICKETS) if (t.site && t.assignee === 'me') { tally.set(t.site, (tally.get(t.site) || 0) + 1); total++; }
+      from = total ? `tickets assigned to you now (${total})` : '';
+    }
+    const ranked = [...tally].sort((a, b) => b[1] - a[1]).map(([code, n]) => ({ code, n, share: n / total }));
+    const P = D.RAW?.myPrefs || { add: [], remove: [] }, removed = new Set(P.remove);
+    const guessed = ranked.filter((x, i) => i === 0 || x.share >= MIN_SHARE);
+    // A site being deployed may have no tickets yet: deployments assigned to you in Jira count too.
+    const depSites = new Map();
+    for (const d of (D.ALL || D).DEPLOYMENTS || []) if (d.assignee === 'me' && d.cat !== 'done') for (const c of d.sites || []) if (!depSites.has(c)) depSites.set(c, d.key);
+    const fromDeps = [...depSites].filter(([c]) => !guessed.some(x => x.code === c)).map(([code, dep]) => ({ code, n: tally.get(code) || 0, share: total ? (tally.get(code) || 0) / total : 0, dep }));
+    const picked = [...guessed.filter(x => !removed.has(x.code)), ...fromDeps.filter(x => !removed.has(x.code) && !P.add.includes(x.code)),
+      ...P.add.filter(c => !guessed.some(x => x.code === c) && (!D.siteById || D.siteById(c))).map(code => ({ code, n: tally.get(code) || 0, share: total ? (tally.get(code) || 0) / total : 0, starred: true }))];
+    return { codes: [...new Set(picked.map(x => x.code))].sort(), picked, guessed: [...guessed.map(x => x.code), ...fromDeps.map(x => x.code)], ranked, total, from, prefs: P };
+  }
+  const yourSiteCodes = D => yourSitesInfo(D).codes;
 
   // A copy of D limited to some sites: tickets, devices, deployments, shipments, builds, feed, health and the top cards
   // (with their 30-day charts where the history knows the site). The globe keeps every site; search keeps everything (D.ALL).
@@ -793,7 +829,7 @@
   }
 
   async function start() {
-    const D = await startRaw(); D.yourSites = () => yourSiteCodes(D);
+    const D = await startRaw(); (D.RAW ||= {}).myPrefs = await loadMySites(); D.yourSites = () => yourSiteCodes(D); D.yourSitesInfo = () => yourSitesInfo(D);
     return scope(D, await loadScope());
   }
   async function startRaw() {
@@ -819,6 +855,6 @@
   const root = typeof self !== 'undefined' ? self : window;
   const prepare = async () => { TRACKED = new Set(await loadTracked()); };
   root.LambdaData = typeof document !== 'undefined'
-    ? { ready: start(), buildLive, buildMock, prepare, scope, loadScope, saveScope }
-    : { buildLive, buildMock, prepare, scope, loadScope, saveScope };
+    ? { ready: start(), buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites }
+    : { buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites };
 })();

@@ -265,6 +265,24 @@ const LambdaLive = (() => {
     const rows = (await Promise.all(jqls.map(j => search(get, j, 1000, 'summary,created,resolutiondate,issuetype').catch(() => [])))).flat();
     return rows.filter(i => !/initiative/i.test(i.fields.issuetype?.name || '')).map(i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.fields.summary || '']).filter(([c, r]) => c && r);
   }
+  // Where you work: the DC tickets assigned to you at any point in the last 90 days (closed ones too), by their site
+  // value or hostname. Lambda OS turns this into "Your sites" in the site picker. Read once a day and kept until tomorrow.
+  async function workHistory(get, s, F) {
+    let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none */ }
+    const dk = t => new Date(t).toDateString();
+    if (prev?.workHist && dk(prev.workHist.at) === dk(Date.now())) return prev.workHist;
+    const project = (stripOrder(s.fleetJql).match(/project\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i) || [])[1];
+    const jql = `${project ? `project = ${project} AND ` : ''}assignee WAS currentUser() AND updated >= -90d`;
+    const siteIds = F.site || [], hostIds = F.host || [], first = (f, ids) => ids.map(id => f[id]).find(filled);
+    const rows = await search(get, jql, 3000, [...siteIds, ...hostIds].join(',') || 'summary', null, 'of your tickets');
+    const counts = {};
+    for (const i of rows) {
+      const sv = first(i.fields, siteIds), raws = (Array.isArray(sv) ? sv.map(val) : [val(sv)]).filter(Boolean);
+      const key = raws[0] || `host:${val(first(i.fields, hostIds)).split(/[\s,|]+/)[0] || ''}`;
+      if (key !== 'host:') counts[key] = (counts[key] || 0) + 1;
+    }
+    return { at: Date.now(), total: rows.length, counts, days: 90 };
+  }
   // Waiting on parts / RMA for each of the last 29 days, from Jira's history search ("status WAS IN (...) ON date").
   // Each count takes a few seconds, so this runs once a day (6 at a time) and is kept until tomorrow.
   async function waitingHistory(base, s, issues) {
@@ -313,6 +331,7 @@ const LambdaLive = (() => {
       portfolio: port.v || [], portfolioError: port.e ? String(port.e.message || port.e) : '',
       closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null, closedEpics: epicsClosed,
       waitHist: await waitingHistory(base, s, issues).catch(() => null),
+      workHist: await workHistory(get, s, F).catch(() => null),
     };
   }
 
