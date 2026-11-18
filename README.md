@@ -102,6 +102,7 @@ instead and update with the one-line command in Settings → Updates.
 ## Using it
 - **⌘K** (Ctrl+K on Windows/Linux) or **/** opens search; **⌘J** / Ctrl+J opens the AI panel. Try `CMH01`, a hostname, `DC-33191`, `low stock at LAX01`, `203-000536`, `waiting parts on site`, `what breaches SLA today`, or start with `?` to force a question.
 - **📍 Site picker** (top bar, next to search): All sites, Your sites (where you work: the site of most of your Jira tickets over the last 90 days, plus any other site with at least 25% of them, plus sites of deployments assigned to you; ★ any site to add it, or un-★ a suggestion to drop it), or any sites you tick (`only` picks one). The top cards and their charts, tickets, feed, sites list, Second brain, Health, deployments, notifications and the brief all follow it; the globe zooms to those sites; search still covers every site. Each person's choice is saved in their own browser. Devices and Waiting parts keep their 30-day chart for all sites only.
+- **Second brain, Deployments and Health** each have their own **All sites / Your sites** switch (inside whatever the top-bar picker shows); each remembers its choice.
 - **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, **e** (or the ⤢ button) makes the middle panel fill the screen, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.

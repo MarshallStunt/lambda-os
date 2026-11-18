@@ -1148,6 +1148,15 @@ LambdaData.ready.then(D => {
     fleetMode = 'globe'; FlatMap.fromGlobe = false; backToDots(); setView('globe');
   });
 
+  /* ---------------- "All sites / Your sites" switch for the Second brain and Deployments ---------------- */
+  // Works inside whatever the top-bar site picker shows; "Your sites" is the same list as the picker's (Jira history,
+  // deployments assigned to you, and the sites you starred). Each view remembers its own choice.
+  const MINE = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : []);
+  const vscope = k => { try { return MINE.size && localStorage.getItem('lambdaos-vscope-' + k) === 'mine' ? 'mine' : 'all'; } catch { return 'all'; } };
+  const setVscope = (k, v) => { try { localStorage.setItem('lambdaos-vscope-' + k, v); } catch { /* per-viewer convenience */ } };
+  const scopeSeg = (k, cur) => MINE.size ? `<span class="seg" title="Your sites: ${esc([...MINE].join(', '))}">${[['all', 'All sites'], ['mine', 'Your sites']].map(([v, l]) =>
+    `<button class="chip ${cur === v ? 'on' : ''}" data-vscope="${k}:${v}" aria-pressed="${cur === v}">${l}</button>`).join('')}</span>` : '';
+
   /* ---------------- Second brain (neurons) ---------------- */
   // Everything linked, drawn as a neural net: glowing somas, curved dendrites, and signals firing along them.
   // Hot nodes (breached tickets, deployments at risk, fresh Slack mentions) fire more often.
@@ -1192,22 +1201,26 @@ LambdaData.ready.then(D => {
       const e = { a, b, bend: (rnd() - 0.5) * 0.9 };
       edges.push(e); a.nb.add(b); b.nb.add(a); a.out.push(e); b.out.push(e);
     };
-    // With the site picker set, only those sites (and what hangs off them) are in the brain.
-    const inScope = id => !D.SCOPE || D.SCOPE.has(id);
+    // With the site picker set, only those sites (and what hangs off them) are in the brain; "Your sites" narrows it further.
+    let bscope = vscope('graph');
+    const inScope = id => (!D.SCOPE || D.SCOPE.has(id)) && (bscope !== 'mine' || MINE.has(id));
+    const anyIn = arr => (arr || []).some(inScope);
     const siteNode = id => { const s = inScope(id) && D.siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
     const person = (id, name) => id ? add('person:' + id, 'person', id === 'me' ? 'You' : name, D.personById(id)) : null;
     const hot = h => h === 'critical' ? 1 : h === 'warning' ? 0.5 : 0;
 
-    D.SITES.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
-    for (const p of D.PROJECTS || []) add('proj:' + p.key, 'project', p.title || p.key, p, hot(p.health));
-    for (const d of D.DEPLOYMENTS || []) {
+    function build() {
+    nodes.length = 0; edges.length = 0; byId.clear(); pulses.length = 0; seed = 7; hover = null; dragNode = null;
+    D.SITES.filter(s => D.SCOPE || bscope === 'mine' ? inScope(s.id) : s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
+    for (const p of (D.PROJECTS || []).filter(p => bscope !== 'mine' || anyIn(p.sites))) add('proj:' + p.key, 'project', p.title || p.key, p, hot(p.health));
+    for (const d of (D.DEPLOYMENTS || []).filter(d => bscope !== 'mine' || anyIn(d.sites))) {
       const n = add('dep:' + d.key, 'deployment', d.site ? `${d.site} ${d.gpus ? d.gpus.toLocaleString() + '×' + d.gpuModel : d.key}` : d.key, d, hot(d.health));
       if (d.project) link(n, byId.get('proj:' + d.project.key));
       d.sites.forEach(c => link(n, siteNode(c)));
       link(n, person(d.assignee, d.assigneeName));
       for (const c of d.channels || []) link(n, add('chan:' + c.id, 'channel', '#' + c.name, c));
     }
-    const urgent = [...D.TICKETS].sort(byUrgency).slice(0, 180);
+    const urgent = D.TICKETS.filter(t => bscope !== 'mine' || inScope(t.site)).sort(byUrgency).slice(0, 180);
     for (const t of urgent) {
       const n = add('tk:' + t.key, 'ticket', t.key, t, slaStatus(t) === 'critical' ? 0.7 : slaStatus(t) === 'serious' ? 0.4 : 0);
       const dev = D.deviceById(t.device), site = siteNode(t.site);
@@ -1225,6 +1238,8 @@ LambdaData.ready.then(D => {
       const n = add('ev:' + e.title + e.at, 'event', e.title.length > 28 ? e.title.slice(0, 27) + '…' : e.title, e);
       link(n, e.deployment ? byId.get('dep:' + e.deployment) : siteNode(e.site));
     }
+    }
+    build();
 
     function resize() { const r = cv.getBoundingClientRect(); dpr = devicePixelRatio || 1; w = r.width || 1; h = r.height || 1; cv.width = w * dpr; cv.height = h * dpr; }
     new ResizeObserver(resize).observe(cv);
@@ -1442,6 +1457,7 @@ LambdaData.ready.then(D => {
       set3d: on => { if (on === mode3d) return; mode3d = on; try { localStorage.setItem('lambdaos-brain3d', on ? '1' : '0'); } catch { /* ignore */ }
         alpha = Math.max(alpha, 0.5); for (let i = 0; i < 120; i++) tick(); fit(); },
       counts: () => Object.fromEntries(Object.keys(TYPES).map(k => [k, nodes.filter(n => n.type === k).length])),
+      scope: () => bscope, setScope: v => { if (v === bscope) return; bscope = v; setVscope('graph', v); build(); alpha = 1; warmed = false; },
       isHidden: k => hidden.has(k), toggle: k => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); hover = null; return !hidden.has(k); },
     };
   })();
@@ -1513,11 +1529,11 @@ LambdaData.ready.then(D => {
 
   const Deploys = (() => {
     const el = $('#deploys');
-    let filter = 'all', tag = 'all';
+    let filter = 'all', tag = 'all', dscope = vscope('deploys');
     const DAY = 864e5;
     function render() {
-      const all = D.DEPLOYMENTS || [], now = Date.now();
-      if (!all.length) {
+      const all = (D.DEPLOYMENTS || []).filter(d => dscope !== 'mine' || d.sites.some(c => MINE.has(c))), now = Date.now();
+      if (!(D.DEPLOYMENTS || []).length) {
         el.innerHTML = `<div class="dempty muted">No deployments loaded. They come from Jira PMO epics and Cluster Intake (Settings → Jira).${D.SOURCES.find(s => s.key === 'jira')?.title?.includes('failed') ? '<br>' + esc(D.SOURCES.find(s => s.key === 'jira').title) : ''}</div>`;
         return;
       }
@@ -1544,6 +1560,7 @@ LambdaData.ready.then(D => {
           <i style="width:${Math.round((d.progress || 0) * 100)}%"></i><b>${d.progress != null ? pct(d.progress) : ''}</b></span>`;
       };
       el.innerHTML = `<div class="dtools">
+          ${scopeSeg('deploys', dscope)}${MINE.size ? '<span class="dsep"></span>' : ''}
           ${[['all', 'All', all.length], ['tracking', '★ Tracking', D.tracked().length], ['risk', 'At risk', all.filter(d => ['critical', 'warning'].includes(d.health)).length]].map(([k, l, n]) => `<button class="chip ${filter === k ? 'on' : ''}" data-dfilter="${k}">${l} <small>${n}</small></button>`).join('')}
           <span class="dsep"></span>
           ${['all', ...tags].map(t => `<button class="chip ${tag === t ? 'on' : ''}" data-dtag="${esc(t)}">${t === 'all' ? 'Every type' : esc(t)}</button>`).join('')}
@@ -1560,13 +1577,15 @@ LambdaData.ready.then(D => {
                   <div class="dmeta"><span class="mono">${d.key}</span>${d.sites.map(c => ` · <b>${esc(c)}</b>`).join('')}${d.gpus ? ` · ${d.gpus.toLocaleString()}×${esc(d.gpuModel)}` : ''} · ${statusChip(d.health, depStatus(d))}</div></div></div>
                 <div class="dtrack">${months.map(t => `<span class="dgridline" style="left:${X(t)}%"></span>`).join('')}<span class="dtoday" style="left:${X(now)}%"></span>${bar(d)}</div></div>`).join('');
           }).join('')}
-          ${list.length ? '' : '<div class="dempty muted">Nothing matches this filter.</div>'}
+          ${list.length ? '' : `<div class="dempty muted">${dscope === 'mine' && !all.length ? 'No deployments at your sites. Switch to All sites to see the rest.' : 'Nothing matches this filter.'}</div>`}
         </div>`;
     }
     el.addEventListener('click', e => {
       const f = e.target.closest('[data-dfilter]'), t = e.target.closest('[data-dtag]');
       if (f) { filter = f.dataset.dfilter; render(); e.stopPropagation(); }
       if (t) { tag = t.dataset.dtag; render(); e.stopPropagation(); }
+      const sc = e.target.closest('[data-vscope]');
+      if (sc?.dataset.vscope.startsWith('deploys:')) { dscope = sc.dataset.vscope.slice(8); setVscope('deploys', dscope); render(); e.stopPropagation(); }
     });
     return { render, setFilter: f => { filter = f; render(); } };
   })();
@@ -1590,6 +1609,7 @@ LambdaData.ready.then(D => {
       const n = Brain.counts();
       return Object.entries(Brain.TYPES).filter(([k]) => n[k]).map(([k, t]) =>
         `<button class="chip ${Brain.isHidden(k) ? '' : 'on'}" data-btype="${k}" aria-pressed="${!Brain.isHidden(k)}"><svg viewBox="0 0 10 10">${shapeSvg(t.shape, t.color)}</svg>${t.label} <small>${n[k]}</small></button>`).join('')
+        + scopeSeg('graph', Brain.scope())
         + '<button class="chip" data-brain="fit" title="Fit everything (double-click)">Fit</button>'
         + `<span class="seg" title="View">${[['2d', '2D'], ['3d', '3D']].map(([k, l]) => `<button class="chip ${(k === '3d') === Brain.is3d() ? 'on' : ''}" data-brain="${k}" aria-pressed="${(k === '3d') === Brain.is3d()}">${l}</button>`).join('')}</span>`;
     },
@@ -1607,6 +1627,7 @@ LambdaData.ready.then(D => {
     if (b.dataset.basemap) { autoSat = false; Tiles.set(b.dataset.basemap); setView('globe'); }
     if (b.dataset.btype) { Brain.toggle(b.dataset.btype); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === 'fit') Brain.fit();
+    if (b.dataset.vscope?.startsWith('graph:')) { Brain.setScope(b.dataset.vscope.slice(6)); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === '2d' || b.dataset.brain === '3d') { Brain.set3d(b.dataset.brain === '3d'); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
   });
   function hint() {
