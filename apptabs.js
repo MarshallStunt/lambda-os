@@ -25,10 +25,11 @@ const LambdaTabs = (() => {
 
   // The apps that are read from a page. `home` is the path our tab should stay under; `pinned: false` = temporary tab.
   function apps(s = {}) {
-    let ns = null, at = null, gf = null;
+    let ns = null, at = null, gf = null, yd = null;
     try { ns = new URL(s.netsuiteUrl).origin; } catch { /* not set */ }
     try { at = new URL(s.atiumUrl || 'https://kelsier.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
     try { gf = new URL(s.grafanaUrl || 'https://grafana.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
+    try { yd = new URL(s.yardUrl || 'https://yard-central.aws.lambdalabs.cloud').origin; } catch { /* not set */ }
     const list = [
       { key: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: '/client', pinned: true, always: true },
       { key: 'gmail', name: 'Gmail', url: 'https://mail.google.com/mail/u/0/', home: '/mail/', pinned: true },
@@ -39,6 +40,8 @@ const LambdaTabs = (() => {
       ns && { key: 'netsuite', name: 'NetSuite', url: `${ns}/app/center/card.nl`, home: '/app/', pinned: false },
       // Grafana is normally read directly; a temporary tab is only used if its sign-in refuses direct reads.
       gf && { key: 'grafana', name: 'Grafana', url: `${gf}/dashboards`, home: '/', pinned: false },
+      // Yard Central keeps its Okta sign-in in the page too, so it's read from its own tab (read-only host searches).
+      yd && { key: 'yard', name: 'Yard', url: `${yd}/dashboard`, home: '/', pinned: true },
     ].filter(Boolean);
     return Object.fromEntries(list.map(a => [a.key, a]));
   }

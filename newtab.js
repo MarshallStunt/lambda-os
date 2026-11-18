@@ -6,7 +6,19 @@ LambdaData.ready.then(D => {
   $('#boot')?.remove();
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const H = 3600e3;
-  const ALLT = () => (D.ALL || D).TICKETS; // site cards, drawers and answers about a specific thing show all its tickets, whatever the picker
+  const ALLT = () => (D.ALL || D).TICKETS;
+  // Yard Central (read-only): a host's state, pool, lock and Starbase, plus a link to it in Yard.
+  const yardOf = host => host ? D.YARD?.hosts?.[String(host).toLowerCase()] || null : null;
+  const yardUrl = host => host && D.YARD?.base ? `${D.YARD.base}/search?q=${encodeURIComponent(host)}` : '';
+  const yardChip = host => { const y = yardOf(host); return y?.found && y.state ? ` <span class="yard-chip ${y.lockedBy ? 'locked' : ''}" title="Yard: ${esc([y.state, y.pool && 'pool ' + y.pool, y.lockedBy && 'locked by ' + y.lockedBy, y.starbase && 'in Starbase'].filter(Boolean).join(' · '))}">${y.lockedBy ? '🔒 ' : ''}${esc(y.state)}</span>` : ''; };
+  const yardBlock = host => {
+    if (!host || !D.YARD) return '';
+    const y = yardOf(host);
+    const body = !y ? `<span class="muted">${D.YARD.live ? 'Not looked up yet (Lambda OS checks ticket hosts a batch at a time).' : 'Turn on Yard in Settings → Sources to see this host\'s state here.'}</span>`
+      : !y.found ? '<span class="muted">Not found in Yard.</span>'
+      : `<b>${esc(y.state || '—')}</b>${y.pool ? ` · pool <b>${esc(y.pool)}</b>` : ''}${y.lockedBy ? ` · 🔒 locked by <b>${esc(y.lockedBy)}</b>` : ' · not locked'}${y.starbase ? ' · in Starbase' : ''}${y.status && y.status !== 'active' ? ` · ${esc(y.status)}` : ''}${y.region ? ` <span class="muted">(${esc(String(y.region).toUpperCase())}${y.at ? `, checked ${rel(y.at) === 'now' ? 'just now' : rel(y.at) + ' ago'}` : ''})</span>` : ''}`;
+    return `<div class="yard-row"><span class="yard-tag">Yard</span><span>${body}</span></div>`;
+  }; // site cards, drawers and answers about a specific thing show all its tickets, whatever the picker
   const isExt = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
   // Canvas colors come from the stage, which stays dark in both themes (so a theme switch needs no repaint of the canvases).
   const stageStyle = getComputedStyle(document.querySelector('.stage') || document.documentElement);
@@ -473,7 +485,7 @@ LambdaData.ready.then(D => {
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
-          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
+          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
   }
@@ -1894,17 +1906,19 @@ LambdaData.ready.then(D => {
           ${dev ? `<dt>Device</dt><dd><a data-open="device:${esc(dev.id)}" class="mono">${esc(dev.id)}</a></dd><dt>Location</dt><dd>${esc(dev.rack)}${dev.u ? ` · U${dev.u}` : ''}</dd><dt>Model</dt><dd>${esc(dev.model)}</dd>` : ''}
           ${part ? `<dt>Part</dt><dd><a data-open="part:${esc(part.id)}">${esc(partLabel(part))}</a>${stockHere ? ` · <b>${stockHere.stock} on hand at ${esc(site.id)}</b>` : site ? ` · none on hand at ${esc(site.id)}` : ''}</dd>` : ''}
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
+        ${yardBlock(t.device)}
         ${alertsBlock(t.alerts)}
-        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
     }
     if (type === 'device') {
       const d = ref, ts = ALLT().filter(t => t.device === d.id).sort(byUrgency);
       return Drawer.open(`<div class="qkey">DEVICE</div><h3 class="mono">${esc(d.id)}</h3>
         <dl class="kv"><dt>Model</dt><dd>${esc(d.model)}</dd>${d.serial ? `<dt>Serial</dt><dd class="mono">${esc(d.serial)}</dd>` : ''}
           <dt>Site</dt><dd>${d.site ? `<a data-open="site:${esc(d.site)}">${esc(d.site)}</a>` : '—'}</dd><dt>Rack / U</dt><dd>${esc(d.rack)}${d.u ? ` · U${d.u}` : ''}</dd></dl>
+        ${yardBlock(d.id)}
         ${alertsBlock(d.alerts)}
         <div class="section-title"><span>Open tickets</span><span>${ts.length}</span></div>${ts.map(ticketRow).join('') || '<p class="muted">None.</p>'}
-        <div class="links">${btn('Open in NetBox', d.url, true)}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in NetBox', d.url, true)}${btn('Open in Yard', yardUrl(d.id))}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
     }
     if (type === 'part') {
       const p = ref, rows = D.SITES.map(s => ({ s, i: s.inventory.find(x => x.part === p.id) })).filter(r => r.i).sort((a, b) => b.i.stock - a.i.stock);

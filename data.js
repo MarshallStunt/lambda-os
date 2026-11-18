@@ -225,7 +225,7 @@
     };
     const D = finish({
       MODE: 'live', AT: snap.at,
-      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'),
+      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'), src('yard', 'Yard'),
         { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
       ME: { name: jr?.me?.name || '' },
       LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '', grafana: snap.grafana?.base || '' },
@@ -233,6 +233,8 @@
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
+    // Yard Central: host state / pool / lock / Starbase by hostname (lower case), read-only.
+    D.YARD = { base: snap.yard?.base || 'https://yard-central.aws.lambdalabs.cloud', hosts: snap.yard?.hosts || {}, live: !!snap.yard };
     D.RAW = { closed30: jr?.closed30 || null, closedEpics: jr?.closedEpics || null, workHist: jr?.workHist || null, codeOf };
     return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, codeOf, meId });
   }
@@ -693,6 +695,9 @@
       build('YQB01-CL02 2048x B300', 'YQB01', 'Nvidia', 2048, 'B300', 0.52, 0.12, [-25, -12, -3, 85], 2),
       build('SEA01-CL01 2040x H100 conversion', 'SEA01', 'Anthropic', 2040, 'H100', 1, 0.94, [-75, -60, -30, -4], 4),
     ] };
+    // Demo Yard answers for the first devices, so the drawers show what Yard adds.
+    D.YARD = { base: 'https://yard-central.aws.lambdalabs.cloud', live: true, hosts: Object.fromEntries(D.DEVICES.slice(0, 40).map((d, i) => [d.id.toLowerCase(),
+      { found: true, region: (d.site || '').toLowerCase() + '-cl01', status: 'active', state: ['app_starbase', 'dc-ops', 'app_managed_k8s', 'maintenance'][i % 4], pool: ['ga', 'maintenance', 'ga', 'reclaim'][i % 4], lockedBy: i % 4 === 1 ? 'J. Chen' : null, starbase: i % 4 === 0 ? 'yes' : null, at: Date.now() }])) };
     return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, grafana: gfMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 

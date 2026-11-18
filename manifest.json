@@ -35,6 +35,7 @@
     "https://*.app.netsuite.com/*",
     "https://kelsier.aws.lambdalabs.cloud/*",
     "https://grafana.aws.lambdalabs.cloud/*",
+    "https://yard-central.aws.lambdalabs.cloud/*",
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",

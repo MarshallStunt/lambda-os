@@ -827,3 +827,8 @@ input.bad { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(
 #keyPop { z-index: 40; }
 #keyPop span { display: inline-flex; align-items: center; gap: 6px; }
 #keyPop svg { width: 10px; height: 10px; flex-shrink: 0; }
+/* Yard Central */
+.yard-row { display: flex; gap: 8px; align-items: baseline; margin: 10px 0 4px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+.yard-tag { font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: #8bd17c; flex-shrink: 0; }
+.yard-chip { font: 500 10px var(--mono); padding: 1px 6px; border-radius: 99px; border: 1px solid var(--line-hi); color: var(--text-2); white-space: nowrap; }
+.yard-chip.locked { border-color: rgba(250,178,25,.5); color: var(--warning); }

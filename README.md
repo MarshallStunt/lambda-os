@@ -105,6 +105,7 @@ instead and update with the one-line command in Settings → Updates.
 - **Second brain, Deployments and Health** each have their own **All sites / Your sites** switch (inside whatever the top-bar picker shows); each remembers its choice.
 - **DC Ops / Management** (under the greeting) switches the top cards: Management shows SLA met % (last 30 days, 7-day rolling chart), sites healthy, deployments at risk and GPUs handed off this month (Atium).
 - A short **tour** runs the first time; take it again from Settings → Help.
+- **Yard** (Yard Central, read-only): ticket rows show each host's Yard state (🔒 when locked); ticket and device drawers show state, pool, lock and Starbase, with **Open in Yard**. Read through a pinned Yard Central tab with your Okta sign-in; Lambda OS never locks, unlocks or runs plans.
 - **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, **e** (or the ⤢ button) makes the middle panel fill the screen, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.

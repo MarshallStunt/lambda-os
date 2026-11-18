@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
-const FIELDS = ['atiumUrl', 'grafanaUrl', 'jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
-const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl', 'atiumUrl', 'grafanaUrl'];
+const FIELDS = ['atiumUrl', 'yardUrl', 'grafanaUrl', 'jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
+const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl', 'atiumUrl', 'yardUrl', 'grafanaUrl'];
 // An address is only saved once it looks complete (https://host.domain or a localhost address), so a half-typed one
 // can't break the next refresh; the field says what's wrong and the last good address is kept meanwhile.
 const urlOk = v => { try { const u = new URL(v); return /^https?:$/.test(u.protocol) && (u.hostname.includes('.') || u.hostname === 'localhost'); } catch { return false; } };
@@ -216,6 +216,7 @@ async function save(opts = {}) {
     calendar: () => `${snap.calendar?.events?.length ?? 0} upcoming events`,
     netsuite: () => `${snap.netsuite?.onhand?.length ?? 0} items on hand, ${snap.netsuite?.moves?.length ?? 0} material movements`,
     atium: () => `${snap.atium?.sites?.length ?? 0} sites, ${snap.atium?.builds?.length ?? 0} builds`,
+    yard: () => `${Object.values(snap.yard?.hosts || {}).filter(h => h.found).length} ticket hosts found so far`,
     grafana: () => `${Object.keys(snap.grafana?.sites || {}).length} sites with metrics${snap.grafana?.fleet ? ', site health on' : ''}`,
   };
   say(Object.entries(SOURCES).map(([k, name]) => {

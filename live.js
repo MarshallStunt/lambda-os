@@ -20,11 +20,12 @@ const LambdaLive = (() => {
     appTabs: true,                                         // keep pinned background tabs for apps read from a page (apptabs.js)
     netsuiteUrl: 'https://4930164.app.netsuite.com',
     atiumUrl: 'https://kelsier.aws.lambdalabs.cloud',
+    yardUrl: 'https://yard-central.aws.lambdalabs.cloud',   // Yard Central: each host's state, pool, lock and Starbase (read-only)
     grafanaUrl: 'https://grafana.aws.lambdalabs.cloud',        // Grafana (production): site power, temperatures, firing hardware alerts         // Atium (Infrastructure Intelligence): builds, site assets
     nsOnHandSearch: '3151',                                // ***Cloud: Material On Hand
     nsMovesSearch: '3152',                                 // ***Cloud: Material Transactions Full List
     calendarEmail: '',                                     // defaults to the Gmail / Jira account
-    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true, grafana: true },
+    sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true, grafana: true, yard: true },
     // AI assistant: provider 'off' | 'anthropic' | 'openai' | 'gemini' | 'local'. Keys stay in this browser and are never put in backups.
     ai: { provider: 'off', keys: { anthropic: '', openai: '', gemini: '', local: '' },
       models: { anthropic: 'claude-opus-5-5', openai: '', gemini: 'gemini-flash-lite-latest', local: '' },
@@ -848,9 +849,70 @@ const LambdaLive = (() => {
     throw new Error(`Grafana: ${result?.error || 'the Grafana tab did not answer.'}`);
   }
 
+  /* ---------------- Yard Central (host state, pool, lock, Starbase) ---------------- */
+  // Runs inside a Yard Central tab: uses the page's own sign-in, only for read-only host searches, and never returns or
+  // keeps the sign-in itself. Answers are matched by exact hostname; field names are read loosely (Yard changes often).
+  async function yardInPage(hosts) {
+    try {
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      let token = null;
+      for (let i = 0; i < 30 && !token; i++) { token = localStorage.getItem('token'); if (!token) await wait(500); }
+      if (!token) return { ok: false, error: /login|okta|signin/i.test(location.href) ? 'Not signed in to Yard Central in that tab.' : 'LOADING' };
+      const H = () => ({ Authorization: 'Bearer ' + localStorage.getItem('token'), Accept: 'application/json' });
+      const get = async p => {
+        const r = await fetch(p, { headers: H() });
+        if (r.status === 401 || r.status === 403) throw Object.assign(new Error('Yard Central sign-in expired.'), { auth: true });
+        if (!r.ok) throw new Error(`${p.split('?')[0]}: HTTP ${r.status}`);
+        return r.json();
+      };
+      const regs = await get('/api/v1/regions');
+      const list = (Array.isArray(regs) ? regs : regs.regions || regs.results || regs.data || Object.values(regs).find(Array.isArray) || []);
+      const regionIds = list.map(x => typeof x === 'string' ? x : x.id || x.key || x.name || x.region).filter(Boolean).map(x => String(x).toLowerCase());
+      const scalar = v => v == null || typeof v !== 'object';
+      const pick = (o, re, not) => { for (const [k, v] of Object.entries(o)) if (re.test(k) && !(not && not.test(k)) && v != null && v !== '') return scalar(v) ? v : (Array.isArray(v) ? v.join(', ') : v.name || v.username || v.id || JSON.stringify(v).slice(0, 60)); return null; };
+      const rows = j => { const a = Array.isArray(j) ? j : j.results || j.items || j.data || j.hosts || Object.values(j).find(Array.isArray) || [];
+        return a.flatMap(x => { const inner = x && Object.values(x).find(v => Array.isArray(v) && v.length && typeof v[0] === 'object' && ('hostname' in v[0] || 'name' in v[0]));
+          return inner ? inner.map(h => ({ region: x.region || x.name, ...h })) : [x]; }); };
+      const out = {}, todo = [...hosts];
+      const worker = async () => { while (todo.length) { const h = todo.shift();
+        try {
+          const j = await get(`/api/v1/search?q=${encodeURIComponent(h)}&endpoint=hosts&search_deep=false&include_jira=false&format=json&page=1&page_size=10&status=active,inactive,decommissioned${regionIds.length ? '&region=' + regionIds.join(',') : ''}`);
+          const m = rows(j).find(x => String(pick(x, /^(hostname|host_?name|name)$/i) || '').toLowerCase() === h.toLowerCase());
+          out[h] = m ? { found: true, region: pick(m, /region/i), status: pick(m, /^status$/i), state: pick(m, /state/i, /status|starbase/i), pool: pick(m, /pool/i),
+            lockedBy: pick(m, /lock/i), starbase: pick(m, /starbase/i), serial: pick(m, /serial/i), type: pick(m, /type|model/i, /state/i) } : { found: false };
+        } catch (e) { if (e.auth) throw e; out[h] = { error: String(e.message || e) }; } } };
+      await Promise.all(Array.from({ length: 6 }, worker));
+      return { ok: true, hosts: out };
+    } catch (e) { return { ok: false, error: String(e.message || e), auth: !!e.auth }; }
+  }
+  // Which hosts to look up: your tickets' hosts first, then the most urgent ones, at most 150 per refresh; each answer
+  // is kept 30 minutes, so the whole open-ticket list is covered within a few refreshes.
+  async function yard(s, jr) {
+    const app = LambdaTabs.apps(s).yard;
+    if (!app) throw new Error(`Yard address “${s.yardUrl}” isn't a valid URL.`);
+    await needAccess([new URL(app.url).origin + '/*']);
+    let prev = null; try { ({ snapshot: { yard: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* first run */ }
+    const now = Date.now(), keep = {};
+    for (const [h, v] of Object.entries(prev?.hosts || {})) if (now - (v.at || 0) < 6 * 3600e3) keep[h] = v; // older than 6h: dropped
+    const tickets = [...(jr?.tickets || [])].filter(t => t.host).sort((a, b) => (b.mine - a.mine) || ((a.slaDue || 9e15) - (b.slaDue || 9e15)));
+    const want = [...new Set(tickets.map(t => t.host.toLowerCase()))].filter(h => !keep[h] || now - keep[h].at > 30 * 60e3).slice(0, 150);
+    if (!want.length) return { at: now, base: new URL(app.url).origin, hosts: keep };
+    const read = () => LambdaTabs.run(app, yardInPage, [want], { useOwn: s.appTabs !== false });
+    let result, own, tab;
+    try {
+      ({ result, own, tab } = await read());
+      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); } // its sign-in renews on load
+    } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Yard: couldn't read through the Yard Central tab (${e.message}).`); }
+    if (result?.error === 'LOADING') throw new Error('Yard Central is still loading in its tab; trying again next refresh.');
+    if (!result?.ok && result?.auth) throw new AuthError(own ? 'SIGN_IN: sign in once in the pinned Yard Central tab' : 'Not signed in to Yard Central.', app.url);
+    if (!result?.ok) throw new Error(`Yard: ${result?.error || 'the Yard Central tab did not answer.'}`);
+    for (const [h, v] of Object.entries(result.hosts)) if (!v.error) keep[h] = { ...v, at: now };
+    return { at: now, base: new URL(app.url).origin, hosts: keep };
+  }
+
   /* ---------------- Refresh ---------------- */
-  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium', grafana: 'Grafana' };
-  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium', grafana: 'grafana' };
+  const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium', grafana: 'Grafana', yard: 'Yard' };
+  const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium', grafana: 'grafana', yard: 'yard' };
   let inflight = null;
   function refresh(progress) {
     inflight ||= (async () => {
@@ -868,6 +930,7 @@ const LambdaLive = (() => {
         netsuite: on('netsuite') ? netsuite(s, progress) : off,
         atium: on('atium') ? atium(s) : off,
         grafana: on('grafana') ? grafana(s) : off,
+        yard: on('yard') ? jrP.catch(() => null).then(j => yard(s, j)) : off, // needs the ticket hosts first
       }));
       const settled = await Promise.allSettled(Object.values(results));
       const snapshot = { at: Date.now(), version: 2, sources: {} };
@@ -931,7 +994,7 @@ const LambdaLive = (() => {
   function originsFor(s) {
     const o = k => { try { return new URL(s[k]).origin + '/*'; } catch { return null; } };
     const on = k => s.sources?.[k] !== false;
-    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'),
+    return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
   return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite };
