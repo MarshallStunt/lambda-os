@@ -1192,11 +1192,13 @@ LambdaData.ready.then(D => {
       const e = { a, b, bend: (rnd() - 0.5) * 0.9 };
       edges.push(e); a.nb.add(b); b.nb.add(a); a.out.push(e); b.out.push(e);
     };
-    const siteNode = id => { const s = D.siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
+    // With the site picker set, only those sites (and what hangs off them) are in the brain.
+    const inScope = id => !D.SCOPE || D.SCOPE.has(id);
+    const siteNode = id => { const s = inScope(id) && D.siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
     const person = (id, name) => id ? add('person:' + id, 'person', id === 'me' ? 'You' : name, D.personById(id)) : null;
     const hot = h => h === 'critical' ? 1 : h === 'warning' ? 0.5 : 0;
 
-    D.SITES.filter(s => s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
+    D.SITES.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
     for (const p of D.PROJECTS || []) add('proj:' + p.key, 'project', p.title || p.key, p, hot(p.health));
     for (const d of D.DEPLOYMENTS || []) {
       const n = add('dep:' + d.key, 'deployment', d.site ? `${d.site} ${d.gpus ? d.gpus.toLocaleString() + '×' + d.gpuModel : d.key}` : d.key, d, hot(d.health));
@@ -1219,6 +1221,7 @@ LambdaData.ready.then(D => {
     const soon = Date.now() + 3 * 864e5;
     for (const e of (D.EVENTS || []).filter(e => e.at < soon)) {
       if (!e.deployment && !e.site) continue;
+      if (D.SCOPE && !(e.deployment && byId.has('dep:' + e.deployment)) && !(e.site && inScope(e.site))) continue;
       const n = add('ev:' + e.title + e.at, 'event', e.title.length > 28 ? e.title.slice(0, 27) + '…' : e.title, e);
       link(n, e.deployment ? byId.get('dep:' + e.deployment) : siteNode(e.site));
     }
