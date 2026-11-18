@@ -636,8 +636,12 @@ LambdaData.ready.then(D => {
       const s = D.siteById(m.site || f.ref), hosts = m.hosts || [];
       body = head(esc(`${m.name || 'Alert'} at ${m.site || f.ref}`), `${hosts.length} host${hosts.length === 1 ? '' : 's'} · first fired ${rel(f.at)} ago`)
         + `<div class="section-title"><span>Hosts</span><span>${hosts.length}</span></div>`
-        + hosts.slice(0, 40).map(h => { const d = D.deviceById(h) || D.deviceById(String(h).toLowerCase()), al = d?.alerts?.find(a => a.name === m.name);
-          return `<div class="mini-ticket" ${d ? `data-open="device:${esc(d.id)}"` : ''}><span class="qkey mono">${esc(h)}</span><span class="qsum">${al ? alertLine(al) : esc(d ? `${d.rack || ''}${d.u ? ' U' + d.u : ''}` : '')}${yardChip(h)}</span><span class="small muted">${ALLT().filter(t => t.device === d?.id).length ? `${ALLT().filter(t => t.device === d.id).length} ticket(s)` : 'no ticket'}</span></div>`; }).join('');
+        + `<div class="hlist">${hosts.slice(0, 40).map(h => { const d = D.deviceById(h) || D.deviceById(String(h).toLowerCase()), al = d?.alerts?.find(a => a.name === m.name);
+          const ts = d ? ALLT().filter(t => t.device === d.id) : [];
+          const sub = [d?.rack && `Rack <b class="mono">${esc(d.rack)}</b>${d.u ? ` · U${esc(d.u)}` : ''}`, al?.since && `<span class="muted">since ${rel(al.since)} ago</span>`,
+            ts.length ? ts.slice(0, 3).map(t => `<a class="tagchip" data-ticket="${esc(t.key)}" title="${esc(t.summary)}">${esc(t.key)}</a>`).join(' ') : '<span class="muted">no open ticket</span>', yardChip(h).trim()].filter(Boolean);
+          return `<div class="hrow"><div class="hrow-top">${d ? `<a data-open="device:${esc(d.id)}" class="mono">${esc(h)}</a>` : `<span class="mono">${esc(h)}</span>`}<span class="hrow-what">${esc(m.name || '')}${al?.gpu ? ` · GPU ${esc(al.gpu)}` : ''}</span></div>
+            <div class="hrow-sub">${sub.map(v => `<span>${v}</span>`).join('<span class="hdot">·</span>')}</div></div>`; }).join('')}</div>`;
       links = `${s?.gf?.url ? btn('Site health in Grafana', s.gf.url, true) : ''}${s ? `<button class="btn" data-site="${esc(s.id)}">Site card</button>` : ''}`;
     } else if (f.src === 'atium') {
       const b = m.build || {}, ms = m.milestone || {}, dep = b.deploymentKey && D.deploymentByKey?.(b.deploymentKey);
