@@ -6,6 +6,7 @@ LambdaData.ready.then(D => {
   $('#boot')?.remove();
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const H = 3600e3;
+  const ALLT = () => (D.ALL || D).TICKETS; // site cards, drawers and answers about a specific thing show all its tickets, whatever the picker
   const isExt = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
   // Canvas colors come from the stage, which stays dark in both themes (so a theme switch needs no repaint of the canvases).
   const stageStyle = getComputedStyle(document.querySelector('.stage') || document.documentElement);
@@ -158,14 +159,15 @@ LambdaData.ready.then(D => {
         <div class="sp-sep"></div>
         <input class="sp-find" placeholder="Find a site…" aria-label="Find a site">
         <div class="sp-list">${pickable.map(s => `<label class="sp-row site" data-q="${esc((s.id + ' ' + s.name + ' ' + (s.city || '')).toLowerCase())}">
-          <input type="checkbox" data-site="${esc(s.id)}" ${pending.has(s.id) ? 'checked' : ''}> <b>${esc(s.id)}</b> <span>${esc(s.name)}</span><button class="sp-star ${mine.includes(s.id) ? 'on' : ''}" data-star="${esc(s.id)}" title="${mine.includes(s.id) ? `Remove ${esc(s.id)} from your sites` : `Add ${esc(s.id)} to your sites`}">${mine.includes(s.id) ? '★' : '☆'}</button><button class="sp-only" data-only="${esc(s.id)}" title="Show only ${esc(s.id)}">only</button></label>`).join('')}</div>
+          <input type="checkbox" data-sp-site="${esc(s.id)}" ${pending.has(s.id) ? 'checked' : ''}> <b>${esc(s.id)}</b> <span>${esc(s.name)}</span><button class="sp-star ${mine.includes(s.id) ? 'on' : ''}" data-star="${esc(s.id)}" title="${mine.includes(s.id) ? `Remove ${esc(s.id)} from your sites` : `Add ${esc(s.id)} to your sites`}">${mine.includes(s.id) ? '★' : '☆'}</button><button class="sp-only" data-only="${esc(s.id)}" title="Show only ${esc(s.id)}">only</button></label>`).join('')}</div>
         <div class="sp-foot"><button class="btn" data-sp-clear>Clear</button><button class="btn primary" data-sp-apply ${pending.size ? '' : 'disabled'}>Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}</button></div>`;
     };
-    const open = () => { paint(); pop.hidden = false; setTimeout(() => pop.querySelector('.sp-find')?.focus(), 0); };
+    const open = () => { $('#alertPop').hidden = true; paint(); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); setTimeout(() => pop.querySelector('.sp-find')?.focus(), 0); };
     btn.addEventListener('click', e => { e.stopPropagation(); pop.hidden ? open() : close(); });
-    const close = () => { pop.hidden = true; if (starsChanged && choice === 'mine' && D.SCOPE) location.reload(); };
+    // Starring changes "Your sites" everywhere (picker, Second brain, Deployments, Health), so closing after a change reloads.
+    const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); if (starsChanged) location.reload(); };
     document.addEventListener('click', e => { if (!pop.hidden && e.target.isConnected && !e.target.closest('.sitepick')) close(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) close(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) { e.stopImmediatePropagation(); close(); btn.focus(); } });
     pop.addEventListener('input', e => {
       if (e.target.matches('.sp-find')) { const q = e.target.value.trim().toLowerCase(); pop.querySelectorAll('.sp-row.site').forEach(r => { r.hidden = !!q && !r.dataset.q.includes(q); }); }
     });
@@ -173,7 +175,7 @@ LambdaData.ready.then(D => {
       const t = e.target;
       if (t.dataset.sp === 'all') return apply('all');
       if (t.dataset.sp === 'mine') return apply('mine');
-      if (t.dataset.site) { t.checked ? pending.add(t.dataset.site) : pending.delete(t.dataset.site);
+      if (t.dataset.spSite) { t.checked ? pending.add(t.dataset.spSite) : pending.delete(t.dataset.spSite);
         const b = pop.querySelector('[data-sp-apply]'); b.disabled = !pending.size; b.textContent = `Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}`; }
     });
     pop.addEventListener('click', e => {
@@ -186,16 +188,16 @@ LambdaData.ready.then(D => {
         return; }
       const only = e.target.closest('[data-only]'); if (only) { e.preventDefault(); return apply([only.dataset.only]); }
       if (e.target.closest('[data-sp-apply]') && pending.size) return apply([...pending].sort());
-      if (e.target.closest('[data-sp-clear]')) { pending = new Set(); pop.querySelectorAll('[data-site]').forEach(c => { c.checked = false; }); const b = pop.querySelector('[data-sp-apply]'); b.disabled = true; b.textContent = 'Show sites'; }
+      if (e.target.closest('[data-sp-clear]')) { pending = new Set(); pop.querySelectorAll('[data-sp-site]').forEach(c => { c.checked = false; }); const b = pop.querySelector('[data-sp-apply]'); b.disabled = true; b.textContent = 'Show sites'; }
     });
-    pop.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.sp-find')) { const r = [...pop.querySelectorAll('.sp-row.site')].filter(x => !x.hidden); if (r.length === 1) apply([r[0].querySelector('[data-site]').dataset.site]); } });
+    pop.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.sp-find')) { const r = [...pop.querySelectorAll('.sp-row.site')].filter(x => !x.hidden); if (r.length === 1) apply([r[0].querySelector('[data-sp-site]').dataset.spSite]); } });
   }
   $('#settingsBtn').addEventListener('click', () => isExt ? chrome.runtime.openOptionsPage() : toast('Settings are available when running as the extension.'));
   // Newer data (from the background refresh or another tab): reload in place once you've been idle for a minute,
   // never while something is open. The view you were on is kept.
   let lastActivity = Date.now(), pendingReload = false;
   ['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
-  const busyNow = () => !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden;
+  const busyNow = () => !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden || !$('#sitePop').hidden;
   function tryReload() {
     if (!pendingReload) return;
     if (document.visibilityState === 'hidden' || (!busyNow() && Date.now() - lastActivity > 60000)) location.reload();
@@ -227,7 +229,7 @@ LambdaData.ready.then(D => {
   }
   function spark(s) {
     const p = sparkPts(s), line = 'M' + p.map(q => q.map(n => n.toFixed(1)).join(',')).join('L');
-    return `<svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+    return `<svg viewBox="0 0 100 30" preserveAspectRatio="none" role="img">
       <defs><linearGradient id="sparkFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${C.accent}" stop-opacity=".25"/><stop offset="1" stop-color="${C.accent}" stop-opacity="0"/></linearGradient></defs>
       <path class="area" d="${line}L100,30L0,30Z"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/>
       <circle r="3" style="display:none" vector-effect="non-scaling-stroke"/><rect class="spark-hit" x="0" y="-6" width="100" height="40"/></svg>`;
@@ -289,7 +291,9 @@ LambdaData.ready.then(D => {
         const shortDay = new Date(pts[idx].day + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
         tip.textContent = `${shortDay} · ${pts[idx].v.toLocaleString()}${pts[idx].opened != null ? `  +${pts[idx].opened} new −${pts[idx].closed} closed` : ch ? ` (${ch > 0 ? '+' : '−'}${Math.abs(ch).toLocaleString()})` : ''}`; tip.hidden = false;
       });
-      svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; });
+      // The card's own hover text would cover the chart's day label, so it steps aside while the chart is hovered.
+      svg.addEventListener('pointerenter', () => { if (el.title) { el.dataset.t = el.title; el.title = ''; } });
+      svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; tip.hidden = true; if (el.dataset.t) el.title = el.dataset.t; });
     });
   }
   renderKpis(null);
@@ -462,7 +466,7 @@ LambdaData.ready.then(D => {
     const sites = listSites(), max = Math.max(1, ...sites.map(s => s.openTickets));
     $('#siteCount').textContent = `${sites.length} · by open tickets`;
     $('#siteList').innerHTML = sites.map(s =>
-      `<li class="srow ${Fleet.selected === s ? 'sel' : ''} ${s.health === 'idle' ? 'dim' : ''}" data-site="${esc(s.id)}" title="${esc(s.fullName || s.id)}: ${s.openTickets} open tickets, ${esc(siteStatusLabel(s))}">
+      `<li class="srow ${Fleet.selected === s ? 'sel' : ''} ${s.health === 'idle' ? 'dim' : ''}" data-site="${esc(s.id)}" title="${esc(s.fullName || s.id)}: ${s.openTickets} open tickets, ${esc(siteStatusLabel(s))}${s.healthWhy ? ` (from ${esc(s.healthWhy)}: see the Health tab)` : ''}">
         <span class="code">${esc(s.id)}</span><span class="sname">${esc(s.name)}</span>
         <span style="display:flex;gap:6px;align-items:center"><span class="bar" style="flex:1"><i style="width:${(s.openTickets / max) * 100}%"></i></span><span class="n">${s.openTickets}</span></span>
         ${healthBadge(s)}</li>`).join('');
@@ -1234,7 +1238,7 @@ LambdaData.ready.then(D => {
     const soon = Date.now() + 3 * 864e5;
     for (const e of (D.EVENTS || []).filter(e => e.at < soon)) {
       if (!e.deployment && !e.site) continue;
-      if (D.SCOPE && !(e.deployment && byId.has('dep:' + e.deployment)) && !(e.site && inScope(e.site))) continue;
+      if ((D.SCOPE || bscope === 'mine') && !(e.deployment && byId.has('dep:' + e.deployment)) && !(e.site && inScope(e.site))) continue;
       const n = add('ev:' + e.title + e.at, 'event', e.title.length > 28 ? e.title.slice(0, 27) + '…' : e.title, e);
       link(n, e.deployment ? byId.get('dep:' + e.deployment) : siteNode(e.site));
     }
@@ -1411,7 +1415,7 @@ LambdaData.ready.then(D => {
       if (n.type === 'device') return `<b>${esc(r.id)}</b><span>${esc(r.model)} · ${esc(r.site || '?')} ${esc(r.rack)}${r.u ? ` U${r.u}` : ''}</span>`;
       if (n.type === 'site') return `<b>${esc(r.id)} · ${esc(r.name)}</b>${statusChip(r.health === 'idle' ? 'idle' : r.health, siteStatusLabel(r))}<br><span>${r.openTickets} open tickets${r.deployments?.length ? ` · ${r.deployments.length} deployments` : ''}</span>`;
       if (n.type === 'part') return `<b>${esc(partLabel(r))}</b><span>${D.SITES.reduce((a, s) => a + (s.inventory.find(i => i.part === r.id)?.stock || 0), 0)} on hand fleet-wide</span>`;
-      if (n.type === 'person') return `<b>${esc(r.name)}</b><span>${D.TICKETS.filter(t => t.assignee === r.id).length} tickets · ${(D.DEPLOYMENTS || []).filter(d => d.assigneeId === r.id || (r.id === 'me' && d.mine)).length} deployments</span>`;
+      if (n.type === 'person') return `<b>${esc(r.name)}</b><span>${ALLT().filter(t => t.assignee === r.id).length} tickets · ${(D.DEPLOYMENTS || []).filter(d => d.assigneeId === r.id || (r.id === 'me' && d.mine)).length} deployments</span>`;
       if (n.type === 'deployment') return `<b>${r.key} · ${esc(r.title)}</b>${statusChip(r.health, depStatus(r))}<br><span>${pct(r.progress)} done · due ${fmtDate(r.end)} · ${esc(r.sites.join(', ') || '?')}</span>`;
       if (n.type === 'project') return `<b>${r.key} · ${esc(r.title)}</b>${statusChip(r.health, r.status)}<br><span>${r.deployments.length} deployments</span>`;
       if (n.type === 'channel') return `<b>#${esc(r.name)}</b><span>Slack · ${r.members} members</span>`;
@@ -1486,7 +1490,8 @@ LambdaData.ready.then(D => {
     }
     function render() {
       const H = D.HEALTH, box = $('#health');
-      $('#healthBadge').hidden = !(H && (H.totals.leak || H.freshBreakers)); if (H) $('#healthBadge').textContent = H.totals.leak + H.freshBreakers || '';
+      const urgentN = H ? H.sites.reduce((t, s) => t + s.checks.leak.n + s.checks.breaker.fresh, 0) : 0; // only the sites the picker shows
+      $('#healthBadge').hidden = !urgentN; $('#healthBadge').textContent = urgentN || '';
       if (activeView !== 'health') return;
       if (!H) { box.innerHTML = `<div class="hempty"><h3>Site health</h3><p class="muted">Leaks, tripped breakers, PDU alarms, power shelves, hardware faults, hot inlets, network devices down and monitoring gaps for every site come from Grafana. Turn on <b>Grafana</b> in Settings → Sources and sign in to grafana.aws.lambdalabs.cloud once.</p></div>`; return; }
       const sites = sitesShown(), mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : LambdaAlerts.mySites(D));
@@ -1561,7 +1566,7 @@ LambdaData.ready.then(D => {
       };
       el.innerHTML = `<div class="dtools">
           ${scopeSeg('deploys', dscope)}${MINE.size ? '<span class="dsep"></span>' : ''}
-          ${[['all', 'All', all.length], ['tracking', '★ Tracking', D.tracked().length], ['risk', 'At risk', all.filter(d => ['critical', 'warning'].includes(d.health)).length]].map(([k, l, n]) => `<button class="chip ${filter === k ? 'on' : ''}" data-dfilter="${k}">${l} <small>${n}</small></button>`).join('')}
+          ${[['all', 'All', all.length], ['tracking', '★ Tracking', all.filter(d => D.isTracked(d.key) || d.mine).length], ['risk', 'At risk', all.filter(d => ['critical', 'warning'].includes(d.health)).length]].map(([k, l, n]) => `<button class="chip ${filter === k ? 'on' : ''}" data-dfilter="${k}">${l} <small>${n}</small></button>`).join('')}
           <span class="dsep"></span>
           ${['all', ...tags].map(t => `<button class="chip ${tag === t ? 'on' : ''}" data-dtag="${esc(t)}">${t === 'all' ? 'Every type' : esc(t)}</button>`).join('')}
         </div>
@@ -1748,7 +1753,7 @@ LambdaData.ready.then(D => {
   const SiteCard = {
     open(s) {
       Fleet.focus(s);
-      const tickets = D.TICKETS.filter(t => t.site === s.id).sort(byUrgency);
+      const tickets = ALLT().filter(t => t.site === s.id).sort(byUrgency);
       const sev = { critical: 0, warning: 1, good: 2 };
       const inv = [...s.inventory].sort((a, b) => sev[invStatus(a)] - sev[invStatus(b)] || b.stock - a.stock);
       const maxStock = Math.max(1, ...inv.map(i => Math.max(i.stock, i.alert * 2)));
@@ -1864,7 +1869,7 @@ LambdaData.ready.then(D => {
         <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
     }
     if (type === 'device') {
-      const d = ref, ts = D.TICKETS.filter(t => t.device === d.id).sort(byUrgency);
+      const d = ref, ts = ALLT().filter(t => t.device === d.id).sort(byUrgency);
       return Drawer.open(`<div class="qkey">DEVICE</div><h3 class="mono">${esc(d.id)}</h3>
         <dl class="kv"><dt>Model</dt><dd>${esc(d.model)}</dd>${d.serial ? `<dt>Serial</dt><dd class="mono">${esc(d.serial)}</dd>` : ''}
           <dt>Site</dt><dd>${d.site ? `<a data-open="site:${esc(d.site)}">${esc(d.site)}</a>` : '—'}</dd><dt>Rack / U</dt><dd>${esc(d.rack)}${d.u ? ` · U${d.u}` : ''}</dd></dl>
@@ -1874,7 +1879,7 @@ LambdaData.ready.then(D => {
     }
     if (type === 'part') {
       const p = ref, rows = D.SITES.map(s => ({ s, i: s.inventory.find(x => x.part === p.id) })).filter(r => r.i).sort((a, b) => b.i.stock - a.i.stock);
-      const waiting = D.TICKETS.filter(t => t.part === p.id).sort(byUrgency);
+      const waiting = ALLT().filter(t => t.part === p.id).sort(byUrgency);
       return Drawer.open(`<div class="qkey">PART · ${esc(p.pn)}</div><h3>${esc(p.name !== p.pn ? p.name : p.pn)}</h3>
         <p class="muted">${p.mfr ? esc(p.mfr) + ' · ' : ''}${rows.reduce((a, r) => a + r.i.stock, 0)} on hand fleet-wide · ${waiting.length} open tickets need it</p>
         ${rows.length ? `<div class="answer" style="margin:12px 0 0"><table><tr><th>Site</th><th class="num">On hand</th><th class="num">Alert at</th><th class="num">Receiving</th><th></th></tr>
@@ -1882,7 +1887,7 @@ LambdaData.ready.then(D => {
         <div class="section-title"><span>Tickets needing this part</span><span>${waiting.length}</span></div>${waiting.slice(0, 30).map(ticketRow).join('') || '<p class="muted">None.</p>'}`);
     }
     if (type === 'person') {
-      const p = ref, ts = D.TICKETS.filter(t => t.assignee === p.id).sort(byUrgency);
+      const p = ref, ts = ALLT().filter(t => t.assignee === p.id).sort(byUrgency);
       return Drawer.open(`<div class="qkey">PERSON</div><h3>${esc(p.id === 'me' ? `You${p.handle ? ` (${p.handle})` : ''}` : p.name)}</h3><p class="muted">${ts.length} assigned open tickets</p>
         <div class="section-title"><span>Assigned</span></div>${ts.slice(0, 60).map(ticketRow).join('') || '<p class="muted">None.</p>'}`);
     }
@@ -2041,7 +2046,7 @@ LambdaData.ready.then(D => {
         table: { head: ['Date', 'Doc', 'Deployment', 'Status', 'Tracking'], rows: ms.map(m => [m.date, m.doc, m.deploymentKey || m.deployment || '', m.status, m.tracking]) } };
     }
     if (dev) {
-      const ts = D.TICKETS.filter(t => t.device === dev.id);
+      const ts = ALLT().filter(t => t.device === dev.id);
       return { text: `${dev.id} is a ${dev.model} at ${dev.site || 'an unknown site'}, cabinet ${dev.rack}${dev.u ? `, U${dev.u}` : ''}. ${ts.length ? `It has ${ts.length} open ticket(s).` : 'No open tickets.'}`, table: ts.length ? tRows(ts) : null };
     }
     if (/waiting|have the part|on hand|on site/.test(q) && /part|rma/.test(q)) {
@@ -2074,7 +2079,7 @@ LambdaData.ready.then(D => {
         table: rows.length ? { head: ['Site', 'On hand', 'Alert at', 'Receiving'], rows: rows.map(r => [r.s.id, r.i.stock, r.i.alert || '—', r.i.receiving || '']), num: [1, 2, 3] } : null };
     }
     if (site) {
-      const ts = D.TICKETS.filter(t => t.site === site.id).sort(byUrgency);
+      const ts = ALLT().filter(t => t.site === site.id).sort(byUrgency);
       return { text: `${site.name} (${site.id}) is ${siteStatusLabel(site).toLowerCase()}${site.racks != null ? `, with ${site.racks} racks and ${kfmt(site.devices)} devices` : ''}. ${ts.length} open tickets, ${site.breached || 0} breached.`, table: tRows(ts), site };
     }
     const crit = D.SITES.filter(s => s.health === 'critical').map(s => s.id);
@@ -2140,7 +2145,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     }
     // Tickets: the site asked about, else words from the question, else the most urgent.
     const words = qq.split(/[^a-z0-9-]+/).filter(w => w.length >= 4);
-    let ts = site ? D.TICKETS.filter(t => t.site === site.id) : D.TICKETS.filter(t => words.some(w => `${t.summary} ${t.device} ${t.status}`.toLowerCase().includes(w)));
+    let ts = site ? ALLT().filter(t => t.site === site.id) : D.TICKETS.filter(t => words.some(w => `${t.summary} ${t.device} ${t.status}`.toLowerCase().includes(w)));
     if (ts.length < 10) ts = [...ts, ...[...D.TICKETS].sort(byUrgency).slice(0, 60)];
     ts = [...new Map(ts.map(t => [t.key, t])).values()].sort(byUrgency).slice(0, 120);
     L.push('', `OPEN DC TICKETS (${ts.length} of ${D.TICKETS.length}; key | summary | site | device | status | priority | SLA | assignee)`);
@@ -2403,7 +2408,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         : '<p class="muted small" style="padding:10px 12px">No alerts yet. They appear here after background checks (every 10 minutes); the first check only takes a baseline.</p>'}`;
   }
   const saveAlerts = () => { if (isExt) chrome.storage.local.set({ alertLog: ALERTS }); };
-  bellBtn.addEventListener('click', e => { e.stopPropagation(); alertPop.hidden = !alertPop.hidden; paintBell(); });
+  bellBtn.addEventListener('click', e => { e.stopPropagation(); $('#sitePop').hidden = true; alertPop.hidden = !alertPop.hidden; paintBell(); });
   alertPop.addEventListener('click', e => {
     e.stopPropagation();
     if (e.target.closest('[data-al-read]')) { ALERTS = ALERTS.map(a => ({ ...a, read: true })); saveAlerts(); return paintBell(); }
@@ -2424,14 +2429,16 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); pal.hidden ? openPalette() : closePalette(); return; }
     if (e.key === 'Escape') { if (AIPanel.isOpen() && document.activeElement?.id !== 'aipText' && pal.hidden) AIPanel.close(); else if (!alertPop.hidden) alertPop.hidden = true; else if (!briefBox.hidden) closeBrief(); else if (!pal.hidden) closePalette(); else if (!$('#drawer').hidden) Drawer.close(); else if (!$('#siteCard').hidden) SiteCard.close(); else if (document.body.classList.contains('stage-max')) setStageMax(false); return; }
     if (e.key === '/' && pal.hidden && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openPalette(); }
-    if (pal.hidden && !e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
+    // Single-key shortcuts work anywhere except while typing (they used to need focus on the page itself).
+    if (pal.hidden && !e.metaKey && !e.ctrlKey && !e.altKey && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
       if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys'); if (e.key === 'h') setView('health');
       if (e.key === 'e') setStageMax(!document.body.classList.contains('stage-max'));
     }
   });
 }).catch(err => {
   console.error(err);
-  const b = $('#bootMsg');
+  let b = $('#bootMsg');
+  if (!b) { b = Object.assign(document.createElement('div'), { className: 'boot-error', role: 'alert' }); document.body.prepend(b); } // the page had started drawing
   if (b) {
     b.textContent = `Something went wrong loading Lambda OS: ${err.message}. `;
     const a = Object.assign(document.createElement('a'), { href: LambdaUpdates.HELP.slack, target: '_blank', rel: 'noopener', textContent: `Message ${LambdaUpdates.HELP.name} on Slack` });

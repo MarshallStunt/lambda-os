@@ -271,8 +271,8 @@ const LambdaLive = (() => {
     let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none */ }
     const dk = t => new Date(t).toDateString();
     if (prev?.workHist && dk(prev.workHist.at) === dk(Date.now())) return prev.workHist;
-    const project = (stripOrder(s.fleetJql).match(/project\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i) || [])[1];
-    const jql = `${project ? `project = ${project} AND ` : ''}assignee WAS currentUser() AND updated >= -90d`;
+    const fleet = stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '');
+    const jql = `(${fleet}) AND assignee WAS currentUser() AND updated >= -90d`;
     const siteIds = F.site || [], hostIds = F.host || [], first = (f, ids) => ids.map(id => f[id]).find(filled);
     const rows = await search(get, jql, 3000, [...siteIds, ...hostIds].join(',') || 'summary', null, 'of your tickets');
     const counts = {};
@@ -316,6 +316,8 @@ const LambdaLive = (() => {
     const want = ['summary', 'status', 'priority', 'assignee', 'created', 'updated', ...fieldList(F, TICKET_FIELDS)].join(',');
     // Tickets closed in the last 31 days (only their open/close dates), so the Open DC tickets card can draw a real
     // 30-day history: open count, new and closed for every day.
+    let prevJ = null; try { ({ snapshot: { jira: prevJ } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* first run */ }
+    const startedAt = Date.now();
     const closedJql = `(${stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '')}) AND resolved >= -31d`;
     const [issues, mineIssues, port, closed, epicsClosed] = await Promise.all([
       search(get, s.fleetJql, s.maxTickets, want, progress),
@@ -329,9 +331,11 @@ const LambdaLive = (() => {
       base, me: { id: me.accountId, name: me.displayName, email: me.emailAddress || '', tz: me.timeZone },
       tickets: issues.map(i => mapIssue(i, F, base, mine)),
       portfolio: port.v || [], portfolioError: port.e ? String(port.e.message || port.e) : '',
-      closed30: closed, closed30At: closed ? Date.now() : null, closed30Full: closed?.fullAt || null, closedEpics: epicsClosed,
-      waitHist: await waitingHistory(base, s, issues).catch(() => null),
-      workHist: await workHistory(get, s, F).catch(() => null),
+      // A history read that fails keeps the last good one (the next refresh tries again) instead of wiping the charts.
+      closed30: closed || prevJ?.closed30 || null, closed30At: closed ? startedAt : prevJ?.closed30At || null, closed30Full: closed ? closed.fullAt || null : prevJ?.closed30Full || null,
+      closedEpics: epicsClosed || prevJ?.closedEpics || null,
+      waitHist: await waitingHistory(base, s, issues).catch(() => prevJ?.waitHist || null),
+      workHist: await workHistory(get, s, F).catch(() => prevJ?.workHist || null),
     };
   }
 
@@ -818,6 +822,8 @@ const LambdaLive = (() => {
     if (!result?.fleet) return result;
     let prev = null; try { ({ snapshot: { grafana: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none yet */ }
     const was = prev?.fleet?.seen || null, now = Date.now(), seen = {};
+    // A check that failed this time keeps its earlier first-seen times, so the next good read doesn't call old ones "new".
+    for (const k of ['leak', 'breaker', 'shelf']) if (!result.fleet.checks[k] && was) for (const [key, t] of Object.entries(was)) if (key.startsWith(k + '|')) seen[key] = t;
     for (const k of ['leak', 'breaker', 'shelf']) for (const it of result.fleet.checks[k] || []) {
       const key = `${k}|${it.s}|${it.h || ''}|${it.w || ''}`;
       seen[key] = was ? (was[key] ?? now) : 0; // 0 = already there the first time we looked

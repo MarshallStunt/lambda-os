@@ -46,7 +46,10 @@ const LambdaAlerts = (() => {
   }
 
   // Compares the current data with what was already alerted. The first run only records a baseline (no flood).
-  function evaluate(D, prev, cfg, now = Date.now()) {
+  // Runs on the full data (so the remembered state never depends on the site picker: switching sites can't flood you);
+  // your own tickets and tracked deployments always alert, site-level alerts follow the picker (or your sites).
+  function evaluate(Din, prev, cfg, now = Date.now()) {
+    const D = Din.ALL || Din, SC = Din.SCOPE || null;
     const first = !prev?.init, notes = [];
     const next = { init: true, sla: {}, assigned: [], dep: {}, parts: [], mentionAt: prev?.mentionAt || 0, sites: {} };
     for (const t of D.TICKETS.filter(t => t.mine || t.assignee === 'me')) {
@@ -78,11 +81,13 @@ const LambdaAlerts = (() => {
     if (ments.length) next.mentionAt = Math.max(...ments.map(m => m.at));
     if (!first && cfg.mentions) for (const m of ments.slice(0, 5)) notes.push({
       id: `mention:${m.at}`, url: m.link, title: `${m.isDm ? 'Slack DM' : '#' + m.channel} · ${m.user}`, message: m.text });
-    for (const s of D.SITES) if (s.health !== 'idle') next.sites[s.id] = s.health;
-    if (!first && cfg.siteCritical) for (const s of D.SITES.filter(s => s.health === 'critical' && prev.sites?.[s.id] && prev.sites[s.id] !== 'critical')) notes.push({
+    // Ticket-based status only: leaks, breakers and hardware faults have their own alerts below.
+    const th = s => s.ticketHealth || s.health;
+    for (const s of D.SITES) if (th(s) !== 'idle') next.sites[s.id] = th(s);
+    if (!first && cfg.siteCritical) for (const s of D.SITES.filter(s => (!SC || SC.has(s.id)) && th(s) === 'critical' && prev.sites?.[s.id] && prev.sites[s.id] !== 'critical')) notes.push({
       id: `site:${s.id}`, urgent: true, url: s.url || '', title: `${s.id} turned critical`, message: `${s.name} · ${s.breached} SLA breached · ${s.openTickets} open tickets` });
     // Atium: a build milestone goes late, a hand-off is within 7 days, a purchase order at your sites goes past due.
-    const sites = yourSites(D), builds = myBuilds(D, sites), atOn = !first && cfg.atium !== false;
+    const sites = SC || yourSites(D), builds = myBuilds(D, sites), atOn = !first && cfg.atium !== false;
     next.builds = {}; next.handoff = []; next.po = {}; next.poSites = [];
     for (const b of builds) {
       const sig = b.late && b.next ? b.next.name : '';
@@ -177,7 +182,8 @@ const LambdaAlerts = (() => {
   }
 
   // The brief: structured sections the dashboard renders. `history` gives the previous day for the deltas.
-  function brief(D, history, now = Date.now()) {
+  function brief(Din, history, now = Date.now()) {
+    const D = Din.ALL || Din, SC = Din.SCOPE || null; // your tickets and the fleet numbers stay whole; site sections follow the picker
     const today = dayKey(now);
     const prevKey = Object.keys(history || {}).filter(k => k < today).sort().pop();
     const prev = prevKey ? history[prevKey] : null;
@@ -192,22 +198,22 @@ const LambdaAlerts = (() => {
     const mySites = new Set([...mine.map(t => t.site), ...tracked.flatMap(x => x.d.sites)].filter(Boolean));
     const since = prev?.at || now - DAY;
     const prevKeys = new Set(prev?.keys || []);
-    const newTickets = D.TICKETS.filter(t => (prev ? !prevKeys.has(t.key) : t.created > since) && (!mySites.size || mySites.has(t.site)));
+    const newTickets = D.TICKETS.filter(t => (prev ? !prevKeys.has(t.key) : t.created > since) && (SC ? SC.has(t.site) : !mySites.size || mySites.has(t.site)));
     const lowSpares = [];
-    for (const s of D.SITES.filter(s => mySites.has(s.id))) for (const i of s.inventory) if (i.alert > 0 && i.stock <= i.alert) lowSpares.push({ site: s.id, part: D.partById(i.part)?.name || i.part, stock: i.stock, alert: i.alert });
+    for (const s of D.SITES.filter(s => (SC || mySites).has(s.id))) for (const i of s.inventory) if (i.alert > 0 && i.stock <= i.alert) lowSpares.push({ site: s.id, part: D.partById(i.part)?.name || i.part, stock: i.stock, alert: i.alert });
     return {
       date: new Date(now), prevDate: prevKey || null,
       meetings: (D.EVENTS || []).filter(e => e.at <= endToday.getTime() && e.at >= new Date(now).setHours(0, 0, 0, 0)),
       myBreached, myDue, myTotal: mine.length, tracked,
       partsArrived: mine.filter(t => waitingParts(t) && partOnHand(D, t)),
-      newTickets: newTickets.sort((a, b) => b.created - a.created), mySites: [...mySites],
+      newTickets: newTickets.sort((a, b) => b.created - a.created), mySites: [...(SC || mySites)],
       fleet: { open: D.TICKETS.length, breached: D.TICKETS.filter(t => breached(t, now)).length, openWas: prev?.open ?? null, breachedWas: prev?.breached ?? null },
       lowSpares, unread: D.MAIL?.unread ?? null,
-      hardware: (() => { const sites = yourSites(D), out = [];
+      hardware: (() => { const sites = SC || yourSites(D), out = [];
         for (const s of D.SITES.filter(s => s.gf && (sites.size ? sites.has(s.id) : true))) for (const c of s.gf.counts.filter(c => c.hw && c.crit)) out.push({ site: s.id, name: c.name, n: c.n, url: s.gf.url });
         return out.sort((a, b) => b.n - a.n).slice(0, 10); })(),
       atium: (() => {
-        const sites = yourSites(D), soon = now + 14 * DAY;
+        const sites = SC || yourSites(D), soon = now + 14 * DAY;
         const builds = myBuilds(D, sites).filter(b => b.late || (b.handoff && !b.handoff.done && b.handoff.at && b.handoff.at < soon) || (b.next?.at && b.next.at < now + 3 * DAY));
         const pos = [];
         for (const s of D.SITES.filter(s => sites.has(s.id))) for (const p of sitePOs(s) || []) pos.push({ site: s.id, url: s.atium.posUrl, p, st: poState(p, now) });

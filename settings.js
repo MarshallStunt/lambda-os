@@ -52,7 +52,7 @@ $('aiKeyShow').addEventListener('click', () => { const k = $('aiKey'); k.type = 
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => { $('aiLocalUrl').value = LambdaAI.LOCAL_PRESETS[b.dataset.preset]; }));
 async function aiAccess() { // the local server address is user-chosen, so ask for it; the cloud providers are in the manifest
   if ($('aiProvider').value !== 'local') return true;
-  try { const o = new URL($('aiLocalUrl').value.trim() || LambdaAI.LOCAL_PRESETS.lmstudio).origin + '/*'; return (await chrome.permissions.contains({ origins: [o] })) || chrome.permissions.request({ origins: [o] }); } catch { return false; }
+  try { const o = new URL($('aiLocalUrl').value.trim() || LambdaAI.LOCAL_PRESETS.lmstudio).origin + '/*'; return (await chrome.permissions.contains({ origins: [o] })) || await chrome.permissions.request({ origins: [o] }); } catch { return false; }
 }
 $('aiLoadModels').addEventListener('click', async () => {
   const p = $('aiProvider').value; if (p === 'off') return;
@@ -202,7 +202,7 @@ async function save(opts = {}) {
   };
   say(Object.entries(SOURCES).map(([k, name]) => {
     const x = snap.sources[k] || {};
-    const text = x.off ? '<span class="muted">Off</span>' : x.ok ? `<span class="st-good">✓ Connected · ${detail[k]()}</span>` : `<span class="st-critical">✕ ${esc(x.error)}</span>`;
+    const text = x.off ? '<span class="muted">Off</span>' : x.ok ? `<span class="st-good">✓ Connected${detail[k] ? ` · ${detail[k]()}` : ''}</span>` : `<span class="st-critical">✕ ${esc(x.error)}</span>`;
     return `<div class="boot-src"><b>${name}</b>${text}${!x.ok && !x.off && x.login ? `<button class="btn" data-login="${esc(x.login)}">Open ${name}</button>` : ''}</div>`;
   }).join(''));
 }
@@ -226,7 +226,7 @@ async function importBackup(file) {
   const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'smart']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
-  if (settings.ai) settings.ai = { ...settings.ai, keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser
+  settings.ai = { ...(settings.ai || current.ai || {}), keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser (even if the backup has no AI section)
   if (settings.look) await window.LambdaLook.save(settings.look);
   const tracked = Array.isArray(data.tracked) ? data.tracked.filter(k => typeof k === 'string' && /^[A-Z][A-Z0-9_]+-\d+$/.test(k)) : [];
   if (!(await ensureAccess({ ...LambdaLive.DEFAULTS, ...settings }))) return say('<p class="st-critical">Permission for an address in the backup was declined, so nothing was loaded.</p>');

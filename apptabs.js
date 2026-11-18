@@ -123,7 +123,7 @@ const LambdaTabs = (() => {
         if (tab && !tab.pinned) { await saveOwn(app.key, null); tab = null; } // the user unpinned it: it's theirs now
         if (!tab && rec) tab = (await pinnedCopies(app))[0] || null;     // Chrome restart: same tab, new id
         if (tab) {
-          for (const t of await pinnedCopies(app)) if (t.id !== tab.id && !t.active) await chrome.tabs.remove(t.id).catch(() => {});
+          // Other pinned tabs at the same address are left alone: they may be your own (e.g. your pinned Gmail).
           if (tab.id !== rec?.id) await saveOwn(app.key, { ...rec, id: tab.id });
           return { tab, rec: { ...rec, id: tab.id } };
         }

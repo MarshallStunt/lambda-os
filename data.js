@@ -81,11 +81,13 @@
   // Open DC tickets for each of the last 30 days, rebuilt from Jira: tickets open now (by created date) plus tickets
   // closed in the last 31 days (created → resolved). Each day: open at its end, new that day, closed that day.
   // The last 30 days, each as { day: 'YYYY-MM-DD', s: start ms, e: end ms (now for today) }.
+  // The last 30 calendar days (local time), stepping by date so daylight-saving changes never repeat or skip a day.
   function last30(now = Date.now()) {
-    const DAYMS = 864e5, out = [];
+    const out = [];
     for (let i = 29; i >= 0; i--) {
-      const end = new Date(now - i * DAYMS); end.setHours(23, 59, 59, 999);
-      out.push({ day: `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`, s: end.getTime() - DAYMS + 1, e: Math.min(end.getTime(), now) });
+      const start = new Date(now); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - i);
+      const end = new Date(start); end.setHours(23, 59, 59, 999);
+      out.push({ day: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`, s: start.getTime(), e: Math.min(end.getTime(), now) });
     }
     return out;
   }
@@ -481,6 +483,13 @@
       return { at: F.at, sites, CHECKS, totals: Object.fromEntries(CHECKS.map(([k]) => [k, total(k)])), errors: F.errors || {},
         freshBreakers: sites.reduce((t, s) => t + s.checks.breaker.fresh, 0), freshLeaks: sites.reduce((t, s) => t + s.checks.leak.fresh, 0) };
     })();
+    // A site's status colour also reflects its physical health: a leak, a tripped breaker or hardware faults in Grafana
+    // make it degraded/critical even when its tickets look fine (the tooltip says why).
+    const RANK = { good: 0, warning: 1, critical: 2 };
+    for (const h of HEALTH?.sites || []) {
+      const s = h.site; if (!s || s.health === 'idle' || !(h.level in RANK)) continue;
+      if (RANK[h.level] > (RANK[s.health] ?? 0)) { s.ticketHealth = s.health; s.health = h.level; s.healthWhy = 'Grafana site health'; }
+    }
     const GRAFANA = GF ? { base: GF.base, links: Object.fromEntries(Object.entries(GF.links || {}).map(([k, u]) => [k, GF.base + u])) } : null;
 
     // Feed and KPIs

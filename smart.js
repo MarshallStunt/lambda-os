@@ -47,16 +47,17 @@ Reply with JSON only: {"items":[{"id":"…","request":true|false,"site":"ABC01" 
     return todo.length;
   }
 
-  async function matching(ai, D, red, cache) {
+  async function matching(ai, D, red, cache, privacy = {}) {
     const has = (k, id) => `${k}:${id}` in cache.link;
     const builds = (D.BUILDS || []).filter(b => !b.deploymentKey && !has('build', b.id)).slice(0, CAP.builds)
-      .map(b => ({ id: `build:${b.id}`, name: b.name, site: b.site, gpus: b.planned || b.gpus, customer: b.customer }));
+      .map(b => ({ id: `build:${b.id}`, name: red.redact(b.name || ''), site: b.site, gpus: b.planned || b.gpus, customer: b.customer ? red.redact(b.customer) : null }));
     const moves = (D.MOVES || []).filter(m => !m.deploymentKey && m.deployment && !has('move', m.doc)).slice(0, CAP.moves)
       .map(m => ({ id: `move:${m.doc}`, deployment: red.redact(m.deployment), site: m.site }));
-    const events = (D.EVENTS || []).filter(e => !e.deployment && !has('event', e.title)).slice(0, CAP.events)
+    // Meetings are only sent when Privacy doesn't withhold calendar text.
+    const events = (privacy.calendar ? [] : D.EVENTS || []).filter(e => !e.deployment && !has('event', e.title)).slice(0, CAP.events)
       .map((e, i) => ({ id: `event:${i}`, real: e.title, title: red.redact(e.title) }));
     if (!builds.length && !moves.length && !events.length) return 0;
-    const deployments = (D.DEPLOYMENTS || []).slice(0, 150).map(d => ({ key: d.key, title: d.title, sites: d.sites, gpus: d.gpus || null }));
+    const deployments = (D.DEPLOYMENTS || []).slice(0, 150).map(d => ({ key: d.key, title: red.redact(d.title || ''), sites: d.sites, gpus: d.gpus || null }));
     const system = `You link items to the Jira deployment they belong to, for a data center operations team. Use site codes,
 GPU counts, customer and title words. Only link when you are fairly sure; otherwise use null. Meetings that aren't about a
 specific deployment (stand-ups for a whole team, 1:1s, lunch) get null.
@@ -105,12 +106,15 @@ Reply with JSON only: {"order":["KEY-1","KEY-2",…],"reasons":{"KEY-1":"…"}}`
     out.label = c.label;
     progress('Smart processing with ' + c.label + '…');
     const D = LambdaData.buildLive({ ...snap, smart: null });
-    const red = LambdaAI.makeRedactor(s.privacy, { people: D.PEOPLE.map(p => p.name).filter(Boolean),
+    // Same masking as Ask AI: every person's name Lambda OS knows (assignees, Slack authors, mail senders) is masked.
+    const people = [...new Set([...D.PEOPLE.map(p => p.name), ...D.TICKETS.map(t => t.assigneeName), ...(D.MENTIONS || []).map(m => m.user), ...(D.MAIL?.entries || []).map(e => e.from), ...(D.DEPLOYMENTS || []).map(d => d.assigneeName)].filter(n => n && n !== 'Unassigned' && n !== 'You'))];
+    const red = LambdaAI.makeRedactor(s.privacy, { people,
       serials: D.DEVICES.map(d => d.serial).filter(Boolean), hosts: D.DEVICES.map(d => d.id) });
     const errs = [];
     const step = async (name, fn) => { try { const n = await fn(); if (n) { out.calls++; out.items += n; } } catch (e) { errs.push(`${name}: ${e.message}`); } };
+    // Slack text goes out only with the separate opt-in (Settings → Smart processing), which is the one deliberate exception to Privacy's 'withhold messages'.
     if (cfg.volunteer && cfg.slack) await step('volunteer requests', () => volunteer(s.ai, D, red, cache));
-    if (cfg.matching) await step('matching', () => matching(s.ai, D, red, cache));
+    if (cfg.matching) await step('matching', () => matching(s.ai, D, red, cache, s.privacy || {}));
     if (cfg.priority) await step('ticket order', () => priority(s.ai, D, red, cache));
     trim(cache.vol, 400); trim(cache.link, 800);
     out.live = !errs.length || out.calls > 0;

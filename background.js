@@ -133,9 +133,9 @@ async function notify(notes, { log = true } = {}) {
   }
   await chrome.storage.session.set({ notifUrls: urls });
 }
-let running = null;
+let running = null, queued = null;
 async function runAlerts(snap) {
-  if (running) return running;
+  if (running) { queued = snap; return running; } // a newer snapshot during a pass runs right after it
   running = (async () => {
     const s = await LambdaLive.settings();
     if (s.mode !== 'live' || !snap) return;
@@ -149,7 +149,7 @@ async function runAlerts(snap) {
     await chrome.storage.local.set({ alertState: res.state, history: LambdaAlerts.addToHistory(history, D) });
     await setBadge(res.urgentCount, s.alerts.enabled && s.alerts.badge);
     if (s.alerts.enabled && res.notes.length && !LambdaAlerts.quiet(s.alerts)) await notify(res.notes);
-  })().catch(e => console.warn('alerts', e)).finally(() => { running = null; });
+  })().catch(e => console.warn('alerts', e)).finally(() => { running = null; if (queued) { const q = queued; queued = null; runAlerts(q); } });
   return running;
 }
 
