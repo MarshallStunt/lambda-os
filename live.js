@@ -36,7 +36,7 @@ const LambdaLive = (() => {
     // Appearance: theme 'system' | 'light' | 'dark'; accent; density; text size; glow; motion
     look: { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' },
     // Desktop alerts (checked after every background refresh) and the daily brief.
-    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true, siteHealth: true,
+    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true, siteHealth: true, yard: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
     // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
@@ -905,9 +905,14 @@ const LambdaLive = (() => {
     await needAccess([new URL(app.url).origin + '/*']);
     let prev = null; try { ({ snapshot: { yard: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* first run */ }
     const now = Date.now(), keep = {};
-    for (const [h, v] of Object.entries(prev?.hosts || {})) if (now - (v.at || 0) < 6 * 3600e3) keep[h] = v; // older than 6h: dropped
+    // Hosts you hold a lock on stay (and are re-checked) until you unlock them, so "still locked by you" can't go stale.
+    const mine = v => typeof LambdaAlerts !== 'undefined' && v?.lockedBy && LambdaAlerts.isMe({ ME: { name: jr?.me?.name, email: jr?.me?.email } }, v.lockedBy);
+    let extra = {}; try { ({ yardExtra: extra = {} } = await chrome.storage.local.get('yardExtra')); } catch { /* none */ }
+    for (const [h, v] of [...Object.entries(prev?.hosts || {}), ...Object.entries(extra)]) // extra: hosts looked up on demand from lists in the dashboard
+      if ((now - (v.at || 0) < 6 * 3600e3 || mine(v)) && (!keep[h] || (v.at || 0) > (keep[h].at || 0))) keep[h] = v; // older than 6h: dropped
     const tickets = [...(jr?.tickets || [])].filter(t => t.host).sort((a, b) => (b.mine - a.mine) || ((a.slaDue || 9e15) - (b.slaDue || 9e15)));
-    const want = [...new Set(tickets.map(t => t.host.toLowerCase()))].filter(h => !keep[h] || now - keep[h].at > 30 * 60e3).slice(0, 150);
+    const locks = Object.keys(keep).filter(h => mine(keep[h]));
+    const want = [...new Set([...tickets.map(t => t.host.toLowerCase()), ...locks])].filter(h => !keep[h] || now - keep[h].at > 30 * 60e3).slice(0, 150);
     if (!want.length) return { at: now, base: new URL(app.url).origin, hosts: keep };
     const read = () => LambdaTabs.run(app, yardInPage, [want], { useOwn: s.appTabs !== false });
     let result, own, tab;
@@ -920,6 +925,28 @@ const LambdaLive = (() => {
     if (!result?.ok) throw new Error(`Yard: ${result?.error || 'the Yard Central tab did not answer.'}`);
     for (const [h, v] of Object.entries(result.hosts)) if (!v.error) keep[h] = { ...v, at: now };
     return { at: now, base: new URL(app.url).origin, hosts: keep };
+  }
+
+  // On demand, for hosts listed in the dashboard (site health, search, the second brain…): up to 40 at a time, answers
+  // kept 30 minutes in `yardExtra` (the next refresh folds them into the snapshot). Only when Yard is on and reachable.
+  async function yardLookup(hosts) {
+    const s = await settings();
+    if (s.sources?.yard === false) throw new Error('Yard is turned off in Settings.');
+    const app = LambdaTabs.apps(s).yard; if (!app) throw new Error('No Yard address.');
+    let { yardExtra: extra = {}, snapshot } = await chrome.storage.local.get(['yardExtra', 'snapshot']);
+    if (snapshot?.sources?.yard?.quiet) throw new Error('Yard is not available for you.');
+    const now = Date.now(), have = h => extra[h] || snapshot?.yard?.hosts?.[h];
+    const all = [...new Set(hosts.filter(Boolean).map(h => String(h).toLowerCase()))];
+    const want = all.filter(h => !have(h) || now - (have(h).at || 0) > 30 * 60e3).slice(0, 40);
+    if (want.length) {
+      const { result } = await LambdaTabs.run(app, yardInPage, [want], { useOwn: s.appTabs !== false });
+      if (!result?.ok) throw new Error(result?.error || 'Yard Central did not answer.');
+      ({ yardExtra: extra = {} } = await chrome.storage.local.get('yardExtra'));
+      for (const [h, v] of Object.entries(result.hosts)) if (!v.error) extra[h] = { ...v, at: now };
+      for (const [h, v] of Object.entries(extra)) if (now - (v.at || 0) > 6 * 3600e3) delete extra[h];
+      await chrome.storage.local.set({ yardExtra: extra });
+    }
+    return Object.fromEntries(all.map(h => [h, have(h)]).filter(([, v]) => v));
   }
 
   /* ---------------- Refresh ---------------- */
@@ -1020,7 +1047,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite };
+  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;

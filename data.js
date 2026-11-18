@@ -232,7 +232,7 @@
       MODE: 'live', AT: snap.at,
       SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'), src('yard', 'Yard'),
         { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
-      ME: { name: jr?.me?.name || '' },
+      ME: { name: jr?.me?.name || '', email: jr?.me?.email || '' },
       LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '', grafana: snap.grafana?.base || '' },
       SITES, PARTS: [...PARTS.values()], PEOPLE: [...PEOPLE.values()], DEVICES: [...DEVICES.values()], TICKETS, KPIS, FEED,
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
@@ -609,7 +609,7 @@
     const D = finish({
       MODE: 'demo', NOTE: note || '', AT: now,
       SOURCES: ['NetBox', 'Jira', 'Slack', 'Claude'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })),
-      ME: { name: '' }, LINKS: { jira: '', netbox: '' }, SITES, PARTS, PEOPLE, DEVICES, TICKETS, KPIS, FEED,
+      ME: { name: '', handles: ['you'] }, LINKS: { jira: '', netbox: '' }, SITES, PARTS, PEOPLE, DEVICES, TICKETS, KPIS, FEED,
       pollFeed: async () => [{ ...pick(FEED_T)(), at: Date.now() }], feedEveryMs: 6000,
     });
     D.SOURCES.splice(3, 0, ...['NetSuite', 'Gmail', 'Calendar', 'Atium', 'Grafana'].map(n => ({ key: n.toLowerCase(), name: n, state: 'demo', title: 'Demo data' })));
@@ -705,7 +705,7 @@
     ] };
     // Demo Yard answers for the first devices, so the drawers show what Yard adds.
     D.YARD = { base: 'https://yard-central.aws.lambdalabs.cloud', live: true, hosts: Object.fromEntries(D.DEVICES.slice(0, 40).map((d, i) => [d.id.toLowerCase(),
-      { found: true, region: (d.site || '').toLowerCase() + '-cl01', status: 'active', state: ['app_starbase', 'dc-ops', 'app_managed_k8s', 'maintenance'][i % 4], pool: ['ga', 'maintenance', 'ga', 'reclaim'][i % 4], lockedBy: i % 4 === 1 ? 'J. Chen' : null, starbase: i % 4 === 0 ? 'yes' : null, at: Date.now() }])) };
+      { found: true, region: (d.site || '').toLowerCase() + '-cl01', status: 'active', state: ['app_starbase', 'dc-ops', 'app_managed_k8s', 'maintenance'][i % 4], pool: ['ga', 'maintenance', 'ga', 'reclaim'][i % 4], lockedBy: i % 4 === 1 ? 'J. Chen' : i === 6 ? 'you' : null, starbase: i % 4 === 0 ? 'yes' : null, at: Date.now() }])) };
     return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, grafana: gfMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 

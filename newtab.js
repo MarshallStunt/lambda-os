@@ -12,14 +12,59 @@ LambdaData.ready.then(D => {
   const yardUsable = () => D.MODE !== 'live' || !['na', 'off'].includes(srcState('yard')); // no Yard account / turned off: no Yard line or button
   const yardOf = host => host ? D.YARD?.hosts?.[String(host).toLowerCase()] || null : null;
   const yardUrl = host => host && D.YARD?.base && yardUsable() ? `${D.YARD.base}/search?q=${encodeURIComponent(host)}` : '';
-  const yardChip = host => { const y = yardOf(host); return y?.found && y.state ? ` <span class="yard-chip ${y.lockedBy ? 'locked' : ''}" title="Yard: ${esc([y.state, y.pool && 'pool ' + y.pool, y.lockedBy && 'locked by ' + y.lockedBy, y.starbase && 'in Starbase'].filter(Boolean).join(' · '))}">${y.lockedBy ? '🔒 ' : ''}${esc(y.state)}</span>` : ''; };
-  const yardBlock = host => {
+  const meLock = y => !!(y?.lockedBy && LambdaAlerts.isMe(D, y.lockedBy));
+  const isMineT = t => !!(t && (t.mine || t.assignee === 'me'));
+  const yardWhy = y => [y.state, y.pool && 'pool ' + y.pool, y.lockedBy && (meLock(y) ? 'locked by you' : 'locked by ' + y.lockedBy), y.starbase && 'in Starbase', y.region && String(y.region).toUpperCase()].filter(Boolean).join(' · ');
+  // Hosts shown in lists that the refresh hasn't looked up yet are asked for on demand (a batch at a time, through the
+  // pinned Yard tab), and their slot is filled in when Yard answers. Only live, only if Yard is on and reachable for you.
+  const YardQ = (() => {
+    const want = new Set(), tried = new Set(); let timer = null, busy = false, off = false;
+    const live = () => isExt && D.MODE === 'live' && !off && !!D.YARD && typeof LambdaLive !== 'undefined' && !!LambdaLive.yardLookup && yardUsable();
+    const fill = () => {
+      document.querySelectorAll('.yard-slot[data-yh]').forEach(el => { const h = el.dataset.yh; if (!yardOf(h)) return;
+        const row = el.closest('[data-ticket]'); el.outerHTML = yardChip(h, row && D.ticketByKey(row.dataset.ticket)) || ''; });
+      document.querySelectorAll('[data-yb]').forEach(el => { if (yardOf(el.dataset.yb)) el.outerHTML = yardBlock(el.dataset.yb, el.dataset.ybt && D.ticketByKey(el.dataset.ybt)); });
+    };
+    async function flush() {
+      timer = null; if (busy || !want.size || !live()) return;
+      const hosts = [...want].slice(0, 40); hosts.forEach(h => { want.delete(h); tried.add(h); }); busy = true;
+      try {
+        const got = await LambdaLive.yardLookup(hosts);
+        for (const h of hosts) D.YARD.hosts[h] = got[h] || D.YARD.hosts[h] || { found: false, at: Date.now() };
+      } catch (e) {
+        if (/not available|turned off/i.test(e.message)) off = true;
+        for (const h of hosts) D.YARD.hosts[h] ||= { found: false, at: Date.now(), error: true };
+      } finally { busy = false; fill(); if (want.size) timer = setTimeout(flush, 300); }
+    }
+    return { live, fill, need(h) { h = String(h).toLowerCase(); if (!live() || tried.has(h)) return; want.add(h); timer ||= setTimeout(flush, 250); } };
+  })();
+  // A host's Yard chip: ⚠ when it's on your ticket and still in production unlocked, 🔒 when locked (· you when it's yours).
+  const yardChip = (host, t) => {
     if (!host || !D.YARD || !yardUsable()) return '';
     const y = yardOf(host);
+    if (!y) { YardQ.need(host); return YardQ.live() ? `<span class="yard-slot" data-yh="${esc(String(host).toLowerCase())}"></span>` : ''; }
+    if (!y.found || !y.state) return '';
+    const prod = isMineT(t) && LambdaAlerts.inProduction(y), mineL = meLock(y);
+    return ` <span class="yard-chip ${prod ? 'warn' : y.lockedBy ? (mineL ? 'mine' : 'locked') : ''}" title="Yard: ${esc(yardWhy(y))}${prod ? '. Still in production and not locked: lock or drain it before hands-on work.' : ''}">${prod ? '⚠ ' : y.lockedBy ? '🔒 ' : ''}${esc(y.state)}${mineL ? ' · you' : ''}</span>`;
+  };
+  // What to do about it, on your own tickets (and on a host you've locked with no ticket of yours on it).
+  const yardAdvice = (host, y, t) => {
+    if (!y?.found) return '';
+    const mineTs = ALLT().filter(x => isMineT(x) && String(x.device || '').toLowerCase() === String(host).toLowerCase());
+    if ((t ? isMineT(t) : mineTs.length) && LambdaAlerts.inProduction(y)) return `<div class="yard-warn">⚠ Still in production (${esc(y.state)}) and not locked. Lock or drain it in Yard before hands-on work.</div>`;
+    if ((t ? isMineT(t) : mineTs.length) && y.lockedBy && !meLock(y)) return `<div class="yard-warn">🔒 Locked by <b>${esc(y.lockedBy)}</b>. Check with them before working on it.</div>`;
+    if (meLock(y) && !mineTs.length) return `<div class="yard-warn">🔒 You still hold this lock, but none of your open tickets is on this host. Unlock it in Yard so it can go back to its pool.</div>`;
+    return '';
+  };
+  const yardBlock = (host, t) => {
+    if (!host || !D.YARD || !yardUsable()) return '';
+    const y = yardOf(host);
+    if (!y && YardQ.live()) { YardQ.need(host); return `<div class="yard-row" data-yb="${esc(String(host).toLowerCase())}" ${t ? `data-ybt="${esc(t.key)}"` : ''}><span class="yard-tag">Yard</span><span class="muted">Looking it up in Yard…</span></div>`; }
     const body = !y ? `<span class="muted">${D.YARD.live ? 'Not looked up yet (Lambda OS checks ticket hosts a batch at a time).' : 'Turn on Yard in Settings → Sources to see this host\'s state here.'}</span>`
+      : y.error ? '<span class="muted">Yard didn\'t answer for this host.</span>'
       : !y.found ? '<span class="muted">Not found in Yard.</span>'
-      : `<b>${esc(y.state || '—')}</b>${y.pool ? ` · pool <b>${esc(y.pool)}</b>` : ''}${y.lockedBy ? ` · 🔒 locked by <b>${esc(y.lockedBy)}</b>` : ' · not locked'}${y.starbase ? ' · in Starbase' : ''}${y.status && y.status !== 'active' ? ` · ${esc(y.status)}` : ''}${y.region ? ` <span class="muted">(${esc(String(y.region).toUpperCase())}${y.at ? `, checked ${rel(y.at) === 'now' ? 'just now' : rel(y.at) + ' ago'}` : ''})</span>` : ''}`;
-    return `<div class="yard-row"><span class="yard-tag">Yard</span><span>${body}</span></div>`;
+      : `<b>${esc(y.state || '—')}</b>${y.pool ? ` · pool <b>${esc(y.pool)}</b>` : ''}${y.lockedBy ? ` · 🔒 locked by <b>${meLock(y) ? 'you' : esc(y.lockedBy)}</b>` : ' · not locked'}${y.starbase ? ' · in Starbase' : ''}${y.status && y.status !== 'active' ? ` · ${esc(y.status)}` : ''}${y.region ? ` <span class="muted">(${esc(String(y.region).toUpperCase())}${y.at ? `, checked ${rel(y.at) === 'now' ? 'just now' : rel(y.at) + ' ago'}` : ''})</span>` : ''}`;
+    return `<div class="yard-row"><span class="yard-tag">Yard</span><span>${body}${yardAdvice(host, y, t)}</span></div>`;
   }; // site cards, drawers and answers about a specific thing show all its tickets, whatever the picker
   const isExt = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
   // Canvas colors come from the stage, which stays dark in both themes (so a theme switch needs no repaint of the canvases).
@@ -477,7 +522,13 @@ LambdaData.ready.then(D => {
       $('#queue').insertAdjacentHTML('afterbegin', sourceNote('gmail', 'mail') + sourceNote('slack', 'mentions'));
       return;
     }
-    const mine = mineSorted(), list = mine.length ? mine.slice(0, 100) : [...D.TICKETS].sort(byUrgency).slice(0, 30);
+    const mine = mineSorted();
+    // Yard filters (only when Yard has answers for your tickets): ⚠ still in production unlocked, 🔒 locked.
+    const yi = D.YARD && yardUsable() ? LambdaAlerts.yardIssues(D) : null;
+    const yProd = new Set((yi?.inProd || []).map(x => x.t.key)), yLock = new Set(mine.filter(t => yardOf(t.device)?.lockedBy).map(t => t.key));
+    if (yFilter === 'prod' && !yProd.size || yFilter === 'locked' && !yLock.size) yFilter = '';
+    const mineF = yFilter === 'prod' ? mine.filter(t => yProd.has(t.key)) : yFilter === 'locked' ? mine.filter(t => yLock.has(t.key)) : mine;
+    const list = mine.length ? mineF.slice(0, 100) : [...D.TICKETS].sort(byUrgency).slice(0, 30);
     $('#qTicketsLabel').textContent = mine.length ? 'Tickets' : 'Urgent'; $('#qTicketsLabel').parentElement.title = mine.length ? 'My tickets: assigned to, reported or watched by you' : 'Most urgent tickets fleet-wide';
     $('#queueCount').textContent = mine.length ? `${mine.length} open${aiRank() ? ' · ✨ AI order' : ''}` : 'fleet-wide';
     $('#queueCount').title = aiRank() ? 'Ordered by your AI provider (Settings → Data → Smart processing). Hover a ticket for the reason.' : '';
@@ -487,10 +538,16 @@ LambdaData.ready.then(D => {
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
-          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
+          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device, t)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
+    if (mine.length && (yProd.size || yLock.size)) $('#queue').insertAdjacentHTML('afterbegin', `<li class="yard-filter" role="group" aria-label="Filter by Yard state"><span class="yard-tag">Yard</span>
+      <button class="chip ${!yFilter ? 'on' : ''}" data-yf="" aria-pressed="${!yFilter}">All</button>
+      ${yProd.size ? `<button class="chip ${yFilter === 'prod' ? 'on' : ''}" data-yf="prod" aria-pressed="${yFilter === 'prod'}" title="Your tickets whose host still runs a production app in Yard and isn't locked">⚠ In prod <b>${yProd.size}</b></button>` : ''}
+      ${yLock.size ? `<button class="chip ${yFilter === 'locked' ? 'on' : ''}" data-yf="locked" aria-pressed="${yFilter === 'locked'}" title="Your tickets whose host is locked in Yard">🔒 Locked <b>${yLock.size}</b></button>` : ''}</li>`);
   }
+  let yFilter = '';
+  document.addEventListener('click', e => { const b = e.target.closest('[data-yf]'); if (!b) return; yFilter = b.dataset.yf; renderQueue(); });
   renderQueue(); setInterval(renderQueue, 60000);
 
   /* ---------------- Sites list ---------------- */
@@ -1217,6 +1274,7 @@ LambdaData.ready.then(D => {
       person: { r: 5, label: 'Person', shape: 'hex', color: C['c-person'] },
       channel: { r: 4.5, label: 'Slack', shape: 'square', color: XC.channel },
       event: { r: 4.5, label: 'Meeting', shape: 'square', color: XC.event },
+      cluster: { r: 5, label: 'Yard cluster', shape: 'diamond', color: '#8bd17c' },
     };
     // Soft glow sprites, one per color (radial gradients per node per frame would be too slow).
     const sprites = {};
@@ -1262,8 +1320,11 @@ LambdaData.ready.then(D => {
     for (const t of urgent) {
       const n = add('tk:' + t.key, 'ticket', t.key, t, slaStatus(t) === 'critical' ? 0.7 : slaStatus(t) === 'serious' ? 0.4 : 0);
       const dev = D.deviceById(t.device), site = siteNode(t.site);
-      if (dev) { const dn = add('dev:' + dev.id, 'device', dev.id, dev); link(dn, site); link(n, dn); }
+      const dn = dev ? add('dev:' + dev.id, 'device', dev.id, dev) : null;
+      if (dn) { link(dn, site); link(n, dn); }
       link(n, site);
+      const y = yardUsable() && yardOf(t.device);
+      if (y?.found && y.region) { const cn = add('cl:' + String(y.region).toLowerCase(), 'cluster', String(y.region).toUpperCase(), { id: String(y.region).toLowerCase(), site: t.site }); link(n, cn); link(cn, site); if (dn) link(dn, cn); }
       if (t.assignee) link(n, person(t.assignee, D.personById(t.assignee).name));
       if (t.part) { const p = D.partById(t.part); if (p) link(n, add('part:' + p.id, 'part', p.name !== p.pn ? p.name : p.pn, p)); }
     }
@@ -1453,6 +1514,8 @@ LambdaData.ready.then(D => {
       if (n.type === 'deployment') return `<b>${r.key} · ${esc(r.title)}</b>${statusChip(r.health, depStatus(r))}<br><span>${pct(r.progress)} done · due ${fmtDate(r.end)} · ${esc(r.sites.join(', ') || '?')}</span>`;
       if (n.type === 'project') return `<b>${r.key} · ${esc(r.title)}</b>${statusChip(r.health, r.status)}<br><span>${r.deployments.length} deployments</span>`;
       if (n.type === 'channel') return `<b>#${esc(r.name)}</b><span>Slack · ${r.members} members</span>`;
+      if (n.type === 'cluster') { const hs = Object.values(D.YARD?.hosts || {}).filter(y => y?.found && String(y.region).toLowerCase() === r.id);
+        return `<b>${esc(n.label)}</b><span>Yard cluster · ${hs.length} hosts checked · ${hs.filter(y => y.lockedBy).length} locked</span>`; }
       if (n.type === 'event') return `<b>${esc(r.title)}</b><span>${new Date(r.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>`;
       return `<b>${esc(n.label)}</b>`;
     }
@@ -1551,8 +1614,8 @@ LambdaData.ready.then(D => {
       const what = x => k === 'hot' ? `<b class="st-${x.v >= x.crit ? 'critical' : x.v >= x.warn ? 'warning' : 'good'}">${x.v.toFixed(1)} °C</b> ${esc(x.kind)}` : esc(x.w || '');
       const extra = k === 'blind' && c.n > c.items.length ? `<p class="muted small">Showing ${c.items.length} of ${c.n}. By type: ${Object.entries(c.byJob).map(([j, v]) => `${esc(j)} ${v}`).join(' · ')}</p>` : '';
       Drawer.open(`<div class="qkey">${esc(code)} · SITE HEALTH · GRAFANA</div><h3>${esc(TITLES[k])} <span class="muted">(${k === 'hot' ? items.length : c.n})</span></h3>${extra}
-        <div class="answer" style="margin:0"><table><tr><th>Host</th><th>Rack</th><th>U</th><th>${k === 'hot' ? 'Inlet' : 'What'}</th><th>${k === 'leak' || k === 'breaker' || k === 'shelf' ? 'Seen since' : ''}</th></tr>
-        ${items.slice(0, 300).map(x => `<tr><td>${host(x)}</td><td class="mono">${esc(x.r || '')}</td><td>${esc(x.u || '')}</td><td>${what(x)}</td><td class="muted">${x.since ? rel(x.since) + ' ago' : k === 'leak' || k === 'breaker' || k === 'shelf' ? 'before Lambda OS looked' : ''}</td></tr>`).join('')}</table></div>
+        <div class="answer" style="margin:0"><table><tr><th>Host</th><th>Rack</th><th>U</th><th>${k === 'hot' ? 'Inlet' : 'What'}</th><th>${k === 'leak' || k === 'breaker' || k === 'shelf' ? 'Seen since' : ''}</th>${D.YARD && yardUsable() ? '<th>Yard</th>' : ''}</tr>
+        ${items.slice(0, 300).map((x, i) => `<tr><td>${host(x)}</td><td class="mono">${esc(x.r || '')}</td><td>${esc(x.u || '')}</td><td>${what(x)}</td><td class="muted">${x.since ? rel(x.since) + ' ago' : k === 'leak' || k === 'breaker' || k === 'shelf' ? 'before Lambda OS looked' : ''}</td>${D.YARD && yardUsable() ? `<td>${x.h && i < 80 ? yardChip(x.h) : ''}</td>` : ''}</tr>`).join('')}</table></div>
         ${items.length > 300 ? `<p class="muted small">+${items.length - 300} more</p>` : ''}
         <div class="links">${s.board ? btn('Site health in Grafana', s.board, true) : ''}${s.site ? `<button class="btn" data-site="${esc(code)}">Site card</button>` : ''}</div>`);
     }
@@ -1791,8 +1854,19 @@ LambdaData.ready.then(D => {
       ${h.counts.length > 7 ? `<p class="muted small">+${h.counts.length - 7} more alert types</p>` : ''}
       <div class="links">${btn('Site health in Grafana', h.url)}</div>`; };
   const alertsBlock = list => list?.length ? `<div class="section-title"><span>Firing alerts · Grafana</span><span>${list.length}</span></div>${list.slice(0, 8).map(a =>
-      `<div class="mini-ticket"><span class="qkey">${statusChip(a.crit ? 'critical' : a.hw ? 'warning' : 'idle', a.severity || 'alert')}</span><span class="qsum">${alertLine(a)}</span><span class="small muted">${alertSince(a)}</span></div>`).join('')}` : '';
+      `<div class="mini-ticket"><span class="qkey">${statusChip(a.crit ? 'critical' : a.hw ? 'warning' : 'idle', a.severity || 'alert')}</span><span class="qsum">${alertLine(a)}${a.host ? yardChip(a.host) : ''}</span><span class="small muted">${alertSince(a)}</span></div>`).join('')}` : '';
 
+  // Yard totals at a site, from the hosts Lambda OS has looked up (ticket hosts and lists you've opened), not every host.
+  const yardSiteBlock = s => {
+    if (!D.YARD || !yardUsable()) return '';
+    const pre = s.id.toLowerCase(), hs = Object.entries(D.YARD.hosts || {}).filter(([h, y]) => y?.found && (D.deviceById(h)?.site === s.id || h.startsWith(pre)));
+    if (!hs.length) return '';
+    const prod = hs.filter(([, y]) => LambdaAlerts.inProduction(y)).length, locked = hs.filter(([, y]) => y.lockedBy), mine = locked.filter(([, y]) => meLock(y)).length;
+    const clusters = [...new Set(hs.map(([, y]) => y.region).filter(Boolean).map(r => String(r).toUpperCase()))];
+    return `<div class="section-title"><span>Yard · hosts checked so far</span><span>${hs.length}</span></div>
+      <div class="yard-sum"><span><b>${prod}</b> in production</span><span><b>${locked.length}</b> locked${mine ? ` (${mine} by you)` : ''}</span><span><b>${hs.length - prod - locked.length}</b> other</span></div>
+      ${clusters.length ? `<p class="muted small">Clusters: ${clusters.slice(0, 6).map(c => `<a class="linkish" data-open="cluster:${esc(c.toLowerCase())}">${esc(c)}</a>`).join(' · ')}</p>` : ''}`;
+  };
   const SiteCard = {
     open(s) {
       Fleet.focus(s);
@@ -1818,6 +1892,7 @@ LambdaData.ready.then(D => {
           <div class="stat"><b>${kfmt(s.racks)}</b><span>Racks</span></div><div class="stat"><b>${kfmt(s.devices)}</b><span>Devices</span></div>
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
         ${healthBlock(s)}
+        ${yardSiteBlock(s)}
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
         ${(D.VOLUNTEER || []).filter(v => v.site === s.id).map(v => `<div class="section-title"><span>Volunteers wanted · Slack</span><span>${rel(v.askedAt)}</span></div><ul class="vol-in-card">${volRow(v)}</ul>`).join('')}
         ${s.builds?.length ? `<div class="section-title"><span>Builds · Atium</span><span>${s.builds.length}</span></div>${s.builds.map(buildRow).join('')}` : ''}
@@ -1830,7 +1905,7 @@ LambdaData.ready.then(D => {
         ${s.moves?.length ? `<div class="section-title"><span>Material movements · NetSuite</span><span>${s.moves.length}</span></div>
           ${s.moves.slice(0, 5).map(m => `<div class="mini-ticket" ${m.deploymentKey ? `data-dep="${m.deploymentKey}"` : ''}><span class="qkey">${esc(m.doc)}</span><span class="qsum">${esc(m.type)}${m.deployment ? ' · ' + esc(m.deployment) : ''}</span><span class="small muted">${esc(m.status || m.date)}</span></div>`).join('')}` : ''}
         <div class="section-title"><span>Open tickets</span><span>${tickets.length}</span></div>
-        ${tickets.slice(0, 10).map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`).join('') || '<p class="muted small">None.</p>'}
+        ${tickets.slice(0, 10).map(ticketRow).join('') || '<p class="muted small">None.</p>'}
         ${tickets.length > 10 ? `<p class="muted small">+${tickets.length - 10} more · <a class="linkish" data-url="${esc(s.jiraUrl || '')}" data-what="Jira">see all in Jira</a></p>` : ''}`;
       $('#siteCard').hidden = false; $('#siteCard').scrollTop = 0; renderSites();
       if (s.atium && $('#sitePOs')) loadPOs(s);
@@ -1844,7 +1919,7 @@ LambdaData.ready.then(D => {
     open(html, cls = '') { volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
     close() { $('#drawer').hidden = true; volOpen = false; },
   };
-  const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
+  const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}${yardChip(t.device, t)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
   function openDeployment(d) {
     const days = d.end ? Math.round((d.end - Date.now()) / 864e5) : null;
     const wsRows = d.workstreams.map(w => `<tr data-href="${esc(w.url)}" class="clickrow"><td class="mono">${esc(w.key)}</td><td>${esc(w.summary)}</td><td>${esc(w.status)}</td>
@@ -1908,9 +1983,19 @@ LambdaData.ready.then(D => {
           ${dev ? `<dt>Device</dt><dd><a data-open="device:${esc(dev.id)}" class="mono">${esc(dev.id)}</a></dd><dt>Location</dt><dd>${esc(dev.rack)}${dev.u ? ` · U${dev.u}` : ''}</dd><dt>Model</dt><dd>${esc(dev.model)}</dd>` : ''}
           ${part ? `<dt>Part</dt><dd><a data-open="part:${esc(part.id)}">${esc(partLabel(part))}</a>${stockHere ? ` · <b>${stockHere.stock} on hand at ${esc(site.id)}</b>` : site ? ` · none on hand at ${esc(site.id)}` : ''}</dd>` : ''}
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
-        ${yardBlock(t.device)}
+        ${yardBlock(t.device, t)}
         ${alertsBlock(t.alerts)}
         <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
+    }
+    if (type === 'cluster') {
+      const id = String(ref.id || ref).toLowerCase(), hs = Object.entries(D.YARD?.hosts || {}).filter(([, y]) => y?.found && String(y.region).toLowerCase() === id);
+      const set = new Set(hs.map(([h]) => h)), ts = ALLT().filter(t => set.has(String(t.device || '').toLowerCase())).sort(byUrgency);
+      return Drawer.open(`<div class="qkey">YARD CLUSTER</div><h3 class="mono">${esc(id.toUpperCase())}</h3>
+        <p class="muted small">${hs.length} hosts checked in Yard so far · ${hs.filter(([, y]) => LambdaAlerts.inProduction(y)).length} in production · ${hs.filter(([, y]) => y.lockedBy).length} locked</p>
+        <div class="section-title"><span>Open tickets on this cluster</span><span>${ts.length}</span></div>${ts.slice(0, 40).map(ticketRow).join('') || '<p class="muted">None.</p>'}
+        <div class="section-title"><span>Locked hosts</span><span>${hs.filter(([, y]) => y.lockedBy).length}</span></div>
+        ${hs.filter(([, y]) => y.lockedBy).slice(0, 30).map(([h, y]) => `<div class="mini-ticket" ${D.deviceById(h) ? `data-open="device:${esc(D.deviceById(h).id)}"` : ''}><span class="qkey mono">${esc(h)}</span><span class="qsum">${esc(y.state || '')}</span><span class="small muted">🔒 ${meLock(y) ? 'you' : esc(y.lockedBy)}</span></div>`).join('') || '<p class="muted">None.</p>'}
+        <div class="links">${D.YARD?.base ? btn('Open in Yard', `${D.YARD.base}/search?q=${encodeURIComponent(id)}`, true) : ''}</div>`);
     }
     if (type === 'device') {
       const d = ref, ts = ALLT().filter(t => t.device === d.id).sort(byUrgency);
@@ -1939,8 +2024,8 @@ LambdaData.ready.then(D => {
   }
   function openRef(ref) {
     const [kind, id] = ref.split(/:(.+)/);
-    const map = { site: D.siteById, device: D.deviceById, part: D.partById, person: D.personById, ticket: D.ticketByKey };
-    openEntity(kind, map[kind](id));
+    const map = { site: D.siteById, device: D.deviceById, part: D.partById, person: D.personById, ticket: D.ticketByKey, cluster: c => ({ id: c }) };
+    const r = map[kind]?.(id); if (r) openEntity(kind, r);
   }
 
   document.addEventListener('click', e => {
@@ -2004,7 +2089,7 @@ LambdaData.ready.then(D => {
     push('Deployments', (A.DEPLOYMENTS || []).map(x => ({ sc: score(x.key, x.title, x.summary, x.gpuModel, ...x.sites), icon: '◆', color: XC.deployment, title: `${x.key} · ${x.title}`, sub: `${x.sites.join(', ') || '?'} · ${depStatus(x)} · ${pct(x.progress)} · due ${fmtDate(x.end)}`, run: () => { closePalette(); openEntity('deployment', x); } })), 5);
     push('Projects', (A.PROJECTS || []).map(x => ({ sc: score(x.key, x.title, x.summary), icon: '⬡', color: XC.project, title: `${x.key} · ${x.title}`, sub: `${x.deployments.length} deployments · ${x.status}`, run: () => { closePalette(); openEntity('project', x); } })), 3);
     push('Tickets', A.TICKETS.map(x => ({ sc: score(x.key, x.summary, x.device), icon: 'T', color: C['c-ticket'], title: `${x.key} · ${x.summary}`, sub: `${x.site || '?'} · ${x.status} · ${x.assigneeName}`, run: () => { closePalette(); openEntity('ticket', x); } })), 5);
-    push('Devices', A.DEVICES.map(x => ({ sc: score(x.id, x.serial, x.model), icon: 'D', color: C['c-device'], title: x.id, sub: `${x.model} · ${x.site || '?'} ${x.rack}${x.u ? ` U${x.u}` : ''}`, run: () => { closePalette(); openEntity('device', x); } })));
+    push('Devices', A.DEVICES.map(x => ({ sc: score(x.id, x.serial, x.model), icon: 'D', color: C['c-device'], title: x.id, sub: `${x.model} · ${x.site || '?'} ${x.rack}${x.u ? ` U${x.u}` : ''}${(y => y?.found && y.state ? ` · Yard: ${y.lockedBy ? '🔒 ' : ''}${y.state}${y.pool ? ` / ${y.pool}` : ''}${y.lockedBy ? ` (${meLock(y) ? 'you' : y.lockedBy})` : ''}` : '')(yardUsable() && yardOf(x.id))}`, run: () => { closePalette(); openEntity('device', x); } })));
     push('Parts', D.PARTS.map(x => ({ sc: score(x.pn, x.name, x.mfr), icon: 'P', color: C['c-part'], title: partLabel(x), sub: 'Stock by site', run: () => { closePalette(); openEntity('part', x); } })));
     push('People', D.PEOPLE.map(x => ({ sc: score(x.name, x.handle), icon: '@', color: C['c-person'], title: x.name, sub: 'Assigned tickets', run: () => { closePalette(); openEntity('person', x); } })));
     push('Slack', (D.CHANNELS || []).map(c => ({ sc: score(c.name, c.topic, c.purpose), icon: '#', color: XC.channel, title: '#' + c.name, sub: `${c.members} members${c.site ? ' · ' + c.site : ''}`, run: () => { closePalette(); openUrl(c.url, 'Slack'); } })), 3);
@@ -2195,6 +2280,18 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     ts = [...new Map(ts.map(t => [t.key, t])).values()].sort(byUrgency).slice(0, 120);
     L.push('', `OPEN DC TICKETS (${ts.length} of ${D.TICKETS.length}; key | summary | site | device | status | priority | SLA | assignee)`);
     for (const t of ts) L.push([t.key, t.summary, t.site || '', t.device, t.status, t.priority, slaText(t), t.assigneeName].join(' | '));
+    if (D.YARD && yardUsable()) {
+      const yh = Object.entries(D.YARD.hosts || {}).filter(([, y]) => y?.found);
+      const wanted = new Set([...ts.map(t => String(t.device || '').toLowerCase()), ...yh.filter(([h]) => qq.includes(h)).map(([h]) => h), ...yh.filter(([, y]) => meLock(y)).map(([h]) => h)]);
+      const rows = yh.filter(([h]) => wanted.has(h)).slice(0, 150);
+      if (rows.length) L.push('', `YARD CENTRAL HOST STATE (read-only; ${yh.length} hosts looked up so far, not every host; host | app/state | pool | locked by | Starbase | cluster | in production & unlocked)`,
+        ...rows.map(([h, y]) => [h, y.state || '', y.pool || '', y.lockedBy ? (meLock(y) ? 'YOU' : y.lockedBy) : '', y.starbase ? 'yes' : '', y.region || '', LambdaAlerts.inProduction(y) ? 'yes' : ''].join(' | ')));
+      const yi = LambdaAlerts.yardIssues(D);
+      if (yi.inProd.length || yi.lockedOther.length || yi.lockedMine.length) L.push('', 'YARD ISSUES ON MY TICKETS',
+        ...yi.inProd.map(x => `${x.t.key} ${x.t.device}: still in production (${x.y.state}) and not locked`),
+        ...yi.lockedOther.map(x => `${x.t.key} ${x.t.device}: locked by ${x.y.lockedBy}`),
+        ...yi.lockedMine.map(x => `${x.host}: still locked by me, no open ticket of mine on it`));
+    }
     const low = []; D.SITES.forEach(s => s.inventory.forEach(i => { if (invStatus(i) !== 'good') low.push([s.id, partLabel(D.partById(i.part)), i.stock, i.alert].join(' | ')); }));
     if (low.length) L.push('', 'LOW SPARES (site | part | on hand | alert at)', ...low.slice(0, 60));
     if (D.MOVES?.length) L.push('', 'NETSUITE MATERIAL MOVEMENTS (date | doc | type | deployment | site | status | tracking)',
@@ -2210,7 +2307,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
   }
   function redactorFor(priv) {
     const people = [...D.PEOPLE.map(x => x.name), ...(D.DEPLOYMENTS || []).map(d => d.assigneeName), ...(D.TICKETS || []).map(t => t.assigneeName),
-      ...(D.MENTIONS || []).map(m => m.user), ...(D.MAIL?.entries || []).map(e => e.from), D.ME?.name].filter(n => n && !/^(you|unassigned)$/i.test(n));
+      ...(D.MENTIONS || []).map(m => m.user), ...(D.MAIL?.entries || []).map(e => e.from), D.ME?.name, ...Object.values(D.YARD?.hosts || {}).map(y => y?.lockedBy)].filter(n => n && !/^(you|unassigned)$/i.test(n));
     return LambdaAI.makeRedactor(priv, { people, serials: D.DEVICES.map(d => d.serial).filter(Boolean), hosts: D.DEVICES.map(d => d.id) });
   }
 
@@ -2383,6 +2480,10 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         ${sec('Parts arrived for your tickets', b.partsArrived.length, b.partsArrived.map(t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(D.partById(t.part)?.name || t.part)} on hand at ${esc(t.site)}</span></div>`).join(''), 'Nothing new on hand.')}
         ${sec(`New tickets${b.mySites.length ? ' at your sites' : ''}`, b.newTickets.length, b.newTickets.slice(0, 8).map(ticketRow).join('') + (b.newTickets.length > 8 ? `<p class="muted small">+${b.newTickets.length - 8} more</p>` : ''), 'No new tickets.')}
         ${sec('Low spares at your sites', b.lowSpares.length, b.lowSpares.slice(0, 8).map(x => `<div class="mini-ticket" data-site="${esc(x.site)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.part)}</span><span class="small st-${x.stock === 0 ? 'critical' : 'warning'}">${x.stock} / alert ${x.alert}</span></div>`).join(''), 'Spares look fine.')}
+        ${b.yard?.on && (b.yard.inProd.length || b.yard.lockedOther.length || b.yard.lockedMine.length) ? sec('Your hosts in Yard', b.yard.inProd.length + b.yard.lockedOther.length + b.yard.lockedMine.length,
+          b.yard.inProd.map(({ t, y }) => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum mono">${esc(t.device)}</span><span class="small st-warning">⚠ in production (${esc(y.state)}), not locked</span></div>`).join('')
+          + b.yard.lockedOther.map(({ t, y }) => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum mono">${esc(t.device)}</span><span class="small">🔒 locked by ${esc(y.lockedBy)}</span></div>`).join('')
+          + b.yard.lockedMine.map(({ host }) => `<div class="mini-ticket" data-href="${esc(yardUrl(host))}"><span class="qkey">Unlock?</span><span class="qsum mono">${esc(host)}</span><span class="small">🔒 still locked by you, no open ticket</span></div>`).join('')) : ''}
         ${b.hardware?.length ? sec('Critical hardware alerts · Grafana', b.hardware.reduce((t, x) => t + x.n, 0), b.hardware.map(x => `<div class="mini-ticket" data-href="${esc(x.url)}"><span class="qkey">${esc(x.site)}</span><span class="qsum">${esc(x.name)}</span><span class="small st-critical">${x.n}×</span></div>`).join('')) : ''}
         ${(D.VOLUNTEER || []).some(v => v.at > Date.now() - 7 * 864e5) ? sec('Volunteer requests (7 days)', D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).length, D.VOLUNTEER.filter(v => v.at > Date.now() - 7 * 864e5).map(v => `<div class="mini-ticket" data-vol="${esc(v.site)}"><span class="qkey">${esc(v.site)}</span><span class="qsum">${esc(v.text.slice(0, 120))}${v.text.length > 120 ? '…' : ''}</span><span class="small muted">${esc(v.user)}</span></div>`).join('')) : ''}
         ${b.atium.on ? sec('Builds & purchase orders · Atium', b.atium.builds.length + b.atium.late.length + b.atium.dueSoon.length,

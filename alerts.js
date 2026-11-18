@@ -37,6 +37,36 @@ const LambdaAlerts = (() => {
     return (D.BUILDS || []).filter(b => (b.site && sites.has(b.site)) || (b.deploymentKey && tk.has(b.deploymentKey))); };
   const sitePOs = s => s?.atium?.pos || s?.atium?.posLive?.pos || null;
 
+  // Yard Central checks on your own tickets' hosts (only where Yard answered: no Yard account means no checks).
+  //  inProd: the host still runs a production app in Yard and isn't locked (lock or drain it before hands-on work);
+  //  lockedOther: someone else holds the host's lock; lockedMine: you hold a lock on a host none of your open tickets is on.
+  const norm = x => String(x || '').toLowerCase().replace(/[^a-z0-9@.]/g, '');
+  function isMe(D, who) {
+    const w = norm(who); if (!w) return false;
+    const me = D.ME || {}, name = String(me.name || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const email = String(me.email || '').toLowerCase(), local = email.split('@')[0];
+    const forms = new Set([email, local, local.replace(/[._-]/g, ''), ...(me.handles || []),
+      ...(name.length > 1 ? [name.join(''), name.join('.'), name[0][0] + name[name.length - 1], name[0] + name[name.length - 1][0], name[0][0] + '.' + name[name.length - 1]] : [])]
+      .map(norm).filter(x => x.length > 2));
+    return forms.has(w) || forms.has(w.split('@')[0]) || (name.length > 1 && w.includes(norm(name.join(''))));
+  }
+  const NOT_PROD = /maint|repair|rma|broken|burn|valid|stag|spare|decom|quarant|hold|test|dc-?ops|reclaim|drain|offline|down|triage/i;
+  const inProduction = y => !!(y?.found && y.state && !y.lockedBy && /^app[_-]|prod|customer|allocated|in[_-]?use/i.test(y.state)
+    && !NOT_PROD.test(`${y.state} ${y.pool || ''}`) && (!y.status || /active/i.test(y.status)));
+  function yardIssues(D) {
+    const hosts = D.YARD?.hosts || {}, out = { inProd: [], lockedOther: [], lockedMine: [], on: Object.keys(hosts).length > 0 };
+    if (!out.on) return out;
+    const mine = (D.ALL || D).TICKETS.filter(t => (t.mine || t.assignee === 'me') && t.device);
+    const myHosts = new Set(mine.map(t => t.device.toLowerCase()));
+    for (const t of mine) {
+      const y = hosts[t.device.toLowerCase()]; if (!y?.found) continue;
+      if (inProduction(y)) out.inProd.push({ t, y });
+      else if (y.lockedBy && !isMe(D, y.lockedBy)) out.lockedOther.push({ t, y });
+    }
+    for (const [host, y] of Object.entries(hosts)) if (y?.found && y.lockedBy && isMe(D, y.lockedBy) && !myHosts.has(host)) out.lockedMine.push({ host, y });
+    return out;
+  }
+
   // Quiet hours: "22:00"–"07:00" style, may wrap past midnight.
   function quiet(cfg, now = Date.now()) {
     if (!cfg.quietFrom || !cfg.quietTo) return false;
@@ -151,6 +181,18 @@ const LambdaAlerts = (() => {
         title: leaks.length ? `💧 ${code}: leak detector alarming${leaks.length > 1 ? ` (${leaks.length})` : ''}` : `${code}: ${list.length} ${list[0].label.toLowerCase()}${list.length > 1 ? ' and more' : ''}`,
         message: list.slice(0, 3).map(x => [x.label, x.h, x.r && `rack ${x.r}`, x.u && `U${x.u}`, x.w].filter(Boolean).join(' · ')).join('\n') });
     }
+    // Yard: one notification per new issue; the first look (or the first run after an update) is only a baseline.
+    next.yard = {};
+    const yi = yardIssues(Din), yOn = !first && cfg.yard !== false && !!prev.yard;
+    for (const { t, y } of yi.inProd) { const k = `prod|${t.key}`; next.yard[k] = 1;
+      if (yOn && !prev.yard[k]) notes.push({ id: `yard:${k}`, url: t.url, title: `Still in production in Yard · ${t.key}`,
+        message: `${t.device} runs ${y.state}${y.pool ? ` (pool ${y.pool})` : ''} and isn't locked. Lock or drain it in Yard before hands-on work. ${t.summary}` }); }
+    for (const { t, y } of yi.lockedOther) { const k = `other|${t.key}|${y.lockedBy}`; next.yard[k] = 1;
+      if (yOn && !prev.yard[k]) notes.push({ id: `yard:${k}`, url: t.url, title: `Locked by ${y.lockedBy} · ${t.key}`,
+        message: `${t.device} is locked in Yard by ${y.lockedBy}. Check with them before working on it. ${t.summary}` }); }
+    for (const { host, y } of yi.lockedMine) { const k = `mine|${host}`; next.yard[k] = 1;
+      if (yOn && !prev.yard[k]) notes.push({ id: `yard:${k}`, url: D.YARD?.base ? `${D.YARD.base}/search?q=${encodeURIComponent(host)}` : '', title: `Still locked by you · ${host}`,
+        message: `None of your open tickets is on this host any more. Unlock it in Yard so it can go back to its pool${y.pool ? ` (${y.pool})` : ''}.` }); }
     next.srcAlerted = {};
     for (const s of troubled(D)) {
       const since = s.since || now;
@@ -221,7 +263,7 @@ const LambdaAlerts = (() => {
           late: pos.filter(x => x.st.state === 'late').sort((a, b) => b.st.dueAt - a.st.dueAt),
           dueSoon: pos.filter(x => x.st.state === 'due' && x.st.dueAt < now + 3 * DAY).sort((a, b) => a.st.dueAt - b.st.dueAt),
           stale: pos.filter(x => x.st.state === 'stale').length };
-      })(), mentions: (D.MENTIONS || []).filter(m => m.at > now - DAY),
+      })(), yard: yardIssues(D), mentions: (D.MENTIONS || []).filter(m => m.at > now - DAY),
       troubled: troubled(D).map(s => ({ ...s, label: outage(s), sinceText: s.since ? clock(s.since) : '', staleText: s.staleAt ? clock(s.staleAt) : '' })),
     };
   }
@@ -241,7 +283,7 @@ const LambdaAlerts = (() => {
     return d.getHours() * 60 + d.getMinutes() >= h * 60 + (m || 0);
   };
 
-  return { evaluate, addToHistory, brief, nextBriefAt, briefDue, quiet, dayKey, troubled, outage, clock, poState, mySites: yourSites };
+  return { evaluate, addToHistory, brief, yardIssues, inProduction, isMe, nextBriefAt, briefDue, quiet, dayKey, troubled, outage, clock, poState, mySites: yourSites };
 })();
 
 if (typeof self !== 'undefined') self.LambdaAlerts = LambdaAlerts;
