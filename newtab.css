@@ -806,7 +806,7 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .stage-legend::-webkit-scrollbar { display: none; }
 .stage-legend > * { flex-shrink: 0; }
 .keywrap { position: relative; }
-.keypop { position: fixed; z-index: 12; margin-top: 30px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px;
+.keypop { position: fixed; z-index: 12; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 12px; border-radius: 10px;
   background: var(--glass-strong, rgba(10,15,28,.97)); border: 1px solid var(--line-hi); box-shadow: 0 12px 40px rgba(0,0,0,.4); font-size: 11.5px; color: var(--text-2); }
 .keypop[hidden] { display: none; }
 /* Settings: address checks */
@@ -821,3 +821,4 @@ input.bad { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(
 .tour-card p { margin: 0 0 12px; font-size: 13px; line-height: 1.45; color: var(--text-2); }
 .tour-btns { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .tour-btns span { display: flex; gap: 6px; }
+.feed-filters { justify-content: flex-start !important; }
