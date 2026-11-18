@@ -1710,9 +1710,23 @@ LambdaData.ready.then(D => {
       const host = x => { const dv = x.h && D.deviceById(x.h); return dv ? `<a data-open="device:${esc(dv.id)}" class="mono">${esc(x.h)}</a>` : `<span class="mono">${esc(x.h || '—')}</span>`; };
       const what = x => k === 'hot' ? `<b class="st-${x.v >= x.crit ? 'critical' : x.v >= x.warn ? 'warning' : 'good'}">${x.v.toFixed(1)} °C</b> ${esc(x.kind)}` : esc(x.w || '');
       const extra = k === 'blind' && c.n > c.items.length ? `<p class="muted small">Showing ${c.items.length} of ${c.n}. By type: ${Object.entries(c.byJob).map(([j, v]) => `${esc(j)} ${v}`).join(' · ')}</p>` : '';
+      // One row per host: host and what's wrong on top; where it is, since when, its open tickets and Yard state below.
+      const tk = new Map(); for (const t of ALLT()) if (t.device) { const h = String(t.device).toLowerCase(); (tk.get(h) || tk.set(h, []).get(h)).push(t); }
+      const sinceTxt = x => x.since ? `since ${rel(x.since) === 'now' ? 'just now' : rel(x.since) + ' ago'}` : k === 'leak' || k === 'breaker' || k === 'shelf' ? 'already before Lambda OS looked' : '';
+      const servers = k === 'hw' || k === 'hot'; // PDUs, breakers, shelves and switches aren't Yard hosts and rarely have tickets
+      const yOn = servers && D.YARD && yardUsable();
+      const byWhat = k !== 'hot' ? Object.entries(items.reduce((a, x) => (x.w && (a[x.w] = (a[x.w] || 0) + 1), a), {})).sort((a, b) => b[1] - a[1]) : [];
+      const rows = items.slice(0, 300).map((x, i) => {
+        const ts = x.h ? tk.get(String(x.h).toLowerCase()) || [] : [];
+        const where = [x.r && `Rack <b class="mono">${esc(x.r)}</b>`, x.u && `U${esc(String(x.u).replace(/\.0$/, ''))}`].filter(Boolean).join(' · ');
+        return `<div class="hrow"><div class="hrow-top">${host(x)}<span class="hrow-what">${what(x) || '<span class="muted">—</span>'}</span></div>
+          <div class="hrow-sub">${[where, sinceTxt(x) && `<span class="muted">${sinceTxt(x)}</span>`,
+            ts.length ? ts.slice(0, 3).map(t => `<a class="tagchip" data-ticket="${esc(t.key)}" title="${esc(t.summary)}">${esc(t.key)}</a>`).join(' ') + (ts.length > 3 ? ` <span class="muted">+${ts.length - 3}</span>` : '') : x.h && servers ? '<span class="muted">no open ticket</span>' : '',
+            yOn && x.h && i < 80 ? yardChip(x.h).trim() : ''].filter(Boolean).map(v => `<span>${v}</span>`).join('<span class="hdot">·</span>')}</div></div>`;
+      }).join('');
       Drawer.open(`<div class="qkey">${esc(code)} · SITE HEALTH · GRAFANA</div><h3>${esc(TITLES[k])} <span class="muted">(${k === 'hot' ? items.length : c.n})</span></h3>${extra}
-        <div class="answer" style="margin:0"><table><tr><th>Host</th><th>Rack</th><th>U</th><th>${k === 'hot' ? 'Inlet' : 'What'}</th><th>${k === 'leak' || k === 'breaker' || k === 'shelf' ? 'Seen since' : ''}</th>${D.YARD && yardUsable() ? '<th>Yard</th>' : ''}</tr>
-        ${items.slice(0, 300).map((x, i) => `<tr><td>${host(x)}</td><td class="mono">${esc(x.r || '')}</td><td>${esc(x.u || '')}</td><td>${what(x)}</td><td class="muted">${x.since ? rel(x.since) + ' ago' : k === 'leak' || k === 'breaker' || k === 'shelf' ? 'before Lambda OS looked' : ''}</td>${D.YARD && yardUsable() ? `<td>${x.h && i < 80 ? yardChip(x.h) : ''}</td>` : ''}</tr>`).join('')}</table></div>
+        ${byWhat.length > 1 ? `<div class="hsummary">${byWhat.slice(0, 8).map(([w, n]) => `<span><b>${n}</b> ${esc(w)}</span>`).join('')}</div>` : ''}
+        <div class="hlist">${rows || '<p class="muted">No hosts listed.</p>'}</div>
         ${items.length > 300 ? `<p class="muted small">+${items.length - 300} more</p>` : ''}
         <div class="links">${s.board ? btn('Site health in Grafana', s.board, true) : ''}${s.site ? `<button class="btn" data-site="${esc(code)}">Site card</button>` : ''}</div>`);
     }
