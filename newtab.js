@@ -7,6 +7,22 @@ LambdaData.ready.then(D => {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const H = 3600e3;
   const ALLT = () => (D.ALL || D).TICKETS;
+  /* "All sites / Your sites" switch in Fleet, Second brain, Deployments and Health. Each view follows the top-bar picker
+     until you pick here; then "All sites" really means every site (whatever the picker), "Your sites" means yours, and
+     "📍 Picked" goes back to following the picker. Picking at the top resets the views to follow it again. */
+  const MINE = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : []);
+  const VS = k => { try { const v = localStorage.getItem('lambdaos-vs-' + k); return v === 'all' || (v === 'mine' && MINE.size) ? v : 'top'; } catch { return 'top'; } };
+  const setVS = (k, v) => { try { v === 'top' ? localStorage.removeItem('lambdaos-vs-' + k) : localStorage.setItem('lambdaos-vs-' + k, v); } catch { /* per-viewer convenience */ } };
+  const vsEff = v => v !== 'top' ? v : !D.SCOPE ? 'all' : D.SCOPE_CHOICE === 'mine' ? 'mine' : 'picked';
+  const vsData = v => v === 'top' ? D : (D.ALL || D);                       // whose lists the view draws
+  const vsSet = v => v === 'top' ? D.SCOPE : v === 'mine' ? MINE : null;      // null: every site
+  const vsHas = v => { const set = vsSet(v); return id => !set || set.has(id); };
+  const scopeSeg = (k, cur) => {
+    const eff = vsEff(cur), picked = D.SCOPE && D.SCOPE_CHOICE !== 'mine';
+    const opts = [['all', 'All sites', 'Every site, whatever the picker at the top shows'], ...(MINE.size ? [['mine', 'Your sites', 'Your sites: ' + [...MINE].join(', ')]] : []),
+      ...(picked ? [['picked', `📍 Picked (${D.SCOPE.size})`, 'The sites picked at the top: ' + [...D.SCOPE].join(', ')]] : [])];
+    return opts.length > 1 ? `<span class="seg">${opts.map(([v, l, t]) => `<button class="chip ${eff === v ? 'on' : ''}" data-vscope="${k}:${v === 'picked' ? 'top' : v}" aria-pressed="${eff === v}" title="${esc(t)}">${l}</button>`).join('')}</span>` : '';
+  };
   // Yard Central (read-only): a host's state, pool, lock and Starbase, plus a link to it in Yard.
   const srcState = k => D.SOURCES.find(s => s.key === k)?.state;
   const yardUsable = () => D.MODE !== 'live' || !['na', 'off'].includes(srcState('yard')); // no Yard account / turned off: no Yard line or button
@@ -216,7 +232,7 @@ LambdaData.ready.then(D => {
     btn.classList.toggle('on', !!D.SCOPE);
     btn.title = D.SCOPE ? `Showing ${chosen.join(', ')} only (cards, tickets, feed, sites, health, deployments, notifications). Search still covers every site.` : 'Showing every site. Click to show only your site(s).';
     let pending = new Set(choice === 'mine' ? [] : chosen);
-    const apply = async v => { await LambdaData.saveScope(v); location.reload(); };
+    const apply = async v => { await LambdaData.saveScope(v); try { ['globe', 'graph', 'deploys', 'health'].forEach(k => localStorage.removeItem('lambdaos-vs-' + k)); } catch { /* ignore */ } location.reload(); };
     const paint = () => {
       pop.innerHTML = `<div class="sp-head">Show</div>
         <label class="sp-row ${!D.SCOPE ? 'cur' : ''}"><input type="radio" name="spm" data-sp="all" ${!D.SCOPE ? 'checked' : ''}> All sites</label>
@@ -860,7 +876,8 @@ LambdaData.ready.then(D => {
 
     // Frame the live data centers (wherever they are), weighted by size.
     function fit() {
-      let pts = D.SCOPE ? placed.filter(s => D.SCOPE.has(s.id)) : placed.filter(s => s.kind === 'dc' && s.health !== 'idle');
+      const fset = vsSet(VS('globe'));
+      let pts = fset ? placed.filter(s => fset.has(s.id)) : placed.filter(s => s.kind === 'dc' && s.health !== 'idle');
       if (!pts.length) pts = placed;
       if (!pts.length) return { lon: -98, lat: 38, zoom: 1 };
       const v = [0, 0, 0];
@@ -868,7 +885,7 @@ LambdaData.ready.then(D => {
       const n = Math.hypot(...v) || 1, c = v.map(x => x / n);
       const lat = Math.asin(c[2]) / DEG, lon = Math.atan2(c[1], c[0]) / DEG;
       const spread = Math.max(...pts.map(s => { const g = geo(s.lat, s.lon); return Math.acos(Math.min(1, g[0] * c[0] + g[1] * c[1] + g[2] * c[2])); }));
-      return { lon, lat, zoom: Math.max(1, Math.min(D.SCOPE ? 5 : 2.6, 0.92 / Math.sin(Math.min(spread + 0.1, 1.45)))) };
+      return { lon, lat, zoom: Math.max(1, Math.min(fset ? 5 : 2.6, 0.92 / Math.sin(Math.min(spread + 0.1, 1.45)))) };
     }
     const home = fit();
     let w = 1, h = 1, dpr = 1, lon0 = home.lon, lat0 = home.lat, zoom = home.zoom, zoomT = home.zoom, cx = 0, R = 1, target = null, lastInteract = 0;
@@ -1091,7 +1108,7 @@ LambdaData.ready.then(D => {
       const availW = w - shift, sx = (availW * 0.78) / Math.max(maxX - minX, 0.02), sy = (h * 0.7) / Math.max(maxY - minY, 0.02);
       return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, S: Math.max(availW * 0.95, Math.min(sx, sy, availW * 60)) };
     }
-    const homeBox = () => fitBox(placed.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.kind === 'dc' && s.health !== 'idle'));
+    const homeBox = () => { const fset = vsSet(VS('globe')); return fitBox(placed.filter(s => fset ? fset.has(s.id) : s.kind === 'dc' && s.health !== 'idle')); };
 
     function resize() {
       const r = cv.getBoundingClientRect(); dpr = devicePixelRatio || 1; w = r.width || 1; h = r.height || 1; cv.width = w * dpr; cv.height = h * dpr;
@@ -1347,12 +1364,6 @@ LambdaData.ready.then(D => {
   /* ---------------- "All sites / Your sites" switch for the Second brain and Deployments ---------------- */
   // Works inside whatever the top-bar site picker shows; "Your sites" is the same list as the picker's (Jira history,
   // deployments assigned to you, and the sites you starred). Each view remembers its own choice.
-  const MINE = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : []);
-  const vscope = k => { try { return MINE.size && localStorage.getItem('lambdaos-vscope-' + k) === 'mine' ? 'mine' : 'all'; } catch { return 'all'; } };
-  const setVscope = (k, v) => { try { localStorage.setItem('lambdaos-vscope-' + k, v); } catch { /* per-viewer convenience */ } };
-  const scopeSeg = (k, cur) => MINE.size ? `<span class="seg" title="Your sites: ${esc([...MINE].join(', '))}">${[['all', 'All sites'], ['mine', 'Your sites']].map(([v, l]) =>
-    `<button class="chip ${cur === v ? 'on' : ''}" data-vscope="${k}:${v}" aria-pressed="${cur === v}">${l}</button>`).join('')}</span>` : '';
-
   /* ---------------- Second brain (neurons) ---------------- */
   // Everything linked, drawn as a neural net: glowing somas, curved dendrites, and signals firing along them.
   // Hot nodes (breached tickets, deployments at risk, fresh Slack mentions) fire more often.
@@ -1399,25 +1410,26 @@ LambdaData.ready.then(D => {
       edges.push(e); a.nb.add(b); b.nb.add(a); a.out.push(e); b.out.push(e);
     };
     // With the site picker set, only those sites (and what hangs off them) are in the brain; "Your sites" narrows it further.
-    let bscope = vscope('graph');
-    const inScope = id => (!D.SCOPE || D.SCOPE.has(id)) && (bscope !== 'mine' || MINE.has(id));
+    let bscope = VS('graph');
+    const inScope = id => vsHas(bscope)(id);
     const anyIn = arr => (arr || []).some(inScope);
-    const siteNode = id => { const s = inScope(id) && D.siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
+    const siteNode = id => { const s = inScope(id) && (D.ALL || D).siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
     const person = (id, name) => id ? add('person:' + id, 'person', id === 'me' ? 'You' : name, D.personById(id)) : null;
     const hot = h => h === 'critical' ? 1 : h === 'warning' ? 0.5 : 0;
 
     function build() {
+    const S = vsData(bscope), narrow = vsEff(bscope) !== 'all';
     nodes.length = 0; edges.length = 0; byId.clear(); pulses.length = 0; seed = 7; hover = null; dragNode = null;
-    D.SITES.filter(s => D.SCOPE || bscope === 'mine' ? inScope(s.id) : s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
-    for (const p of (D.PROJECTS || []).filter(p => bscope !== 'mine' || anyIn(p.sites))) add('proj:' + p.key, 'project', p.title || p.key, p, hot(p.health));
-    for (const d of (D.DEPLOYMENTS || []).filter(d => bscope !== 'mine' || anyIn(d.sites))) {
+    S.SITES.filter(s => narrow ? inScope(s.id) : s.kind === 'dc' && s.health !== 'idle').forEach(s => siteNode(s.id));
+    for (const p of (S.PROJECTS || []).filter(p => !narrow || anyIn(p.sites))) add('proj:' + p.key, 'project', p.title || p.key, p, hot(p.health));
+    for (const d of (S.DEPLOYMENTS || []).filter(d => !narrow || anyIn(d.sites))) {
       const n = add('dep:' + d.key, 'deployment', d.site ? `${d.site} ${d.gpus ? d.gpus.toLocaleString() + '×' + d.gpuModel : d.key}` : d.key, d, hot(d.health));
       if (d.project) link(n, byId.get('proj:' + d.project.key));
       d.sites.forEach(c => link(n, siteNode(c)));
       link(n, person(d.assignee, d.assigneeName));
       for (const c of d.channels || []) link(n, add('chan:' + c.id, 'channel', '#' + c.name, c));
     }
-    const urgent = D.TICKETS.filter(t => bscope !== 'mine' || inScope(t.site)).sort(byUrgency).slice(0, 180);
+    const urgent = S.TICKETS.filter(t => !narrow || inScope(t.site)).sort(byUrgency).slice(0, 180);
     for (const t of urgent) {
       const n = add('tk:' + t.key, 'ticket', t.key, t, slaStatus(t) === 'critical' ? 0.7 : slaStatus(t) === 'serious' ? 0.4 : 0);
       const dev = D.deviceById(t.device), site = siteNode(t.site);
@@ -1434,7 +1446,7 @@ LambdaData.ready.then(D => {
     const soon = Date.now() + 3 * 864e5;
     for (const e of (D.EVENTS || []).filter(e => e.at < soon)) {
       if (!e.deployment && !e.site) continue;
-      if ((D.SCOPE || bscope === 'mine') && !(e.deployment && byId.has('dep:' + e.deployment)) && !(e.site && inScope(e.site))) continue;
+      if (narrow && !(e.deployment && byId.has('dep:' + e.deployment)) && !(e.site && inScope(e.site))) continue;
       const n = add('ev:' + e.title + e.at, 'event', e.title.length > 28 ? e.title.slice(0, 27) + '…' : e.title, e);
       link(n, e.deployment ? byId.get('dep:' + e.deployment) : siteNode(e.site));
     }
@@ -1659,7 +1671,7 @@ LambdaData.ready.then(D => {
       set3d: on => { if (on === mode3d) return; mode3d = on; try { localStorage.setItem('lambdaos-brain3d', on ? '1' : '0'); } catch { /* ignore */ }
         alpha = Math.max(alpha, 0.5); for (let i = 0; i < 120; i++) tick(); fit(); },
       counts: () => Object.fromEntries(Object.keys(TYPES).map(k => [k, nodes.filter(n => n.type === k).length])),
-      scope: () => bscope, setScope: v => { if (v === bscope) return; bscope = v; setVscope('graph', v); build(); alpha = 1; warmed = false; },
+      scope: () => bscope, setScope: v => { if (v === bscope) return; bscope = v; setVS('graph', v); build(); alpha = 1; warmed = false; },
       isHidden: k => hidden.has(k), toggle: k => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); hover = null; return !hidden.has(k); },
     };
   })();
@@ -1669,8 +1681,8 @@ LambdaData.ready.then(D => {
   // Every site against the "Site Health" board checks in one table; worst sites first. Click a number for the exact
   // hosts, racks and U positions. Leaks and newly tripped breakers are the ones to act on now.
   const Health = (() => {
-    let scope = 'all', onlyProblems = false; // every site by default; "Your sites" is one click away
-    try { scope = localStorage.getItem('lambdaos-health-scope2') || 'all'; onlyProblems = localStorage.getItem('lambdaos-health-problems') === '1'; } catch { /* ignore */ }
+    let scope = VS('health'), onlyProblems = false; // follows the top picker until you pick here
+    try { onlyProblems = localStorage.getItem('lambdaos-health-problems') === '1'; } catch { /* ignore */ }
     const COLS = [['leak', 'Leaks'], ['breaker', 'Breakers'], ['pdu', 'PDU alarms'], ['shelf', 'Shelf PSU 0 W'], ['hw', 'HW faults'], ['hot', 'Hottest inlet'], ['net', 'Net down'], ['blind', "Can't monitor"]];
     const TITLES = { leak: 'Leak detectors alarming', breaker: 'Breakers tripped', pdu: 'PDU alarms', shelf: 'Power-shelf PSUs drawing 0 W', hw: 'Hosts with hardware faults', hot: 'Hot inlets (over the amber line)', net: 'Network devices not answering ping', blind: "Devices we can't monitor" };
     const val = (s, k) => { const c = s.checks[k];
@@ -1681,9 +1693,8 @@ LambdaData.ready.then(D => {
       if (k === 'blind') return `<span class="muted">${c.n}</span>`;
       return `<b class="st-warning">${c.n}</b>`; };
     function sitesShown() {
-      const H = D.HEALTH; if (!H) return [];
-      const mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : LambdaAlerts.mySites(D));
-      let list = scope === 'mine' && mine.size ? H.sites.filter(s => mine.has(s.code)) : H.sites;
+      const H = vsData(scope).HEALTH; if (!H) return [];
+      let list = H.sites.filter(s => vsHas(scope)(s.code));
       return onlyProblems ? list.filter(s => s.level === 'critical' || s.level === 'warning') : list;
     }
     function render() {
@@ -1698,7 +1709,7 @@ LambdaData.ready.then(D => {
       const errs = Object.keys(H.errors || {});
       box.innerHTML = `<div class="hhead">
           <div class="hsums">${chip(sum('leak'), 'leaks', sum('leak') ? 'crit' : 'ok')}${chip(fresh, 'breakers newly tripped', fresh ? 'crit' : 'ok')}${chip(sum('pdu'), 'PDU alarms', sum('pdu') ? 'warn' : 'ok')}${chip(sum('shelf'), 'shelf PSUs at 0 W', sum('shelf') ? 'warn' : 'ok')}${chip(sum('hw'), 'hosts with HW faults', sum('hw') ? 'warn' : 'ok')}${chip(sum('net'), 'network devices down', sum('net') ? 'warn' : 'ok')}</div>
-          <div class="hctl"><span class="seg">${mine.size ? [['all', 'All sites'], ['mine', 'Your sites']].map(([k, l]) => `<button class="chip ${scope === k ? 'on' : ''}" data-hscope="${k}">${l}</button>`).join('') : '<button class="chip on">All sites</button>'}</span>
+          <div class="hctl">${scopeSeg('health', scope) || '<span class="seg"><button class="chip on">All sites</button></span>'}
             <button class="chip ${onlyProblems ? 'on' : ''}" data-hproblems aria-pressed="${onlyProblems}">Only problems</button>
             <span class="muted small">Grafana · ${rel(H.at)} ago${errs.length ? ` · <span class="st-warning" title="${esc(Object.entries(H.errors).map(([k, e]) => k + ': ' + e).join('; '))}">${errs.length} check${errs.length > 1 ? 's' : ''} failed</span>` : ''}</span></div></div>
         <div class="htable-wrap"><table class="htable"><thead><tr><th>Site</th>${COLS.map(([, l]) => `<th>${l}</th>`).join('')}<th>Power</th></tr></thead><tbody>
@@ -1709,7 +1720,7 @@ LambdaData.ready.then(D => {
         <p class="muted small hnote">Same checks as Grafana's Site Health boards, for every site at once. Click a number for the hosts, racks and U positions. Breakers count everything tripped now; "new" means it tripped in the last 24 hours (since Lambda OS has been watching).</p>`;
     }
     function detail(code, k) {
-      const s = D.HEALTH?.sites.find(x => x.code === code); if (!s) return;
+      const s = (D.ALL || D).HEALTH?.sites.find(x => x.code === code); if (!s) return;
       const c = s.checks[k], items = k === 'hot' ? (c.items.length ? c.items : [c.top].filter(Boolean)) : c.items;
       const host = x => { const dv = x.h && D.deviceById(x.h); return dv ? `<a data-open="device:${esc(dv.id)}" class="mono">${esc(x.h)}</a>` : `<span class="mono">${esc(x.h || '—')}</span>`; };
       const what = x => k === 'hot' ? `<b class="st-${x.v >= x.crit ? 'critical' : x.v >= x.warn ? 'warning' : 'good'}">${x.v.toFixed(1)} °C</b> ${esc(x.kind)}` : esc(x.w || '');
@@ -1736,7 +1747,7 @@ LambdaData.ready.then(D => {
     }
     $('#health').addEventListener('click', e => {
       const c = e.target.closest('[data-hcell]'); if (c) { const [code, k] = c.dataset.hcell.split('|'); return detail(code, k); }
-      const sc = e.target.closest('[data-hscope]'); if (sc) { scope = sc.dataset.hscope; try { localStorage.setItem('lambdaos-health-scope2', scope); } catch { /* ignore */ } return render(); }
+      const sc = e.target.closest('[data-vscope^="health:"]'); if (sc) { scope = sc.dataset.vscope.slice(7); setVS('health', scope); return render(); }
       if (e.target.closest('[data-hproblems]')) { onlyProblems = !onlyProblems; try { localStorage.setItem('lambdaos-health-problems', onlyProblems ? '1' : '0'); } catch { /* ignore */ } return render(); }
     });
     return { render, detail };
@@ -1746,10 +1757,10 @@ LambdaData.ready.then(D => {
 
   const Deploys = (() => {
     const el = $('#deploys');
-    let filter = 'all', tag = 'all', dscope = vscope('deploys');
+    let filter = 'all', tag = 'all', dscope = VS('deploys');
     const DAY = 864e5;
     function render() {
-      const all = (D.DEPLOYMENTS || []).filter(d => dscope !== 'mine' || d.sites.some(c => MINE.has(c))), now = Date.now();
+      const all = (vsData(dscope).DEPLOYMENTS || []).filter(d => vsEff(dscope) === 'all' || d.sites.some(vsHas(dscope))), now = Date.now();
       if (!(D.DEPLOYMENTS || []).length) {
         el.innerHTML = `<div class="dempty muted">No deployments loaded. They come from Jira PMO epics and Cluster Intake (Settings → Jira).${D.SOURCES.find(s => s.key === 'jira')?.title?.includes('failed') ? '<br>' + esc(D.SOURCES.find(s => s.key === 'jira').title) : ''}</div>`;
         return;
@@ -1794,7 +1805,7 @@ LambdaData.ready.then(D => {
                   <div class="dmeta"><span class="mono">${d.key}</span>${d.sites.map(c => ` · <b>${esc(c)}</b>`).join('')}${d.gpus ? ` · ${d.gpus.toLocaleString()}×${esc(d.gpuModel)}` : ''} · ${statusChip(d.health, depStatus(d))}</div></div></div>
                 <div class="dtrack">${months.map(t => `<span class="dgridline" style="left:${X(t)}%"></span>`).join('')}<span class="dtoday" style="left:${X(now)}%"></span>${bar(d)}</div></div>`).join('');
           }).join('')}
-          ${list.length ? '' : `<div class="dempty muted">${dscope === 'mine' && !all.length ? 'No deployments at your sites. Switch to All sites to see the rest.' : 'Nothing matches this filter.'}</div>`}
+          ${list.length ? '' : `<div class="dempty muted">${vsEff(dscope) !== 'all' && !all.length ? 'No deployments at these sites. Switch to All sites to see the rest.' : 'Nothing matches this filter.'}</div>`}
         </div>`;
     }
     el.addEventListener('click', e => {
@@ -1802,7 +1813,7 @@ LambdaData.ready.then(D => {
       if (f) { filter = f.dataset.dfilter; render(); e.stopPropagation(); }
       if (t) { tag = t.dataset.dtag; render(); e.stopPropagation(); }
       const sc = e.target.closest('[data-vscope]');
-      if (sc?.dataset.vscope.startsWith('deploys:')) { dscope = sc.dataset.vscope.slice(8); setVscope('deploys', dscope); render(); e.stopPropagation(); }
+      if (sc?.dataset.vscope.startsWith('deploys:')) { dscope = sc.dataset.vscope.slice(8); setVS('deploys', dscope); render(); e.stopPropagation(); }
     });
     return { render, setFilter: f => { filter = f; render(); } };
   })();
@@ -1821,6 +1832,7 @@ LambdaData.ready.then(D => {
         + `<span class="muted">Status = tickets (SLA) and Grafana site health</span>`;
       return `<span class="keywrap"><button class="chip" data-globe="key" aria-expanded="false" title="What the colours mean">● Key</button><span class="keypop" hidden>${key}</span></span>`
         + kinds.map(([k, label, svg]) => `<button class="chip on" data-kind="${k}" aria-pressed="true"><svg viewBox="0 0 10 10">${svg}</svg>${label}</button>`).join('')
+        + scopeSeg('globe', VS('globe'))
         + `<button class="chip" data-globe="home" title="Fit the live data centers (or double-click the map)">Fit</button><button class="chip" data-globe="world">World</button>`
         + `<span class="seg" title="Base map">${Object.entries(Tiles.PROVIDERS).map(([k, p]) => `<button class="chip ${Tiles.name() === k ? 'on' : ''}" data-basemap="${k}" aria-pressed="${Tiles.name() === k}">${p.label}</button>`).join('')}<button class="chip ${Tiles.name() === 'off' ? 'on' : ''}" data-basemap="off" title="Stylized dots, no imagery">Dots</button></span>`
         + `<span class="seg">${[['globe', 'Globe'], ['map', 'Map']].map(([m, l]) => `<button class="chip ${Fleet.mode() === m ? 'on' : ''}" data-fleet="${m}" aria-pressed="${Fleet.mode() === m}">${l}</button>`).join('')}</span>`;
@@ -1853,6 +1865,7 @@ LambdaData.ready.then(D => {
     if (b.dataset.basemap) { autoSat = false; Tiles.set(b.dataset.basemap); setView('globe'); }
     if (b.dataset.btype) { Brain.toggle(b.dataset.btype); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === 'fit') Brain.fit();
+    if (b.dataset.vscope?.startsWith('globe:')) { setVS('globe', b.dataset.vscope.slice(6)); $('#stageLegend').innerHTML = LEGENDS.globe(); Fleet.home(); }
     if (b.dataset.vscope?.startsWith('graph:')) { Brain.setScope(b.dataset.vscope.slice(6)); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
     if (b.dataset.brain === '2d' || b.dataset.brain === '3d') { Brain.set3d(b.dataset.brain === '3d'); $('#stageLegend').innerHTML = LEGENDS.graph(); hint(); }
   });
