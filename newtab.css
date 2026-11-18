@@ -860,3 +860,6 @@ input.bad { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(
 .hrow-sub .hdot { margin: 0 7px; opacity: .45; }
 .hrow-sub .tagchip { font-size: 10.5px; padding: 1px 6px; }
 .hrow-sub .yard-chip { font-size: 10.5px; }
+/* Second brain: node types on the first line, All/Your sites · Fit · 2D/3D on the next */
+.stage-legend:has(.lbreak) { flex-wrap: wrap; overflow: visible; row-gap: 6px; }
+.stage-legend .lbreak { flex-basis: 100%; height: 0; padding: 0; margin: 0; }

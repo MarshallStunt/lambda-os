@@ -1841,6 +1841,7 @@ LambdaData.ready.then(D => {
       const n = Brain.counts();
       return Object.entries(Brain.TYPES).filter(([k]) => n[k]).map(([k, t]) =>
         `<button class="chip ${Brain.isHidden(k) ? '' : 'on'}" data-btype="${k}" aria-pressed="${!Brain.isHidden(k)}"><svg viewBox="0 0 10 10">${shapeSvg(t.shape, t.color)}</svg>${t.label} <small>${n[k]}</small></button>`).join('')
+        + '<span class="lbreak" aria-hidden="true"></span>' // the view controls go on their own line under the node types
         + scopeSeg('graph', Brain.scope())
         + '<button class="chip" data-brain="fit" title="Fit everything (double-click)">Fit</button>'
         + `<span class="seg" title="View">${[['2d', '2D'], ['3d', '3D']].map(([k, l]) => `<button class="chip ${(k === '3d') === Brain.is3d() ? 'on' : ''}" data-brain="${k}" aria-pressed="${(k === '3d') === Brain.is3d()}">${l}</button>`).join('')}</span>`;
