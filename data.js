@@ -216,6 +216,7 @@
     const src = (key, name) => {
       const st = snap.sources?.[key], data = snap[key === 'netbox' ? 'nb' : key];
       if (st?.off) return { key, name, state: 'off', title: `${name} is turned off in Settings` };
+      if (st?.quiet) return { key, name, state: 'na', title: `${name}: not available for your account (never signed in). Lambda OS checks again once a day; sign in to ${name} any time, or use Settings → Check connections.` };
       // A source added in an update (or switched on) has no result until the next refresh finishes.
       if (!st) return { key, name, state: 'wait', title: `${name}: not loaded yet; it appears after the next refresh (or click ↻ in the top bar)` };
       if (st.ok) return { key, name, state: 'ok', title: `${name}: live, using your sign-in` };

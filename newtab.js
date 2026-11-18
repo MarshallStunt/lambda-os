@@ -8,11 +8,13 @@ LambdaData.ready.then(D => {
   const H = 3600e3;
   const ALLT = () => (D.ALL || D).TICKETS;
   // Yard Central (read-only): a host's state, pool, lock and Starbase, plus a link to it in Yard.
+  const srcState = k => D.SOURCES.find(s => s.key === k)?.state;
+  const yardUsable = () => D.MODE !== 'live' || !['na', 'off'].includes(srcState('yard')); // no Yard account / turned off: no Yard line or button
   const yardOf = host => host ? D.YARD?.hosts?.[String(host).toLowerCase()] || null : null;
-  const yardUrl = host => host && D.YARD?.base ? `${D.YARD.base}/search?q=${encodeURIComponent(host)}` : '';
+  const yardUrl = host => host && D.YARD?.base && yardUsable() ? `${D.YARD.base}/search?q=${encodeURIComponent(host)}` : '';
   const yardChip = host => { const y = yardOf(host); return y?.found && y.state ? ` <span class="yard-chip ${y.lockedBy ? 'locked' : ''}" title="Yard: ${esc([y.state, y.pool && 'pool ' + y.pool, y.lockedBy && 'locked by ' + y.lockedBy, y.starbase && 'in Starbase'].filter(Boolean).join(' · '))}">${y.lockedBy ? '🔒 ' : ''}${esc(y.state)}</span>` : ''; };
   const yardBlock = host => {
-    if (!host || !D.YARD) return '';
+    if (!host || !D.YARD || !yardUsable()) return '';
     const y = yardOf(host);
     const body = !y ? `<span class="muted">${D.YARD.live ? 'Not looked up yet (Lambda OS checks ticket hosts a batch at a time).' : 'Turn on Yard in Settings → Sources to see this host\'s state here.'}</span>`
       : !y.found ? '<span class="muted">Not found in Yard.</span>'
@@ -98,9 +100,9 @@ LambdaData.ready.then(D => {
   // clickable pill. (The Live feed's filters are where the source names live.)
   {
     const all = D.SOURCES.filter(s => s.key !== 'claude'), fine = all.filter(s => !needsYou(s));
-    const ok = fine.filter(s => s.state === 'ok'), wait = fine.filter(s => s.state === 'wait'), off = fine.filter(s => s.state === 'off'), demo = fine.filter(s => s.state === 'demo');
-    const word = s => s.state === 'ok' ? 'live' : s.state === 'off' ? 'off (Settings)' : s.state === 'demo' ? 'demo data' : 'loading';
-    const parts = [ok.length && `${ok.length} live`, demo.length && 'demo data', wait.length && `${wait.length} loading`, off.length && `${off.length} off`].filter(Boolean);
+    const ok = fine.filter(s => s.state === 'ok'), wait = fine.filter(s => s.state === 'wait'), off = fine.filter(s => s.state === 'off'), demo = fine.filter(s => s.state === 'demo'), na = fine.filter(s => s.state === 'na');
+    const word = s => s.state === 'ok' ? 'live' : s.state === 'off' ? 'off (Settings)' : s.state === 'demo' ? 'demo data' : s.state === 'na' ? 'not available for your account' : 'loading';
+    const parts = [ok.length && `${ok.length} live`, demo.length && 'demo data', wait.length && `${wait.length} loading`, off.length && `${off.length} off`, na.length && `${na.length} not available`].filter(Boolean);
     const summary = fine.length ? `<span class="source-pill ${ok.length ? 'ok' : demo.length ? 'demo' : 'wait'} sum" tabindex="0" title="${esc(fine.map(s => `${s.name}: ${word(s)}`).join('\n'))}"><i></i>${fine.length} sources · ${parts.join(' · ')}</span>` : '';
     $('#sources').innerHTML = all.filter(needsYou).map(s => `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`).join('') + summary;
   }
@@ -1908,7 +1910,7 @@ LambdaData.ready.then(D => {
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
         ${yardBlock(t.device)}
         ${alertsBlock(t.alerts)}
-        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
     }
     if (type === 'device') {
       const d = ref, ts = ALLT().filter(t => t.device === d.id).sort(byUrgency);
@@ -1918,7 +1920,7 @@ LambdaData.ready.then(D => {
         ${yardBlock(d.id)}
         ${alertsBlock(d.alerts)}
         <div class="section-title"><span>Open tickets</span><span>${ts.length}</span></div>${ts.map(ticketRow).join('') || '<p class="muted">None.</p>'}
-        <div class="links">${btn('Open in NetBox', d.url, true)}${btn('Open in Yard', yardUrl(d.id))}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in NetBox', d.url, true)}${yardUrl(d.id) ? btn('Open in Yard', yardUrl(d.id)) : ''}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
     }
     if (type === 'part') {
       const p = ref, rows = D.SITES.map(s => ({ s, i: s.inventory.find(x => x.part === p.id) })).filter(r => r.i).sort((a, b) => b.i.stock - a.i.stock);

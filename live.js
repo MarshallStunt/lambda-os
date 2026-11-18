@@ -914,33 +914,44 @@ const LambdaLive = (() => {
   const NAMES = { netbox: 'NetBox', jira: 'Jira', slack: 'Slack', gmail: 'Gmail', calendar: 'Calendar', netsuite: 'NetSuite', atium: 'Atium', grafana: 'Grafana', yard: 'Yard' };
   const KEYS = { netbox: 'nb', jira: 'jira', slack: 'slack', gmail: 'gmail', calendar: 'calendar', netsuite: 'netsuite', atium: 'atium', grafana: 'grafana', yard: 'yard' };
   let inflight = null;
-  function refresh(progress) {
+  // A source this account doesn't have (never signed in, 3 tries in a row) goes quiet: no pill, no pinned tab, and it's
+  // only tried again once a day (or when you click Check connections in Settings). One that worked before stays loud.
+  const QUIET_AFTER = 3, QUIET_RETRY = 864e5, SKIP = Symbol('quiet');
+  function refresh(progress, opts = {}) {
     inflight ||= (async () => {
       const s = await settings();
       const { snapshot: prev } = await chrome.storage.local.get('snapshot');
+      const resting = k => !opts.retryAll && prev?.sources?.[k]?.quiet && Date.now() - (prev.sources[k].triedAt || 0) < QUIET_RETRY;
       const on = k => s.sources[k] !== false;
       const off = Promise.resolve(undefined);
-      const nbP = on('netbox') ? netbox(s, progress) : off;
-      const jrP = on('jira') ? jira(s, progress) : off;
-      const gmP = on('gmail') ? gmail() : off;
-      const calP = on('calendar') ? Promise.allSettled([gmP, jrP]).then(([g, j]) => calendar(s, g.value?.email || j.value?.me?.email)) : off;
-      const results = Object.fromEntries(Object.entries({
+      // Off: undefined. Resting (quiet, tried within the day): SKIP, so it isn't even started. Otherwise: read it.
+      const go = (k, f) => !on(k) ? off : resting(k) ? Promise.resolve(SKIP) : f();
+      const val = v => v === SKIP ? null : v;
+      const nbP = go('netbox', () => netbox(s, progress));
+      const jrP = go('jira', () => jira(s, progress));
+      const gmP = go('gmail', () => gmail());
+      const calP = go('calendar', () => Promise.allSettled([gmP, jrP]).then(([g, j]) => calendar(s, val(g.value)?.email || val(j.value)?.me?.email)));
+      const results = {
         netbox: nbP, jira: jrP, gmail: gmP, calendar: calP,
-        slack: on('slack') ? slack() : off,
-        netsuite: on('netsuite') ? netsuite(s, progress) : off,
-        atium: on('atium') ? atium(s) : off,
-        grafana: on('grafana') ? grafana(s) : off,
-        yard: on('yard') ? jrP.catch(() => null).then(j => yard(s, j)) : off, // needs the ticket hosts first
-      }));
+        slack: go('slack', () => slack()),
+        netsuite: go('netsuite', () => netsuite(s, progress)),
+        atium: go('atium', () => atium(s)),
+        grafana: go('grafana', () => grafana(s)),
+        yard: go('yard', () => jrP.catch(() => null).then(j => yard(s, val(j)))), // needs the ticket hosts first
+      };
       const settled = await Promise.allSettled(Object.values(results));
       const snapshot = { at: Date.now(), version: 2, sources: {} };
       Object.keys(results).forEach((k, i) => {
         const r = settled[i], key = KEYS[k];
+        if (r.status === 'fulfilled' && r.value === SKIP) { snapshot.sources[k] = prev.sources[k]; snapshot[key] = prev?.[key] || null; return; } // resting quiet source
         if (r.status === 'fulfilled' && r.value === undefined) { snapshot.sources[k] = { off: true, name: NAMES[k] }; snapshot[key] = null; return; }
-        if (r.status === 'fulfilled') { snapshot.sources[k] = { ok: true, at: Date.now(), name: NAMES[k] }; snapshot[key] = r.value; return; }
+        if (r.status === 'fulfilled') { snapshot.sources[k] = { ok: true, at: Date.now(), name: NAMES[k], everOk: true }; snapshot[key] = r.value; return; }
         const was = prev?.sources?.[k];
         snapshot.sources[k] = { ok: false, name: NAMES[k], error: r.reason?.message || String(r.reason), auth: !!r.reason?.auth, login: r.reason?.login || '', access: r.reason?.access || null,
-          failingSince: was && !was.ok && !was.off ? (was.failingSince || prev.at) : Date.now() }; // first failure of this outage
+          failingSince: was && !was.ok && !was.off ? (was.failingSince || prev.at) : Date.now(), // first failure of this outage
+          everOk: !!was?.everOk || !!prev?.[key], fails: (was && !was.ok && !was.off ? was.fails || 0 : 0) + 1, triedAt: Date.now() };
+        const sk = snapshot.sources[k];
+        if (!sk.everOk && sk.auth && sk.fails >= QUIET_AFTER) sk.quiet = true; // never signed in here: probably no account
         snapshot[key] = prev?.[key] || null; // keep the last good data, shown as stale
         // "Showing data from …" = the last refresh that worked, which stays put while the outage lasts
         if (snapshot[key]) snapshot.sources[k].staleAt = was?.ok ? was.at : (was?.staleAt || prev?.at);

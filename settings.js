@@ -207,7 +207,7 @@ async function save(opts = {}) {
   if (opts.quiet) return;
   if (s.mode !== 'live') return say('<p class="st-good">Saved. New tabs will show demo data.</p>');
   say('<p class="muted" id="prog">Checking every source…</p>');
-  const snap = await LambdaLive.refresh(m => { const p = $('prog'); if (p) p.textContent = m; });
+  const snap = await LambdaLive.refresh(m => { const p = $('prog'); if (p) p.textContent = m; }, { retryAll: true }); // also retries sources that went quiet
   const detail = {
     netbox: () => `${snap.nb?.sites.length ?? 0} sites, ${snap.nb?.stock.length ?? 0} stock lines`,
     jira: () => `${snap.jira?.tickets.length ?? 0} tickets, ${(snap.jira?.portfolio || []).filter(p => p.kind === 'deployment').length} deployments, ${(snap.jira?.portfolio || []).filter(p => p.kind === 'project').length} projects · ${esc(snap.jira?.me?.name || '')}${snap.jira?.portfolioError ? ` · deployments failed: ${esc(snap.jira.portfolioError)}` : ''}`,
@@ -221,7 +221,7 @@ async function save(opts = {}) {
   };
   say(Object.entries(SOURCES).map(([k, name]) => {
     const x = snap.sources[k] || {};
-    const text = x.off ? '<span class="muted">Off</span>' : x.ok ? `<span class="st-good">✓ Connected${detail[k] ? ` · ${detail[k]()}` : ''}</span>` : `<span class="st-critical">✕ ${esc(x.error)}</span>`;
+    const text = x.off ? '<span class="muted">Off</span>' : x.quiet ? `<span class="muted">Not available for your account yet (${esc(x.error)}). Nothing else depends on it; Lambda OS checks again once a day.</span>` : x.ok ? `<span class="st-good">✓ Connected${detail[k] ? ` · ${detail[k]()}` : ''}</span>` : `<span class="st-critical">✕ ${esc(x.error)}</span>`;
     return `<div class="boot-src"><b>${name}</b>${text}${!x.ok && !x.off && x.login ? `<button class="btn" data-login="${esc(x.login)}">Open ${name}</button>` : ''}</div>`;
   }).join(''));
 }

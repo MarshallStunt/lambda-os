@@ -274,7 +274,9 @@ const LambdaTabs = (() => {
   async function tick(s) {
     if (!has()) return {};
     const A = apps(s), recs = await load(OWN_KEY), status = {};
-    const useOwn = s.mode === 'live' && s.appTabs !== false, on = key => useOwn && s.sources?.[key] !== false;
+    // A source that isn't available for this account (never signed in, see live.js) gets no pinned tab, and its tab is closed.
+    let quiet = new Set(); try { const { snapshot } = await chrome.storage.local.get('snapshot'); quiet = new Set(Object.entries(snapshot?.sources || {}).filter(([, v]) => v?.quiet).map(([k]) => k)); } catch { /* none yet */ }
+    const useOwn = s.mode === 'live' && s.appTabs !== false, on = key => useOwn && s.sources?.[key] !== false && !quiet.has(key);
     for (const key of Object.keys(recs)) if (!A[key] || !on(key)) await closeOwn(key); // app turned off: close its tab
     for (const app of Object.values(A)) {
       if (!app.pinned || !on(app.key)) continue;

@@ -106,6 +106,7 @@ instead and update with the one-line command in Settings → Updates.
 - **DC Ops / Management** (under the greeting) switches the top cards: Management shows SLA met % (last 30 days, 7-day rolling chart), sites healthy, deployments at risk and GPUs handed off this month (Atium).
 - A short **tour** runs the first time; take it again from Settings → Help.
 - **Yard** (Yard Central, read-only): ticket rows show each host's Yard state (🔒 when locked); ticket and device drawers show state, pool, lock and Starbase, with **Open in Yard**. Read through a pinned Yard Central tab with your Okta sign-in; Lambda OS never locks, unlocks or runs plans.
+- **Apps you don't have**: if a source has never worked for you (e.g. no Yard or Slack account) and fails to sign in 3 times, it goes quiet: no pill, no pinned tab, tried again once a day or from Settings → Check connections. Everything that uses it simply hides; nothing else depends on it. A source that worked before stays loud when it breaks.
 - **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, **e** (or the ⤢ button) makes the middle panel fill the screen, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.
