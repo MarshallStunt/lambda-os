@@ -7,7 +7,7 @@ const LambdaAlerts = (() => {
   const fmtLeft = ms => { const h = ms / H; return h >= 1 ? `${Math.floor(h)}h ${Math.round((ms / 60000) % 60)}m` : `${Math.max(1, Math.round(ms / 60000))}m`; };
   const breached = (t, now) => t.slaBreached || (t.slaDue != null && t.slaDue < now);
   const partOnHand = (D, t) => !!(t.part && t.site && (D.siteById(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
-  const waitingParts = t => /part|rma/i.test(t.status || '');
+  const waitingParts = t => t.waitingParts ?? /part|rma/i.test(t.status || ''); // includes statuses Smart processing sorted as waiting on parts
   const depLink = key => (typeof chrome !== 'undefined' && chrome.runtime?.getURL ? chrome.runtime.getURL(`newtab.html#dep=${encodeURIComponent(key)}`) : `newtab.html#dep=${key}`);
 
   // Sources that are signed out / not updating (closing the Slack tab is normal, so that case doesn't count).

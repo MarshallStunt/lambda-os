@@ -164,8 +164,11 @@
     const meId = jr?.me?.id;
     const PEOPLE = new Map([['me', { id: 'me', name: 'You', handle: jr?.me?.name || '' }]]);
     const DEVICES = new Map();
+    // Smart processing's answers (when AI is on) only fill in what the rules left empty.
+    const SMc = snap.smart?.on ? snap.smart.cache || {} : null;
     const TICKETS = (jr?.tickets || []).map(t => {
-      const site = t.siteRaw.map(codeOf).find(Boolean) || codeOf(t.host) || null;
+      const ruleSite = t.siteRaw.map(codeOf).find(Boolean) || codeOf(t.host) || null, aiSite = !ruleSite && SMc?.site?.[t.key] && sitesByCode.has(SMc.site[t.key]) ? SMc.site[t.key] : null;
+      const site = ruleSite || aiSite;
       const assignee = t.assigneeId === meId ? 'me' : t.assigneeId;
       if (assignee && !PEOPLE.has(assignee)) PEOPLE.set(assignee, { id: assignee, name: t.assigneeName, handle: '' });
       if (t.host && !DEVICES.has(t.host)) {
@@ -174,7 +177,8 @@
       if (t.pn && !PARTS.has(t.pn)) PARTS.set(t.pn, { id: t.pn, pn: t.pn, name: nb?.types?.[t.pn]?.name || t.pn, mfr: '' });
       return { key: t.key, url: t.url, summary: t.summary, status: t.status, priority: t.priority, assignee, assigneeName: t.assigneeName,
         site, device: t.host || '', part: t.pn || null, created: t.created, updated: t.updated,
-        slaDue: t.slaDue, slaBreached: t.slaBreached, slaPaused: t.slaPaused, mine: t.mine };
+        slaDue: t.slaDue, slaBreached: t.slaBreached, slaPaused: t.slaPaused, mine: t.mine, siteByAI: !!aiSite,
+        waitingParts: /part|rma/i.test(t.status || '') || SMc?.status?.[t.status] === 'waiting_parts' };
     });
 
     const SITES = [...sitesByCode.values()];
@@ -194,7 +198,7 @@
     const breached = TICKETS.filter(isBreached).length;
     const due24 = TICKETS.filter(t => !isBreached(t) && t.slaDue && t.slaDue < now + DAY).length;
     const live = SITES.filter(s => s.status === 'active' || s.status === 'staging');
-    const waiting = TICKETS.filter(t => /part|rma/i.test(t.status));
+    const waiting = TICKETS.filter(t => t.waitingParts ?? /part|rma/i.test(t.status));
     const waitingStocked = waiting.filter(t => t.part && t.site && (sitesByCode.get(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
     const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
     const tTrend = jr ? ticketTrend(TICKETS, jr.closed30, now) : null;
@@ -281,12 +285,15 @@
     const HW = /psu|power ?supply|fan|pdu|gpu|xid|thermal|temp|overheat|memory|dimm|disk|nvme|drive|nvlink|fabric|link ?down|carrier|\bib\b|infiniband|bmc|redfish|chassis|cooling|leak|unreachable|optic|transceiver/i;
     // Answers from the optional AI step (Settings → Data → Smart processing), applied only where the rules found nothing.
     const SM = x.smart?.on ? (x.smart.cache || {}) : null, aiLink = (kind, id) => SM?.link?.[`${kind}:${id}`] || null;
+    const isHW = name => HW.test(name) || SM?.alert?.[name] === true; // new alert names the word list doesn't know
 
     // Projects (initiatives) and deployments (epics) with progress from their workstreams.
     const DEPLOYMENTS = [], PROJECTS = [];
     for (const p of x.portfolio) {
-      const meta = parseDeploy(p.summary);
+      const meta = parseDeploy(p.summary), aiDep = SM?.dep?.[p.key];
+      if (aiDep) { if (!meta.gpus && aiDep.gpus) { meta.gpus = aiDep.gpus; meta.byAI = true; } if (!meta.gpuModel && aiDep.model) meta.gpuModel = aiDep.model; } // title the rule couldn't read
       const sites = [...new Set([...p.siteRaw.map(codeOf).filter(Boolean), ...codesIn(p.summary)])];
+      if (!sites.length && aiDep?.site && D.siteById(aiDep.site)) sites.push(aiDep.site);
       const start = dayMs(p.plannedStart), end = dayMs(p.plannedEnd) || dayMs(p.completion) || dayMs(p.due);
       const total = p.tasks.total + p.workstreams.reduce((a, w) => a + w.total, 0), done = p.tasks.done + p.workstreams.reduce((a, w) => a + w.done, 0);
       const overdue = !!(end && end < now && p.cat !== 'done');
@@ -434,9 +441,9 @@
     for (const s of D.SITES) s.gf = null; // (site.health is the site's status colour; Grafana data lives in site.gf)
     if (GF?.sites) for (const [code, h] of Object.entries(GF.sites)) {
       const site = D.siteById(code);
-      const alerts = (h.alerts || []).map(a => ({ ...a, site: code, hw: HW.test(a.name), crit: a.severity === 'critical' }));
+      const alerts = (h.alerts || []).map(a => ({ ...a, site: code, hw: isHW(a.name), crit: a.severity === 'critical' }));
       for (const a of alerts) if (a.host) { const k = a.host.toLowerCase(); if (!byHost.has(k)) byHost.set(k, []); byHost.get(k).push(a); }
-      const counts = Object.entries(h.counts || {}).map(([name, n]) => ({ name, n, hw: HW.test(name), crit: alerts.some(a => a.name === name && a.crit) }))
+      const counts = Object.entries(h.counts || {}).map(([name, n]) => ({ name, n, hw: isHW(name), crit: alerts.some(a => a.name === name && a.crit) }))
         .sort((a, b) => b.crit - a.crit || b.hw - a.hw || b.n - a.n);
       const gf = { pduKw: h.pduKw, inlet: h.inlet || [], unreachable: h.unreachable || [], alerts, counts, total: counts.reduce((t, c) => t + c.n, 0),
         hwTotal: counts.filter(c => c.hw).reduce((t, c) => t + c.n, 0), clusters: h.clusters || [], url: h.board ? GF.base + h.board : `${GF.base}/dashboards?query=${code}` };
@@ -793,7 +800,7 @@
     const opened = TICKETS.filter(t => t.created >= startOfDay(now)).length;
     const live = D.SITES.filter(s => S.has(s.id) && (s.status === 'active' || s.status === 'staging'));
     const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
-    const waiting = TICKETS.filter(t => /part|rma/i.test(t.status));
+    const waiting = TICKETS.filter(t => t.waitingParts ?? /part|rma/i.test(t.status));
     const stocked = waiting.filter(t => t.part && t.site && (D.siteById(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
     const gpus = DEPLOYMENTS.reduce((a, d) => a + (d.gpus || 0), 0), risky = DEPLOYMENTS.filter(d => d.health === 'critical' || d.health === 'warning').length;
     const CE = R.closedEpics ? R.closedEpics.filter(([, , sm]) => codesIn(sm).some(inS)) : null;

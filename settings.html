@@ -100,9 +100,10 @@
           <label><input type="checkbox" data-smart="volunteer"><span>Volunteer requests: which Slack messages are real calls for help, plus dates and head-count</span></label>
           <label><input type="checkbox" data-smart="matching"><span>Matching: Atium builds, NetSuite shipments and meetings the rules couldn't link to a deployment</span></label>
           <label><input type="checkbox" data-smart="priority"><span>Ticket order: which of your tickets to work on first (at most once an hour)</span></label>
+          <label><input type="checkbox" data-smart="backup"><span>Backup when a rule breaks: renamed Jira fields, tickets with no site, new ticket statuses, new Grafana alert names, deployment titles the rules can't read. Each is asked once and remembered.</span></label>
         </div>
         <div class="checks" style="margin-top:8px"><label><input type="checkbox" id="smartSlack"><span>Let the AI read Slack messages that might be volunteer requests (needed for the first option; Privacy keeps all other Slack text away from the AI)</span></label></div>
-        <p class="hint">At most 3 small requests per refresh. Settings → Privacy → "Never send to an AI" turns all of this off.</p>
+        <p class="hint">Only what the rules couldn't settle is sent, each item once; usually nothing at all. Settings → Privacy → "Never send to an AI" turns all of this off.</p>
       </div>
       <p class="note" id="smartStatus">Status appears after the next refresh.</p>
     </fieldset>

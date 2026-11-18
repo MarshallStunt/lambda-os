@@ -172,11 +172,14 @@ async function paintSmart() {
   ai.style.opacity = on ? '1' : '.5'; ai.querySelectorAll('input').forEach(i => (i.disabled = !on));
   const { snapshot } = await chrome.storage.local.get('snapshot').catch(() => ({}));
   const x = snapshot?.smart, c = LambdaAI.configured(readAI());
+  // Rules check: what the AI is filling in where a rule broke or couldn't decide (a hint that a rule needs a real fix).
+  const u = x?.used, parts = u ? [u.fields && `${u.fields} Jira field${u.fields > 1 ? 's' : ''} matched`, u.sites && `${u.sites} ticket site${u.sites > 1 ? 's' : ''}`, u.statuses && `${u.statuses} status${u.statuses > 1 ? 'es' : ''} as waiting on parts`, u.alerts && `${u.alerts} alert type${u.alerts > 1 ? 's' : ''} as hardware`, u.titles && `${u.titles} deployment title${u.titles > 1 ? 's' : ''}`].filter(Boolean) : [];
+  const check = on && x?.on ? `<br><span class="muted">Rules check: ${parts.length ? `AI is filling in ${esc(parts.join(', '))}.${u.fields ? ' A renamed Jira field is worth fixing in Settings → Jira.' : ''}` : 'every rule worked on its own last refresh.'}</span>` : '';
   $('smartStatus').innerHTML = !on ? 'Local only: fixed rules, nothing is sent to an AI.'
     : !c.ok ? `<span class="st-warning">AI isn't set up yet, so the local rules are used.</span> ${esc(c.why)}`
     : !x?.on ? 'AI is on. It starts with the next refresh (click ↻ on the dashboard).'
     : x.why ? `<span class="st-warning">Last refresh: ${esc(x.why)}</span>`
-    : `<span class="st-good">✓ Last refresh used ${esc(x.label || c.label)}</span>: ${x.calls ? `${x.calls} request${x.calls > 1 ? 's' : ''} for ${x.items} item${x.items > 1 ? 's' : ''}` : 'nothing new to ask'} · ${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    : `<span class="st-good">✓ Last refresh used ${esc(x.label || c.label)}</span>: ${x.calls ? `${x.calls} request${x.calls > 1 ? 's' : ''} for ${x.items} item${x.items > 1 ? 's' : ''}` : 'nothing new to ask'} · ${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` + check;
 }
 document.addEventListener('change', e => { if (e.target.name === 'smartMode' || e.target.id === 'aiProvider') setTimeout(paintSmart, 50); });
 function read() {

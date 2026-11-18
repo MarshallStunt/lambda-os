@@ -40,7 +40,7 @@ const LambdaLive = (() => {
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
     // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
-    smart: { mode: 'local', volunteer: true, matching: true, priority: true, slack: false },
+    smart: { mode: 'local', volunteer: true, matching: true, priority: true, slack: false, backup: true },
   };
   // Jira fields are found by name, so nothing depends on this Jira's customfield IDs.
   const JIRA_FIELDS = {
@@ -151,10 +151,19 @@ const LambdaLive = (() => {
   const stripOrder = jql => String(jql).replace(/\s+ORDER\s+BY[\s\S]*$/i, '');
 
   // Jira can have several fields with the same name (this one has three "Hostname"s): keep all, use the first filled.
-  async function jiraFields(get) {
+  // Fields by name. If one isn't found (renamed in Jira), Smart processing's earlier match is used when AI is on, and
+  // the missing names plus the custom fields Jira has now are kept so the AI can match them (once) after this refresh.
+  async function jiraFields(get, s) {
     const fields = await get('/rest/api/3/field');
     const ids = n => fields.filter(f => f.name.toLowerCase() === n.toLowerCase()).map(f => f.id);
-    return Object.fromEntries(Object.entries(JIRA_FIELDS).map(([k, n]) => [k, ids(n)]));
+    const F = Object.fromEntries(Object.entries(JIRA_FIELDS).map(([k, n]) => [k, ids(n)]));
+    let ai = {}; try { const { snapshot } = await chrome.storage.local.get('snapshot'); if (s?.smart?.mode === 'ai') ai = snapshot?.smart?.cache?.fields || {}; } catch { /* none */ }
+    const known = new Set(fields.map(f => f.id)), missing = [];
+    for (const k of Object.keys(JIRA_FIELDS)) if (!F[k].length) { if (ai[k] && known.has(ai[k])) F[k] = [ai[k]]; else missing.push(k); }
+    Object.defineProperty(F, 'miss', { enumerable: false, value: missing.length ? { missing: missing.map(k => ({ key: k, name: JIRA_FIELDS[k] })),
+      candidates: fields.filter(f => f.custom).map(f => ({ id: f.id, name: f.name })).slice(0, 500) } : null });
+    Object.defineProperty(F, 'aiUsed', { enumerable: false, value: Object.keys(JIRA_FIELDS).filter(k => ai[k] && F[k][0] === ai[k] && !ids(JIRA_FIELDS[k]).length) });
+    return F;
   }
   const fieldList = (F, keys) => keys.flatMap(k => F[k] || []);
 
@@ -292,6 +301,8 @@ const LambdaLive = (() => {
     if (prev?.waitHist && dk(prev.waitHist.at) === dk(Date.now())) return prev.waitHist;
     const project = (stripOrder(s.fleetJql).match(/project\s*=\s*"?([A-Z][A-Z0-9_]+)"?/i) || [])[1];
     let names = [...new Set(issues.map(i => i.fields?.status?.name).filter(n => /part|rma/i.test(n || '')))];
+    // plus statuses Smart processing sorted as "waiting on parts" (names the rule doesn't recognise)
+    try { const { snapshot: sp } = await chrome.storage.local.get('snapshot'); if (s.smart?.mode === 'ai') names = [...new Set([...names, ...Object.entries(sp?.smart?.cache?.status || {}).filter(([, c]) => c === 'waiting_parts').map(([nm]) => nm)])]; } catch { /* none */ }
     if (project) try {
       const st = await getJson(`${base}/rest/api/3/project/${project}/statuses`, { login: base, name: 'Jira' });
       names = [...new Set([...names, ...st.flatMap(t => t.statuses.map(x => x.name)).filter(n => /part|rma/i.test(n))])];
@@ -313,7 +324,7 @@ const LambdaLive = (() => {
     const base = trim(s.jiraUrl);
     const get = p => getJson(base + p, { login: base, name: 'Jira' });
     const me = await get('/rest/api/3/myself');
-    const F = await jiraFields(get);
+    const F = await jiraFields(get, s);
     const want = ['summary', 'status', 'priority', 'assignee', 'created', 'updated', ...fieldList(F, TICKET_FIELDS)].join(',');
     // Tickets closed in the last 31 days (only their open/close dates), so the Open DC tickets card can draw a real
     // 30-day history: open count, new and closed for every day.
@@ -335,6 +346,7 @@ const LambdaLive = (() => {
       // A history read that fails keeps the last good one (the next refresh tries again) instead of wiping the charts.
       closed30: closed || prevJ?.closed30 || null, closed30At: closed ? startedAt : prevJ?.closed30At || null, closed30Full: closed ? closed.fullAt || null : prevJ?.closed30Full || null,
       closedEpics: epicsClosed || prevJ?.closedEpics || null,
+      fieldMiss: F.miss, fieldsByAI: F.aiUsed,
       waitHist: await waitingHistory(base, s, issues).catch(() => prevJ?.waitHist || null),
       workHist: await workHistory(get, s, F).catch(() => prevJ?.workHist || null),
     };

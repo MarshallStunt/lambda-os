@@ -107,6 +107,7 @@ instead and update with the one-line command in Settings → Updates.
 - A short **tour** runs the first time; take it again from Settings → Help.
 - **Yard** (Yard Central, read-only): ticket rows show each host's Yard state (🔒 when locked); ticket and device drawers show state, pool, lock and Starbase, with **Open in Yard**. Read through a pinned Yard Central tab with your Okta sign-in; Lambda OS never locks, unlocks or runs plans.
 - **Apps you don't have**: if a source has never worked for you (e.g. no Yard or Slack account) and fails to sign in 3 times, it goes quiet: no pill, no pinned tab, tried again once a day or from Settings → Check connections. Everything that uses it simply hides; nothing else depends on it. A source that worked before stays loud when it breaks.
+- **Smart processing backups** (AI when available): when a rule breaks or can't decide, the AI fills in only that gap, once, and the answer is remembered: renamed Jira fields, tickets with no site, new ticket statuses (waiting on parts), new Grafana alert names (hardware or not), deployment titles the rules can't read. Settings → Smart processing shows a "Rules check" of what the AI is filling in.
 - **f** opens the Fleet globe, **b** the Second brain, **d** Deployments, **e** (or the ⤢ button) makes the middle panel fill the screen, and **Esc** closes things.
 - Globe: drag to rotate, scroll to zoom, click a site for inventory and tickets.
 - Graph: hover a node to trace its links, drag to pan, scroll to zoom, click to open.

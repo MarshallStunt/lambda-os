@@ -10,7 +10,7 @@
 // answered is never sent again. If the AI is missing or fails, the local rules simply stay in charge.
 
 const LambdaSmart = (() => {
-  const DEFAULTS = { mode: 'local', volunteer: true, matching: true, priority: true, slack: false };
+  const DEFAULTS = { mode: 'local', volunteer: true, matching: true, priority: true, slack: false, backup: true };
   const CAP = { vol: 15, builds: 15, moves: 20, events: 20, tickets: 40 };
   const HOUR = 3600e3;
 
@@ -91,12 +91,87 @@ Reply with JSON only: {"order":["KEY-1","KEY-2",…],"reasons":{"KEY-1":"…"}}`
     return mine.length;
   }
 
+  /* ---------------- Backups: when a rule breaks or can't decide ---------------- */
+  // Each looks only at what the rules left unsettled, asks once, and keeps the answer ('' / false = asked, no answer).
+  const WAIT = /part|rma/i, HWRX = /psu|power ?supply|fan|pdu|gpu|xid|thermal|temp|overheat|memory|dimm|disk|nvme|drive|nvlink|fabric|link ?down|carrier|\bib\b|infiniband|bmc|redfish|chassis|cooling|leak|unreachable|optic|transceiver/i;
+  async function fieldsBackup(ai, snap, cache) {
+    const miss = snap.jira?.fieldMiss; if (!miss) return 0;
+    const todo = miss.missing.filter(m => !(m.key in cache.fields)); if (!todo.length) return 0;
+    const system = `A Jira site was set up with custom fields Lambda OS reads by name; some names weren't found (probably renamed).
+For each missing field pick the custom field that is clearly the same thing, or null. Only match when fairly sure.
+Reply with JSON only: {"fields":{"key":"customfield_12345" or null}}`;
+    const res = await askJson(ai, system, { missing: todo, candidates: miss.candidates });
+    const ok = new Set(miss.candidates.map(c => c.id));
+    for (const m of todo) { const id = res.fields?.[m.key]; cache.fields[m.key] = typeof id === 'string' && ok.has(id) ? id : ''; }
+    return todo.length;
+  }
+  async function sitesBackup(ai, D, red, cache) {
+    const todo = D.TICKETS.filter(t => !t.site && !(t.key in cache.site)).slice(0, 40);
+    if (!todo.length) return 0;
+    const system = `You find which data center a ticket is about. Site codes look like ABC01. Known sites: ${sitesHint(D)}.
+Use site codes, city or facility names and hostname prefixes (e.g. dal02-… is DAL02). If unsure, null.
+Reply with JSON only: {"sites":{"TICKET-1":"ABC01" or null}}`;
+    const res = await askJson(ai, system, { tickets: todo.map(t => ({ key: t.key, summary: red.redact(t.summary || '').slice(0, 200), host: t.device || null })) });
+    const codes = new Set(D.SITES.map(s => s.id));
+    for (const t of todo) { const c = String(res.sites?.[t.key] || '').toUpperCase(); cache.site[t.key] = codes.has(c) ? c : ''; }
+    return todo.length;
+  }
+  async function statusBackup(ai, D, cache) {
+    const todo = [...new Set(D.TICKETS.map(t => t.status).filter(Boolean))].filter(s => !WAIT.test(s) && !(s in cache.status)).slice(0, 40);
+    if (!todo.length) return 0;
+    const system = `Sort Jira ticket status names for a data center operations team into one class each:
+"waiting_parts" (waiting on a part, RMA, shipment or vendor replacement), "in_progress", "blocked" (waiting on someone else or another team), "other".
+Reply with JSON only: {"status":{"Status name":"class"}}`;
+    const res = await askJson(ai, system, { statuses: todo });
+    for (const s of todo) { const c = res.status?.[s]; cache.status[s] = ['waiting_parts', 'in_progress', 'blocked', 'other'].includes(c) ? c : 'other'; }
+    return todo.length;
+  }
+  async function alertsBackup(ai, D, cache) {
+    const names = new Set();
+    for (const s of D.SITES) for (const c of s.gf?.counts || []) names.add(c.name);
+    const todo = [...names].filter(nm => !HWRX.test(nm) && !(nm in cache.alert)).slice(0, 60);
+    if (!todo.length) return 0;
+    const system = `Classify Grafana alert names for a GPU data center: true if the alert is about physical hardware a data center
+technician would fix (power, fans, GPUs, memory, disks, NICs/optics/cables, BMC, cooling, leaks, chassis), false for software,
+platform, Kubernetes, application or monitoring-only alerts.
+Reply with JSON only: {"hardware":{"AlertName":true|false}}`;
+    const res = await askJson(ai, system, { alerts: todo });
+    for (const nm of todo) cache.alert[nm] = res.hardware?.[nm] === true;
+    return todo.length;
+  }
+  async function titlesBackup(ai, D, red, cache) {
+    const todo = (D.DEPLOYMENTS || []).filter(d => (!d.gpus || !d.sites.length) && !(d.key in cache.dep)).slice(0, 30);
+    if (!todo.length) return 0;
+    const system = `Read Jira deployment titles for a GPU cloud. Extract the GPU count (number of GPUs, not nodes), the GPU model
+(e.g. H100, B200, GB300, VR200) and the data center site code (ABC01). Known sites: ${sitesHint(D)}. Use null when it's not there.
+Reply with JSON only: {"deployments":{"KEY-1":{"gpus":number|null,"model":"…"|null,"site":"ABC01"|null}}}`;
+    const res = await askJson(ai, system, { deployments: todo.map(d => ({ key: d.key, title: red.redact(d.summary || d.title || '').slice(0, 200) })) });
+    const codes = new Set(D.SITES.map(s => s.id));
+    for (const d of todo) { const x = res.deployments?.[d.key] || {};
+      cache.dep[d.key] = { gpus: Number.isFinite(+x.gpus) && +x.gpus > 0 ? Math.round(+x.gpus) : null, model: typeof x.model === 'string' ? x.model.slice(0, 20) : null,
+        site: codes.has(String(x.site || '').toUpperCase()) ? String(x.site).toUpperCase() : null }; }
+    return todo.length;
+  }
+  // What the AI is filling in right now (shown in Settings → Smart processing as the "rules check").
+  function usage(snap, D, cache) {
+    const n = {
+      fields: (snap.jira?.fieldsByAI || []).length + Object.entries(cache.fields).filter(([k, v]) => v && snap.jira?.fieldMiss?.missing?.some(m => m.key === k)).length,
+      sites: D.TICKETS.filter(t => !t.site && cache.site[t.key]).length,
+      statuses: Object.values(cache.status).filter(c => c === 'waiting_parts').length,
+      alerts: Object.values(cache.alert).filter(Boolean).length,
+      titles: (D.DEPLOYMENTS || []).filter(d => (!d.gpus || !d.sites.length) && cache.dep[d.key] && (cache.dep[d.key].gpus || cache.dep[d.key].site)).length,
+    };
+    return n;
+  }
+
   // Keeps caches bounded: newest answers win.
   const trim = (obj, max) => { const k = Object.keys(obj); if (k.length > max) for (const x of k.slice(0, k.length - max)) delete obj[x]; return obj; };
 
   async function enrich(snap, s, prev, progress = () => {}) {
     const cfg = { ...DEFAULTS, ...(s.smart || {}) };
-    const cache = { vol: { ...(prev?.cache?.vol || {}) }, link: { ...(prev?.cache?.link || {}) }, prio: prev?.cache?.prio || null };
+    const pc = prev?.cache || {};
+    const cache = { vol: { ...(pc.vol || {}) }, link: { ...(pc.link || {}) }, prio: pc.prio || null,
+      fields: { ...(pc.fields || {}) }, site: { ...(pc.site || {}) }, status: { ...(pc.status || {}) }, alert: { ...(pc.alert || {}) }, dep: { ...(pc.dep || {}) } };
     const out = { at: Date.now(), on: cfg.mode === 'ai', live: false, label: '', why: '', calls: 0, items: 0, cache };
     if (cfg.mode !== 'ai') return { ...out, why: 'Local only (Settings → Data → Smart processing).' };
     if (s.privacy?.mode === 'local') return { ...out, on: false, why: 'Settings → Privacy is set to never send anything to an AI.' };
@@ -116,7 +191,15 @@ Reply with JSON only: {"order":["KEY-1","KEY-2",…],"reasons":{"KEY-1":"…"}}`
     if (cfg.volunteer && cfg.slack) await step('volunteer requests', () => volunteer(s.ai, D, red, cache));
     if (cfg.matching) await step('matching', () => matching(s.ai, D, red, cache, s.privacy || {}));
     if (cfg.priority) await step('ticket order', () => priority(s.ai, D, red, cache));
-    trim(cache.vol, 400); trim(cache.link, 800);
+    if (cfg.backup) {
+      await step('Jira fields', () => fieldsBackup(s.ai, snap, cache));
+      await step('ticket sites', () => sitesBackup(s.ai, D, red, cache));
+      await step('ticket statuses', () => statusBackup(s.ai, D, cache));
+      await step('alert types', () => alertsBackup(s.ai, D, cache));
+      await step('deployment titles', () => titlesBackup(s.ai, D, red, cache));
+    }
+    out.used = usage(snap, D, cache);
+    trim(cache.vol, 400); trim(cache.link, 800); trim(cache.site, 2000); trim(cache.dep, 600); trim(cache.alert, 600); trim(cache.status, 300);
     out.live = !errs.length || out.calls > 0;
     out.why = errs.length ? `${errs.join('; ')}. The local rules are used for anything new.` : '';
     return out;
