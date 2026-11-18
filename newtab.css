@@ -822,3 +822,7 @@ input.bad { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(
 .tour-btns { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .tour-btns span { display: flex; gap: 6px; }
 .feed-filters { justify-content: flex-start !important; }
+.keywrap > .keypop { display: none !important; } /* template only; the open key is #keyPop */
+#keyPop { z-index: 40; }
+#keyPop span { display: inline-flex; align-items: center; gap: 6px; }
+#keyPop svg { width: 10px; height: 10px; flex-shrink: 0; }

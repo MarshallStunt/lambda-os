@@ -1646,11 +1646,15 @@ LambdaData.ready.then(D => {
       `<span><svg viewBox="0 0 10 10"><rect x="0" y="2" width="10" height="6" rx="2" fill="${s === 'idle' ? C.accent : C[s]}"/></svg>${l}</span>`).join('')
       + `<span><svg viewBox="0 0 10 10"><line x1="5" y1="0" x2="5" y2="10" stroke="${C.accent}" stroke-width="2"/></svg>Today</span>`,
   };
-  document.addEventListener('click', e => { if (!e.target.closest('.keywrap')) document.querySelectorAll('.keypop').forEach(p => { if (!p.hidden) { p.hidden = true; p.previousElementSibling?.classList.remove('on'); p.previousElementSibling?.setAttribute('aria-expanded', 'false'); } }); });
+  document.addEventListener('click', e => { const p = $('#keyPop'); if (p && !p.hidden && !e.target.closest('.keywrap, #keyPop')) { p.hidden = true; document.querySelectorAll('[data-globe=key]').forEach(b => { b.classList.remove('on'); b.setAttribute('aria-expanded', 'false'); }); } });
   $('#stageLegend').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.kind) { const on = Fleet.toggle(b.dataset.kind); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
-    if (b.dataset.globe === 'key') { const p = b.nextElementSibling, open = p.hidden, br = b.getBoundingClientRect(); p.style.left = br.left + 'px'; p.style.top = br.bottom + 6 + 'px'; p.hidden = !open; b.setAttribute('aria-expanded', open); b.classList.toggle('on', open); return; }
+    if (b.dataset.globe === 'key') { // the popover lives on the page itself (the stage's blur would offset a fixed box inside it)
+      let p = $('#keyPop'); if (!p) { p = Object.assign(document.createElement('div'), { id: 'keyPop', className: 'keypop', hidden: true }); document.body.appendChild(p); }
+      const open = p.hidden, br = b.getBoundingClientRect();
+      p.innerHTML = b.nextElementSibling.innerHTML; p.style.left = br.left + 'px'; p.style.top = br.bottom + 6 + 'px'; p.hidden = !open;
+      b.setAttribute('aria-expanded', open); b.classList.toggle('on', open); return; }
     if (b.dataset.globe === 'home') Fleet.home();
     if (b.dataset.globe === 'world') Fleet.world();
     if (b.dataset.fleet) { Fleet.setMode(b.dataset.fleet); setView('globe'); }
