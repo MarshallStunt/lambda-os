@@ -146,7 +146,7 @@ version's name. Unzipping always gives a folder called `lambda-os`, whatever the
 - **Sites**: NetBox sites. `ATL01 - …` is a data center, `POP - YUL51` is a POP, `prem-*` is on-prem. Planned, retired and decommissioning sites are drawn hollow. Duplicate codes are merged.
 - **Tickets**: the Jira fields "Data Center Location(s)", "Hostname", "Cabinet Name", "Rack Position", "Lambda Part Number" and "Time to resolution" (SLA), matched by name. If several fields share a name, the first filled one wins.
 - **Spares**: NetBox inventory-consumables per storage location, then per site. "Low" means at or below the line's alert quantity.
-- **Feed**: Jira updates plus NetBox changes made by people. Automation accounts are filtered out.
+- **Feed**: Jira updates plus NetBox changes made by people. Automation accounts are filtered out. Click any event for its details: the ticket (status, SLA, device, Yard, alerts), the NetBox change (who, what, the object and its change-log entry), the Grafana alert's hosts, the Atium milestone and build, the NetSuite movement (status, tracking, deployment), or the full Slack message / email, plus everything it links to and a button to open it in its app.
 
 ## Not yet
 - Claude: it needs an org-approved API path. The ⌘K answers are computed from the loaded data.

@@ -577,10 +577,107 @@ LambdaData.ready.then(D => {
   function renderFeed(newCount = 0) {
     const shown = feed.filter(f => feedOn[f.src]).slice(0, 100);
     $('#feed').innerHTML = shown.map((f, i) =>
-      `<li class="fitem ${i < newCount ? 'new' : ''}" ${f.url ? `data-href="${esc(f.url)}"` : `data-ref="${esc(f.ref ?? '')}"`}>
+      `<li class="fitem ${i < newCount ? 'new' : ''}" data-feed="${fid(f)}" tabindex="0" role="button" title="Click for details">
         <div class="fmeta"><span class="srctag src-${f.src}">${SRC[f.src][1]}</span><span class="ftime">${rel(f.at)}</span></div><div class="ftext">${esc(f.text)}</div></li>`).join('')
       || '<li class="muted" style="padding:10px">Nothing yet.</li>';
   }
+  // Clicking an event opens what it's about: the details, everything it links to, and a button to the source.
+  let feedSeq = 0; const feedById = new Map();
+  const fid = f => { if (!f._id) { f._id = ++feedSeq; feedById.set(f._id, f); } return f._id; };
+  const linksIn = text => {
+    const out = [], s = String(text || '');
+    for (const k of new Set(s.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) || [])) {
+      if (D.ticketByKey(k)) out.push(`<button class="tagchip" data-ticket="${esc(k)}">${esc(k)}</button>`);
+      else if (D.deploymentByKey?.(k)) out.push(`<button class="tagchip" data-dep="${esc(k)}">${esc(k)}</button>`);
+    }
+    for (const h of new Set(s.match(/\b[a-z]{3}\d{2}-[a-z0-9-]*[a-z0-9]\b/gi) || [])) { const d = D.deviceById(h) || D.deviceById(h.toLowerCase()); if (d) out.push(`<button class="tagchip mono" data-open="device:${esc(d.id)}">${esc(d.id)}</button>`); }
+    for (const c of new Set(s.match(/\b[A-Z]{3}\d{2}\b/g) || [])) if (D.siteById(c)) out.push(`<button class="tagchip" data-site="${esc(c)}">📍 ${esc(c)}</button>`);
+    return [...new Set(out)];
+  };
+  const NB_PATH = { device: 'dcim/devices', site: 'dcim/sites', rack: 'dcim/racks', location: 'dcim/locations', interface: 'dcim/interfaces', cable: 'dcim/cables',
+    module: 'dcim/modules', inventoryitem: 'dcim/inventory-items', powerfeed: 'dcim/power-feeds', powerpanel: 'dcim/power-panels', ipaddress: 'ipam/ip-addresses', prefix: 'ipam/prefixes' };
+  function openFeed(f) {
+    const m = f.meta || {}, when = new Date(f.at), name = SRC[f.src]?.[1] || f.src;
+    const head = (title, sub) => `<div class="qkey"><span class="srctag src-${f.src}">${esc(name)}</span> · ${esc(when.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))} · ${rel(f.at) === 'now' ? 'just now' : rel(f.at) + ' ago'}</div><h3>${title}</h3>${sub ? `<p class="muted">${sub}</p>` : ''}`;
+    const kv = rows => `<dl class="kv">${rows.filter(r => r && r[1]).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+    const linked = list => list.length ? `<div class="section-title"><span>Linked</span><span>${list.length}</span></div><div class="feed-links">${list.join('')}</div>` : '';
+    let body = '', links = '', extra = [];
+    if (f.src === 'jira') {
+      const key = m.key || f.ref, t = key && D.ticketByKey(key), dep = key && D.deploymentByKey?.(key);
+      if (t) {
+        const st = slaStatus(t), dev = D.deviceById(t.device);
+        body = head(`${esc(t.key)} · ${esc(t.summary)}`, `Latest update: status <b>${esc(m.status || t.status)}</b>${m.assignee ? ` · assignee ${esc(m.assignee)}` : ''}`)
+          + statusChip(st, `${STATUS[st].glyph} ${slaText(t)}`)
+          + kv([['Status', esc(t.status)], ['Priority', esc(t.priority)], ['Assignee', t.assignee ? `<a data-open="person:${esc(t.assignee)}">${esc(t.assigneeName)}</a>` : 'Unassigned'],
+            ['Site', t.site ? `<a data-open="site:${esc(t.site)}">${esc(t.site)}</a>` : ''], ['Device', dev ? `<a data-open="device:${esc(dev.id)}" class="mono">${esc(dev.id)}</a>${dev.rack ? ` · ${esc(dev.rack)}${dev.u ? ` U${dev.u}` : ''}` : ''}` : esc(t.device || '')],
+            ['Created', new Date(t.created).toLocaleString()]])
+          + yardBlock(t.device, t) + alertsBlock(t.alerts);
+        links = `<button class="btn primary" data-ticket="${esc(t.key)}">Ticket details</button>${btn('Open in Jira', t.url)}`;
+      } else if (dep) {
+        body = head(`${esc(dep.key)} · ${esc(dep.title)}`, `Latest update: status <b>${esc(m.status || dep.status)}</b>`) + statusChip(dep.health, depStatus(dep))
+          + kv([['Sites', esc(dep.sites.join(', '))], ['GPUs', dep.gpus ? `${dep.gpus.toLocaleString()}× ${esc(dep.gpuModel || '')}` : ''], ['Done', pct(dep.progress)], ['Due', fmtDate(dep.end)], ['Owner', esc(dep.assigneeName || '')]]);
+        links = `<button class="btn primary" data-dep="${esc(dep.key)}">Deployment details</button>${dep.url ? btn('Open in Jira', dep.url) : ''}`;
+      } else {
+        body = head(esc(key ? `${key} · ${m.summary || f.text}` : f.text), m.status ? `Status <b>${esc(m.status)}</b>${m.assignee ? ` · assignee ${esc(m.assignee)}` : ''}` : 'This ticket isn\'t in your open fleet tickets any more (closed, or outside the fleet search).');
+        links = btn('Open in Jira', m.url || (key && D.LINKS?.jira ? `${D.LINKS.jira}/browse/${key}` : ''), true);
+      }
+    } else if (f.src === 'netbox') {
+      const dev = m.type === 'device' && (D.deviceById(m.repr) || D.deviceById(String(m.repr).toLowerCase())), site = m.type === 'site' ? D.siteById(m.repr) : null;
+      const base = m.base || D.LINKS?.netbox || '', path = NB_PATH[m.type];
+      body = head(esc(f.text), '')
+        + kv([['Who', esc(m.user || '')], ['Change', esc(m.action || '')], ['Object type', esc(m.type || '')], ['Object', m.repr ? `<span class="mono">${esc(m.repr)}</span>` : ''],
+          ['Device', dev ? `<a data-open="device:${esc(dev.id)}" class="mono">${esc(dev.id)}</a> · ${esc(dev.model)} · ${esc(dev.site || '?')} ${esc(dev.rack)}${dev.u ? ` U${dev.u}` : ''}` : '']])
+        + (dev ? yardBlock(dev.id) : '')
+        + (dev ? (() => { const ts = ALLT().filter(t => t.device === dev.id).sort(byUrgency); return ts.length ? `<div class="section-title"><span>Open tickets on this device</span><span>${ts.length}</span></div>${ts.slice(0, 6).map(ticketRow).join('')}` : ''; })() : '');
+      links = [dev ? `<button class="btn primary" data-open="device:${esc(dev.id)}">Device details</button>` : '', site ? `<button class="btn primary" data-site="${esc(site.id)}">Site card</button>` : '',
+        base && path && m.objId ? btn(`${cap(m.type)} in NetBox`, `${base}/${path}/${m.objId}/`, !dev && !site) : dev?.url ? btn('Device in NetBox', dev.url) : '',
+        base && m.id ? btn('What changed (NetBox change log)', `${base}/core/changelog/${m.id}/`) : ''].join('');
+    } else if (f.src === 'grafana') {
+      const s = D.siteById(m.site || f.ref), hosts = m.hosts || [];
+      body = head(esc(`${m.name || 'Alert'} at ${m.site || f.ref}`), `${hosts.length} host${hosts.length === 1 ? '' : 's'} · first fired ${rel(f.at)} ago`)
+        + `<div class="section-title"><span>Hosts</span><span>${hosts.length}</span></div>`
+        + hosts.slice(0, 40).map(h => { const d = D.deviceById(h) || D.deviceById(String(h).toLowerCase()), al = d?.alerts?.find(a => a.name === m.name);
+          return `<div class="mini-ticket" ${d ? `data-open="device:${esc(d.id)}"` : ''}><span class="qkey mono">${esc(h)}</span><span class="qsum">${al ? alertLine(al) : esc(d ? `${d.rack || ''}${d.u ? ' U' + d.u : ''}` : '')}${yardChip(h)}</span><span class="small muted">${ALLT().filter(t => t.device === d?.id).length ? `${ALLT().filter(t => t.device === d.id).length} ticket(s)` : 'no ticket'}</span></div>`; }).join('');
+      links = `${s?.gf?.url ? btn('Site health in Grafana', s.gf.url, true) : ''}${s ? `<button class="btn" data-site="${esc(s.id)}">Site card</button>` : ''}`;
+    } else if (f.src === 'atium') {
+      const b = m.build || {}, ms = m.milestone || {}, dep = b.deploymentKey && D.deploymentByKey?.(b.deploymentKey);
+      body = head(esc(`${ms.name || 'Milestone'} done · ${b.name || ''}`), [b.customer, b.site].filter(Boolean).map(esc).join(' · '))
+        + kv([['Build', esc(b.name || '')], ['Milestone', esc(ms.name || '')], ['Done', ms.done ? esc(fmtDate(Date.parse(ms.done))) : ''], ['Next', b.next ? `${esc(b.next.name)}${b.next.at ? ` · due ${fmtDate(b.next.at)}` : ''}${b.late ? ' <span class="st-warning">late</span>' : ''}` : ''],
+          ['Racked', b.rackedPct != null ? pct(b.rackedPct) : ''], ['Validated', b.validatedPct != null ? pct(b.validatedPct) : ''], ['Hand-off', b.handoff?.at ? fmtDate(b.handoff.at) + (b.handoff.done ? ' (done)' : '') : '']]);
+      links = `${dep ? `<button class="btn primary" data-dep="${esc(dep.key)}">Deployment details</button>` : ''}${b.url ? btn('Open in Atium', b.url, !dep) : ''}${b.site ? `<button class="btn" data-site="${esc(b.site)}">Site card</button>` : ''}`;
+    } else if (f.src === 'netsuite') {
+      const dep = m.deploymentKey && D.deploymentByKey?.(m.deploymentKey);
+      body = head(esc(`${m.doc || ''} · ${m.type || 'Movement'}`), esc([m.deployment, m.site].filter(Boolean).join(' · ')))
+        + kv([['Document', `<span class="mono">${esc(m.doc || '')}</span>`], ['Type', esc(m.type || '')], ['Status', esc(m.status || '')], ['Date', esc(m.date || (m.at ? fmtDate(m.at) : ''))],
+          ['From', esc(m.from || '')], ['To', esc(m.to || m.dcLoc || '')], ['Deployment', dep ? `<a data-dep="${esc(dep.key)}">${esc(dep.key)} · ${esc(dep.title)}</a>` : esc(m.deployment || '')],
+          ['Site', m.site ? `<a data-open="site:${esc(m.site)}">${esc(m.site)}</a>` : ''], ['RMA', m.rma && !/^no$/i.test(m.rma) ? esc(m.rma) : ''], ['Tracking', m.tracking ? `<span class="mono">${esc(m.tracking)}</span>` : '']]);
+      links = `${dep ? `<button class="btn primary" data-dep="${esc(dep.key)}">Deployment details</button>` : ''}${m.url ? btn('Open in NetSuite', m.url, !dep) : D.LINKS?.netsuite ? btn('NetSuite', D.LINKS.netsuite) : ''}${m.site ? `<button class="btn" data-site="${esc(m.site)}">Site card</button>` : ''}`;
+    } else if (f.src === 'slack') {
+      const ch = (D.CHANNELS || []).find(c => c.id === m.channelId);
+      body = head(esc(m.isDm ? `Direct message from ${m.user || 'someone'}` : `#${m.channel || ''} · ${m.user || ''}`), '')
+        + `<div class="feed-msg">${esc(m.text || f.text)}</div>`
+        + kv([['From', esc(m.user || '')], ['Where', m.isDm ? 'Direct message' : `#${esc(m.channel || '')}`], ['Channel is about', ch ? [ch.site && `<a data-open="site:${esc(ch.site)}">${esc(ch.site)}</a>`, ch.deployment && `<a data-dep="${esc(ch.deployment)}">${esc(ch.deployment)}</a>`].filter(Boolean).join(' · ') : '']]);
+      links = btn('Open in Slack', m.link || f.url, true);
+    } else if (f.src === 'mail') {
+      body = head(esc(m.title || f.text), '')
+        + kv([['From', `${esc(m.from || '')}${m.fromEmail ? ` <span class="muted">&lt;${esc(m.fromEmail)}&gt;</span>` : ''}`], ['Received', esc(when.toLocaleString())]])
+        + (m.summary ? `<div class="feed-msg">${esc(m.summary)}${m.summary.length >= 240 ? '…' : ''}</div>` : '');
+      links = btn('Open in Gmail', m.link || f.url, true);
+    } else {
+      body = head(esc(f.text), '');
+      links = f.url ? btn('Open', f.url, true) : '';
+    }
+    extra = linksIn(`${f.text} ${m.text || ''} ${m.summary || ''}`);
+    Drawer.open(`${body}${linked(extra)}<div class="links">${links}</div>`);
+  }
+  $('#feed').addEventListener('click', e => {
+    if (e.target.closest('a,button')) return;
+    const li = e.target.closest('[data-feed]'); const f = li && feedById.get(+li.dataset.feed); if (f) openFeed(f);
+  });
+  $('#feed').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const li = e.target.closest('[data-feed]'); const f = li && feedById.get(+li.dataset.feed); if (f) { e.preventDefault(); openFeed(f); }
+  });
   renderFeed();
   let lastPoll = Date.now();
   setInterval(async () => {

@@ -102,7 +102,7 @@ const LambdaLive = (() => {
       all('/api/dcim/locations/?limit=1000&fields=id,name,site', 'locations'),
       all('/api/plugins/inventory-consumables/consumables/?limit=1000&fields=id,consumable_type,storage_location,onsite_quantity,receiving_quantity,alert_at_quantity', 'stock lines')
         .catch(() => []),
-      get('/api/core/object-changes/?limit=400&ordering=-time&fields=id,time,user_name,action,changed_object_type,object_repr')
+      get('/api/core/object-changes/?limit=400&ordering=-time&fields=id,time,user_name,action,changed_object_type,changed_object_id,object_repr')
         .then(r => (r.results || []).filter(isPerson).slice(0, 40)).catch(() => []),
     ]);
     // Device history for the Devices card: how many devices were created after each of the last 30 days (one small
@@ -140,7 +140,7 @@ const LambdaLive = (() => {
       })),
       stock, types, devHist,
       changes: changes.map(c => ({ at: Date.parse(c.time), user: c.user_name || '', action: c.action?.label || c.action?.value || '',
-        type: String(c.changed_object_type || '').split('.').pop(), repr: c.object_repr || '' })),
+        type: String(c.changed_object_type || '').split('.').pop(), repr: c.object_repr || '', id: c.id || null, objId: c.changed_object_id || null })),
     };
   }
 
@@ -1015,26 +1015,28 @@ const LambdaLive = (() => {
     await Promise.allSettled([
       on('jira') && (async () => {
         const jql = `((${stripOrder(s.fleetJql)}) OR (${stripOrder(s.portfolioJql)})) AND updated >= "-${mins}m" ORDER BY updated DESC`;
-        const r = await getJson(`${jbase}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=30&fields=summary,status,updated`, { login: jbase, name: 'Jira' });
+        const r = await getJson(`${jbase}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=30&fields=summary,status,updated,assignee`, { login: jbase, name: 'Jira' });
         for (const i of r.issues || []) {
           const at = Date.parse(i.fields.updated);
-          if (at > since) out.push({ src: 'jira', at, ref: i.key, text: `${i.key} · ${i.fields.status?.name} — ${i.fields.summary}` });
+          if (at > since) out.push({ src: 'jira', at, ref: i.key, text: `${i.key} · ${i.fields.status?.name} — ${i.fields.summary}`,
+            meta: { key: i.key, status: i.fields.status?.name || '', summary: i.fields.summary || '', assignee: i.fields.assignee?.displayName || '', url: `${jbase}/browse/${i.key}` } });
         }
       })(),
       on('netbox') && (async () => {
-        const r = await getJson(`${nbase}/api/core/object-changes/?limit=300&ordering=-time&time_after=${encodeURIComponent(new Date(since).toISOString())}&fields=id,time,user_name,action,changed_object_type,object_repr`, { headers: nbHeaders(s), login: nbase, name: 'NetBox' });
+        const r = await getJson(`${nbase}/api/core/object-changes/?limit=300&ordering=-time&time_after=${encodeURIComponent(new Date(since).toISOString())}&fields=id,time,user_name,action,changed_object_type,changed_object_id,object_repr`, { headers: nbHeaders(s), login: nbase, name: 'NetBox' });
         for (const c of (r.results || []).filter(isPerson)) {
           const at = Date.parse(c.time);
-          if (at > since) out.push({ src: 'netbox', at, ref: null, text: `${c.user_name} ${String(c.action?.label || '').toLowerCase()} ${String(c.changed_object_type || '').split('.').pop()} ${c.object_repr}` });
+          if (at > since) out.push({ src: 'netbox', at, ref: null, text: `${c.user_name} ${String(c.action?.label || '').toLowerCase()} ${String(c.changed_object_type || '').split('.').pop()} ${c.object_repr}`,
+            meta: { user: c.user_name || '', action: c.action?.label || '', type: String(c.changed_object_type || '').split('.').pop(), repr: c.object_repr || '', id: c.id, objId: c.changed_object_id, base: nbase } });
         }
       })(),
       on('slack') && (async () => {
         const r = await slack(since);
-        for (const m of r.mentions) out.push({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}` });
+        for (const m of r.mentions) out.push({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}`, meta: m });
       })(),
       on('gmail') && (async () => {
         const g = await gmail();
-        for (const e of g.entries) if (e.at > since) out.push({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}` });
+        for (const e of g.entries) if (e.at > since) out.push({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}`, meta: e });
       })(),
     ].filter(Boolean));
     return out.sort((a, b) => b.at - a.at);

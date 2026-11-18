@@ -213,8 +213,8 @@
 
     // Feed: latest ticket updates + NetBox changes.
     const FEED = [
-      ...[...TICKETS].sort((a, b) => b.updated - a.updated).slice(0, 25).map(t => ({ src: 'jira', at: t.updated, ref: t.key, text: `${t.key} · ${t.status} — ${t.summary}` })),
-      ...(nb?.changes || []).map(c => ({ src: 'netbox', at: c.at, ref: null, text: `${c.user || 'someone'} ${c.action.toLowerCase()} ${c.type} ${c.repr}` })),
+      ...[...TICKETS].sort((a, b) => b.updated - a.updated).slice(0, 25).map(t => ({ src: 'jira', at: t.updated, ref: t.key, text: `${t.key} · ${t.status} — ${t.summary}`, meta: { key: t.key, status: t.status, summary: t.summary, url: t.url } })),
+      ...(nb?.changes || []).map(c => ({ src: 'netbox', at: c.at, ref: null, text: `${c.user || 'someone'} ${c.action.toLowerCase()} ${c.type} ${c.repr}`, meta: { user: c.user, action: c.action, type: c.type, repr: c.repr, id: c.id, objId: c.objId, base: nb?.base } })),
     ].sort((a, b) => b.at - a.at);
 
     const src = (key, name) => {
@@ -505,15 +505,15 @@
     // Feed and KPIs
     D.FEED.push(
       ...BUILDS.flatMap(b => (b.milestones || []).filter(m => m.status === 'completed' && m.done).map(m => ({ b, m, at: Date.parse(m.done + (m.done.length === 10 ? 'T12:00:00' : '')) })))
-        .filter(e => e.at > now - 7 * DAY && e.at <= now).map(({ b, m, at }) => ({ src: 'atium', at, ref: b.deploymentKey || b.site, text: `${b.name} · ${m.name} done${b.customer ? ` · ${b.customer}` : ''}` })),
+        .filter(e => e.at > now - 7 * DAY && e.at <= now).map(({ b, m, at }) => ({ src: 'atium', at, ref: b.deploymentKey || b.site, text: `${b.name} · ${m.name} done${b.customer ? ` · ${b.customer}` : ''}`, meta: { build: b, milestone: m } })),
       ...(() => { const g = new Map();
         for (const a of [...byHost.values()].flat()) if (a.hw && a.since > now - DAY && a.since <= now + 60e3) {
           const k = a.site + '|' + a.name, e = g.get(k) || { site: a.site, name: a.name, at: 0, hosts: [] }; e.at = Math.max(e.at, a.since); if (!e.hosts.includes(a.host)) e.hosts.push(a.host); g.set(k, e); }
-        return [...g.values()].sort((a, b) => b.at - a.at).slice(0, 20).map(e => ({ src: 'grafana', at: e.at, ref: e.site,
+        return [...g.values()].sort((a, b) => b.at - a.at).slice(0, 20).map(e => ({ src: 'grafana', at: e.at, ref: e.site, meta: { site: e.site, name: e.name, hosts: e.hosts },
           text: `${e.site} · ${e.name} on ${e.hosts.length > 1 ? `${e.hosts.length} hosts (${e.hosts.slice(0, 2).join(', ')}…)` : e.hosts[0]}` })); })(),
-      ...MENTIONS.map(m => ({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}` })),
-      ...(MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}` })),
-      ...MOVES.filter(m => m.at > now - 7 * DAY).slice(0, 25).map(m => ({ src: 'netsuite', at: m.at, ref: m.deploymentKey || m.site, text: `${m.doc} · ${m.type}${m.deployment ? ` · ${m.deployment}` : ''}${m.status ? ` · ${m.status}` : ''}` })),
+      ...MENTIONS.map(m => ({ src: 'slack', at: m.at, url: m.link, text: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}: ${m.text}`, meta: m })),
+      ...(MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, text: `${e.from}: ${e.title}`, meta: e })),
+      ...MOVES.filter(m => m.at > now - 7 * DAY).slice(0, 25).map(m => ({ src: 'netsuite', at: m.at, ref: m.deploymentKey || m.site, meta: m, text: `${m.doc} · ${m.type}${m.deployment ? ` · ${m.deployment}` : ''}${m.status ? ` · ${m.status}` : ''}` })),
     );
     D.FEED.sort((a, b) => b.at - a.at);
     if (DEPLOYMENTS.length) {
@@ -602,7 +602,7 @@
     ];
     const FEED_T = [
       () => { const t = pick(TICKETS); return { src: 'jira', ref: t.key, text: `${t.key} · ${pick(STATUSES)} — ${t.summary}` }; },
-      () => { const d = pick(DEVICES); return { src: 'netbox', ref: null, text: `${pick(PEOPLE.slice(1)).name} updated device ${d.id}` }; },
+      () => { const d = pick(DEVICES), who = pick(PEOPLE.slice(1)).name; return { src: 'netbox', ref: null, text: `${who} updated device ${d.id}`, meta: { user: who, action: 'Updated', type: 'device', repr: d.id } }; },
       () => { const s = pick(SITES); const p = pick(PARTS); return { src: 'netbox', ref: s.id, text: `${p.name} received at ${s.id} (+${int(4, 24)})` }; },
     ];
     const FEED = Array.from({ length: 16 }, (_, i) => ({ ...pick(FEED_T)(), at: now - (i + 1) * (3 + rnd() * 9) * 60000 }));
