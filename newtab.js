@@ -82,9 +82,16 @@ LambdaData.ready.then(D => {
   const pillLabel = s => s.access ? `${s.name} · allow` : s.auth ? `${s.name} · sign in` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`; // a sign-in problem says so, even with older data on screen
   // Every data source by name in the status strip; the ones that need you say why and are clickable.
   // (AI isn't listed here: its status lives in the ✨ Ask AI panel.)
-  $('#sources').innerHTML = D.SOURCES.filter(s => s.key !== 'claude').map(s => needsYou(s)
-    ? `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`
-    : `<span class="source-pill ${s.state}" title="${esc(s.title)}"><i></i>${esc(s.name)}${s.state === 'off' ? ' · off' : s.state === 'wait' ? ' · loading' : ''}</span>`).join('');
+  // One quiet summary for the sources that are fine ("● 8 live", names on hover); each one that needs you gets its own
+  // clickable pill. (The Live feed's filters are where the source names live.)
+  {
+    const all = D.SOURCES.filter(s => s.key !== 'claude'), fine = all.filter(s => !needsYou(s));
+    const ok = fine.filter(s => s.state === 'ok'), wait = fine.filter(s => s.state === 'wait'), off = fine.filter(s => s.state === 'off'), demo = fine.filter(s => s.state === 'demo');
+    const word = s => s.state === 'ok' ? 'live' : s.state === 'off' ? 'off (Settings)' : s.state === 'demo' ? 'demo data' : 'loading';
+    const parts = [ok.length && `${ok.length} live`, demo.length && 'demo data', wait.length && `${wait.length} loading`, off.length && `${off.length} off`].filter(Boolean);
+    const summary = fine.length ? `<span class="source-pill ${ok.length ? 'ok' : demo.length ? 'demo' : 'wait'} sum" tabindex="0" title="${esc(fine.map(s => `${s.name}: ${word(s)}`).join('\n'))}"><i></i>${fine.length} sources · ${parts.join(' · ')}</span>` : '';
+    $('#sources').innerHTML = all.filter(needsYou).map(s => `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`).join('') + summary;
+  }
   $('#sources').addEventListener('click', async e => {
     const b = e.target.closest('.source-pill'); if (!b) return;
     const needs = D.SOURCES.filter(x => x.access).flatMap(x => x.access);
@@ -239,23 +246,26 @@ LambdaData.ready.then(D => {
   // in and how many were closed since yesterday.
   const DAYMS = 864e5, dayKeyOf = t => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
   const backfill = (key, h) => key === 'open' ? h.open : key === 'breached' ? h.breached : key === 'deps' ? (h.deps ? Object.keys(h.deps).length : undefined) : undefined;
+  // DC Ops or Management cards (the switch under the greeting); remembered per person.
+  let kmode = 'ops'; try { kmode = localStorage.getItem('lambdaos-kpimode') === 'mgmt' && D.KPIS_MGMT?.length ? 'mgmt' : 'ops'; } catch { /* ignore */ }
+  const cards = () => kmode === 'mgmt' ? D.KPIS_MGMT : D.KPIS;
   function kpiHistory(hist) {
     if (D.MODE === 'demo') { // demo: a steady made-up fortnight ending at today's number
       let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-      return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => { let v = k.num; const pts = [k.num];
+      return Object.fromEntries(cards().filter(k => k.key).map(k => { let v = k.num; const pts = [k.num];
         for (let i = 0; i < 29; i++) { v = Math.max(0, Math.round(v - (rnd() - 0.45) * Math.max(2, k.num * 0.05))); pts.unshift(v); }
         return [k.key, pts.map((v, i) => ({ day: dayKeyOf(Date.now() - (29 - i) * DAYMS), v, ...(k.key === 'open' ? { opened: Math.round(3 + rnd() * 8), closed: Math.round(2 + rnd() * 8) } : {}) }))]; }));
     }
     const today = dayKeyOf(Date.now()), days = Object.keys(hist || {}).filter(x => x < today).sort().slice(-29);
-    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, k.trend?.length ? k.trend : k.scoped ? [{ day: today, v: k.num }] : [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
+    return Object.fromEntries(cards().filter(k => k.key).map(k => [k.key, k.trend?.length ? k.trend : k.scoped ? [{ day: today, v: k.num }] : [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
       .filter(p => Number.isFinite(p.v)), { day: today, v: k.num }]]));
   }
   const kDay = dd => new Date(dd + 'T12:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   function renderKpis(hist) {
     const H = kpiHistory(hist), prevRec = hist && Object.keys(hist).filter(x => x < dayKeyOf(Date.now())).sort().pop();
-    $('#kpis').innerHTML = D.KPIS.map(k => {
+    $('#kpis').innerHTML = cards().map(k => {
       const pts = H[k.key] || [], prev = pts.length > 1 ? pts[pts.length - 2] : null, dlt = prev ? k.num - prev.v : null;
-      const cls = !dlt ? 'flat' : !k.upBad ? 'neutral' : dlt > 0 ? 'bad' : 'good'; // red/green only where more is worse (tickets, breaches, waiting)
+      const cls = !dlt ? 'flat' : k.upGood ? (dlt > 0 ? 'good' : 'bad') : !k.upBad ? 'neutral' : dlt > 0 ? 'bad' : 'good'; // red/green only where more is worse (tickets, breaches, waiting)
       const amount = v => Math.abs(v) >= 1000 ? kfmt(Math.abs(v)) : Math.abs(v).toLocaleString();
       const delta = dlt == null ? '<span class="kd flat" title="The day-by-day chart builds up as Lambda OS records each day">new: history starts today</span>'
         : `<span class="kd ${cls}" title="Change since ${esc(kDay(prev.day))} (${prev.v.toLocaleString()})">${dlt > 0 ? '▲' : dlt < 0 ? '▼' : '='} ${dlt ? amount(dlt) : 'same'} <small>vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : esc(kDay(prev.day))}</small></span>`;
@@ -270,7 +280,7 @@ LambdaData.ready.then(D => {
       }
       // Slim card: a short label, the number with a small change arrow, and the 30-day chart. Everything else
       // (what changed since when, new/closed, the context line) is in the card's hover text.
-      const SHORT = { open: 'Open tickets', breached: 'SLA breached', deps: 'Deployments', gpus: 'GPUs', devices: 'Devices', waiting: 'Waiting parts' };
+      const SHORT = { open: 'Open tickets', breached: 'SLA breached', deps: 'Deployments', gpus: 'GPUs', devices: 'Devices', waiting: 'Waiting parts', slaPct: 'SLA met', healthy: 'Sites healthy', risk: 'At risk', handed: 'GPUs handed off' };
       const arrow = dlt == null || !dlt ? '' : `<span class="kd ${cls}">${dlt > 0 ? '▲' : '▼'}${amount(dlt)}</span>`;
       const strip = h => String(h).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
       const why = [k.label, `${k.value}`, dlt == null ? 'history starts today' : dlt ? `${dlt > 0 ? '+' : '−'}${amount(dlt)} vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : kDay(prev.day)}` : 'same as yesterday',
@@ -280,7 +290,7 @@ LambdaData.ready.then(D => {
         <div class="kpi-row"><span class="kpi-value">${esc(k.value)}</span>${arrow}</div>
         ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : (k.noHist ? '<div class="spark-wait" title="This history is only kept for all sites together">chart: all sites only</div>' : '<div class="spark-wait">chart starts tomorrow</div>')}</div>`; }).join('');
     document.querySelectorAll('.kpi').forEach((el, i) => {
-      const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
+      const k = cards()[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
       if (!svg) return;
       const dot = svg.querySelector('circle'), tip = el.querySelector('.spark-tip'), xy = sparkPts(pts.map(p => p.v)), m = pts.length;
       svg.setAttribute('aria-label', `Last ${m} days`);
@@ -297,7 +307,17 @@ LambdaData.ready.then(D => {
     });
   }
   renderKpis(null);
-  if (isExt) chrome.storage.local.get('history').then(r => renderKpis(r.history || null)).catch(() => {});
+  let KHIST = null;
+  {
+    const sw = $('#kmode');
+    if (sw && D.KPIS_MGMT?.length) {
+      sw.hidden = false;
+      const paintSw = () => sw.querySelectorAll('[data-kmode]').forEach(b => { b.classList.toggle('on', b.dataset.kmode === kmode); b.setAttribute('aria-pressed', b.dataset.kmode === kmode); });
+      paintSw();
+      sw.addEventListener('click', e => { const b = e.target.closest('[data-kmode]'); if (!b) return; kmode = b.dataset.kmode; try { localStorage.setItem('lambdaos-kpimode', kmode); } catch { /* ignore */ } paintSw(); renderKpis(KHIST); });
+    }
+  }
+  if (isExt) chrome.storage.local.get('history').then(r => renderKpis(KHIST = r.history || null)).catch(() => {});
 
   // A source that isn't connected says so, instead of looking empty. Returns '' when the source is fine.
   function sourceNote(key, what) {
@@ -452,7 +472,7 @@ LambdaData.ready.then(D => {
       const st = slaStatus(t);
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
-        <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="${esc(t.alerts.slice(0, 3).map(a => a.name).join(', '))} firing on this device (Grafana)">⚠ ${t.alerts.length}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
+        <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
           <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
@@ -1603,8 +1623,11 @@ LambdaData.ready.then(D => {
     globe: () => {
       const kinds = [['dc', 'Data center', `<circle cx="5" cy="5" r="4" fill="${C.text}"/>`], ['pop', 'POP', `<path d="M5 0L9.5 5L5 10L0.5 5Z" fill="${C.text}"/>`],
         ['prem', 'On-prem', `<rect x="1.5" y="1.5" width="7" height="7" fill="${C.text}"/>`], ['idle', 'Planned / retired', `<circle cx="5" cy="5" r="3.5" fill="none" stroke="${C.idle}" stroke-width="1.5"/>`]];
-      return ['good', 'warning', 'critical'].map(s => `<span><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="${C[s]}"/></svg>${STATUS[s].glyph} ${STATUS[s].label}</span>`).join('')
-        + `<span><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="${XC.deployment}" stroke-width="1.5" stroke-dasharray="2 2"/></svg>Deployment</span>`
+      // One row of controls; the colour key sits behind "Key" so it doesn't crowd them.
+      const key = ['good', 'warning', 'critical'].map(s => `<span><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="${C[s]}"/></svg>${STATUS[s].glyph} ${STATUS[s].label}</span>`).join('')
+        + `<span><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="${XC.deployment}" stroke-width="1.5" stroke-dasharray="2 2"/></svg>Deployment in progress</span>`
+        + `<span class="muted">Status = tickets (SLA) and Grafana site health</span>`;
+      return `<span class="keywrap"><button class="chip" data-globe="key" aria-expanded="false" title="What the colours mean">● Key</button><span class="keypop" hidden>${key}</span></span>`
         + kinds.map(([k, label, svg]) => `<button class="chip on" data-kind="${k}" aria-pressed="true"><svg viewBox="0 0 10 10">${svg}</svg>${label}</button>`).join('')
         + `<button class="chip" data-globe="home" title="Fit the live data centers (or double-click the map)">Fit</button><button class="chip" data-globe="world">World</button>`
         + `<span class="seg" title="Base map">${Object.entries(Tiles.PROVIDERS).map(([k, p]) => `<button class="chip ${Tiles.name() === k ? 'on' : ''}" data-basemap="${k}" aria-pressed="${Tiles.name() === k}">${p.label}</button>`).join('')}<button class="chip ${Tiles.name() === 'off' ? 'on' : ''}" data-basemap="off" title="Stylized dots, no imagery">Dots</button></span>`
@@ -1623,9 +1646,11 @@ LambdaData.ready.then(D => {
       `<span><svg viewBox="0 0 10 10"><rect x="0" y="2" width="10" height="6" rx="2" fill="${s === 'idle' ? C.accent : C[s]}"/></svg>${l}</span>`).join('')
       + `<span><svg viewBox="0 0 10 10"><line x1="5" y1="0" x2="5" y2="10" stroke="${C.accent}" stroke-width="2"/></svg>Today</span>`,
   };
+  document.addEventListener('click', e => { if (!e.target.closest('.keywrap')) document.querySelectorAll('.keypop').forEach(p => { if (!p.hidden) { p.hidden = true; p.previousElementSibling?.classList.remove('on'); p.previousElementSibling?.setAttribute('aria-expanded', 'false'); } }); });
   $('#stageLegend').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.kind) { const on = Fleet.toggle(b.dataset.kind); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+    if (b.dataset.globe === 'key') { const p = b.nextElementSibling, open = p.hidden; p.hidden = !open; b.setAttribute('aria-expanded', open); b.classList.toggle('on', open); return; }
     if (b.dataset.globe === 'home') Fleet.home();
     if (b.dataset.globe === 'world') Fleet.world();
     if (b.dataset.fleet) { Fleet.setMode(b.dataset.fleet); setView('globe'); }
@@ -2435,6 +2460,40 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       if (e.key === 'e') setStageMax(!document.body.classList.contains('stage-max'));
     }
   });
+
+  /* ---------------- First-run tour: four quick stops, once per person (again from Settings → Help) ---------------- */
+  {
+    const KEYT = 'lambdaos-tour-done';
+    const STEPS = [
+      ['#siteBtn', 'Pick your sites', 'Show every site, just yours, or any you tick. Cards, tickets, feed, the brain, Health and notifications all follow. ★ a site in this menu to mark it as yours.'],
+      ['#kpis', 'The top cards', 'Each card shows the number now, ▲/▼ since yesterday and the last 30 days. Hover a card for details, hover the chart for any day. Switch between DC Ops and Management cards under the greeting.'],
+      ['.stage-head .tabs', 'Four views', 'Fleet globe (F), Second brain (B), Deployments (D) and Health (H). E makes the middle bigger, Esc goes back. Each view can show All sites or Your sites.'],
+      ['#cmdTrigger', 'Search or ask', `Find any site, device, ticket, deployment or part (${KEY('K')}), or ask a question. ✨ Ask AI (${KEY('J')}) answers from the loaded data.`],
+    ];
+    let i = 0, box = null;
+    const end = () => { box?.remove(); box = null; try { localStorage.setItem(KEYT, '1'); } catch { /* ignore */ } document.removeEventListener('keydown', onKey, true); };
+    const onKey = e => { if (!box) return; if (e.key === 'Escape') { e.stopImmediatePropagation(); end(); } else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); go(i + 1); } else if (e.key === 'ArrowLeft') go(i - 1); };
+    function go(k) {
+      if (k >= STEPS.length) return end();
+      i = Math.max(0, k);
+      const [sel, title, text] = STEPS[i], el = $(sel);
+      if (!el || !el.getClientRects().length) return go(i + 1); // hidden at this width: skip that stop
+      const r = el.getBoundingClientRect(), pad = 6;
+      box ||= Object.assign(document.createElement('div'), { className: 'tour', role: 'dialog' });
+      box.setAttribute('aria-label', 'Lambda OS tour');
+      if (!box.isConnected) document.body.appendChild(box);
+      const below = r.bottom + 200 < innerHeight, left = Math.max(12, Math.min(r.left, innerWidth - 372));
+      box.innerHTML = `<div class="tour-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>
+        <div class="tour-card" style="left:${left}px;${below ? `top:${r.bottom + 14}px` : `bottom:${innerHeight - r.top + 14}px`}">
+          <small class="muted">${i + 1} of ${STEPS.length}</small><h3>${esc(title)}</h3><p>${esc(text)}</p>
+          <div class="tour-btns"><button class="btn" data-tour="skip">Skip tour</button><span>${i ? '<button class="btn" data-tour="back">Back</button>' : ''}<button class="btn primary" data-tour="next">${i === STEPS.length - 1 ? 'Done' : 'Next'}</button></span></div></div>`;
+      box.querySelector('[data-tour=next]').focus();
+    }
+    document.addEventListener('click', e => { const b = e.target.closest('[data-tour]'); if (!b) return; const a = b.dataset.tour; a === 'next' ? go(i + 1) : a === 'back' ? go(i - 1) : end(); });
+    addEventListener('resize', () => { if (box) go(i); });
+    let seen = false; try { seen = localStorage.getItem(KEYT) === '1'; } catch { /* ignore */ }
+    if (location.hash === '#tour' || !seen) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
+  }
 }).catch(err => {
   console.error(err);
   let b = $('#bootMsg');

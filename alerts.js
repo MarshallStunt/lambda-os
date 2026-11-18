@@ -171,7 +171,7 @@ const LambdaAlerts = (() => {
     for (const d of D.DEPLOYMENTS || []) deps[d.key] = { status: d.status, health: d.health, progress: d.progress };
     return { at: now, open: D.TICKETS.length, breached: D.TICKETS.filter(t => breached(t, now)).length,
       mine: D.TICKETS.filter(t => t.mine).map(t => t.key), keys: D.TICKETS.map(t => t.key), deps,
-      kpi: Object.fromEntries((D.KPIS || []).filter(k => k.key && Number.isFinite(k.num)).map(k => [k.key, k.num])) }; // the top cards' numbers, for their day-by-day charts
+      kpi: Object.fromEntries([...(D.KPIS || []), ...(typeof LambdaData !== 'undefined' && LambdaData.managementKpis ? LambdaData.managementKpis(D) : [])].filter(k => k.key && Number.isFinite(k.num)).map(k => [k.key, k.num])) }; // the top cards' numbers, for their day-by-day charts
   }
   function addToHistory(history, D, now = Date.now()) {
     const h = { ...(history || {}) };

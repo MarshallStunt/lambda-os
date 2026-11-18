@@ -1,6 +1,21 @@
 const $ = id => document.getElementById(id);
-const FIELDS = ['grafanaUrl', 'jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
-const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl', 'grafanaUrl'];
+const FIELDS = ['atiumUrl', 'grafanaUrl', 'jiraUrl', 'fleetJql', 'mineJql', 'portfolioJql', 'intakeJql', 'netboxUrl', 'netboxToken', 'netsuiteUrl', 'nsOnHandSearch', 'nsMovesSearch', 'calendarEmail'];
+const URLS = ['jiraUrl', 'netboxUrl', 'netsuiteUrl', 'atiumUrl', 'grafanaUrl'];
+// An address is only saved once it looks complete (https://host.domain or a localhost address), so a half-typed one
+// can't break the next refresh; the field says what's wrong and the last good address is kept meanwhile.
+const urlOk = v => { try { const u = new URL(v); return /^https?:$/.test(u.protocol) && (u.hostname.includes('.') || u.hostname === 'localhost'); } catch { return false; } };
+function checkUrls() {
+  const bad = [];
+  for (const k of URLS) {
+    const el = $(k), v = el.value.trim(), ok = !v || urlOk(v);
+    el.classList.toggle('bad', !ok); el.setAttribute('aria-invalid', !ok);
+    let msg = el.nextElementSibling?.classList.contains('field-err') ? el.nextElementSibling : null;
+    if (!ok && !msg) { msg = Object.assign(document.createElement('p'), { className: 'field-err' }); el.after(msg); }
+    if (msg) { msg.hidden = ok; msg.textContent = ok ? '' : /^https?:\/\//i.test(v) ? 'That address looks incomplete. The last good one is still used.' : 'Start the address with https:// (the last good one is still used).'; }
+    if (!ok) bad.push(k);
+  }
+  return bad;
+}
 const SOURCES = LambdaLive.NAMES; // { netbox: 'NetBox', jira: 'Jira', … }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const say = html => ($('result').innerHTML = html);
@@ -186,11 +201,12 @@ async function ensureAccess(s) {
 
 async function save(opts = {}) {
   const s = read();
-  if (!(await ensureAccess(s)) || !(await aiAccess())) return say('<p class="st-critical">Permission to reach that address was declined, so nothing was saved.</p>');
+  if (checkUrls().length) return say('<p class="st-critical">Fix the address marked in red first.</p>');
+  if (!(await ensureAccess(s)) || !(await aiAccess())) return say('<p class="st-critical">Permission to reach that address was declined, so that source can\'t be checked. (Your other changes are saved.)</p>');
   await chrome.storage.local.set({ settings: s });
   if (opts.quiet) return;
   if (s.mode !== 'live') return say('<p class="st-good">Saved. New tabs will show demo data.</p>');
-  say('<p class="muted" id="prog">Testing…</p>');
+  say('<p class="muted" id="prog">Checking every source…</p>');
   const snap = await LambdaLive.refresh(m => { const p = $('prog'); if (p) p.textContent = m; });
   const detail = {
     netbox: () => `${snap.nb?.sites.length ?? 0} sites, ${snap.nb?.stock.length ?? 0} stock lines`,
@@ -199,6 +215,8 @@ async function save(opts = {}) {
     gmail: () => `${snap.gmail?.unread ?? 0} unread · ${esc(snap.gmail?.email || '')}`,
     calendar: () => `${snap.calendar?.events?.length ?? 0} upcoming events`,
     netsuite: () => `${snap.netsuite?.onhand?.length ?? 0} items on hand, ${snap.netsuite?.moves?.length ?? 0} material movements`,
+    atium: () => `${snap.atium?.sites?.length ?? 0} sites, ${snap.atium?.builds?.length ?? 0} builds`,
+    grafana: () => `${Object.keys(snap.grafana?.sites || {}).length} sites with metrics${snap.grafana?.fleet ? ', site health on' : ''}`,
   };
   say(Object.entries(SOURCES).map(([k, name]) => {
     const x = snap.sources[k] || {};
@@ -264,8 +282,9 @@ async function missingAccess(s) {
 }
 async function autoSave() {
   clearTimeout(autoT); autoT = null;
-  const s = read();
-  s.look = (await chrome.storage.local.get('settings')).settings?.look || s.look; // never undo an appearance change
+  const s = read(), stored = (await chrome.storage.local.get('settings')).settings || {};
+  for (const k of checkUrls()) s[k] = stored[k] || LambdaLive.DEFAULTS[k]; // keep the last good address while one is half-typed
+  s.look = stored.look || s.look; // never undo an appearance change
   await chrome.storage.local.set({ settings: s });
   const need = await missingAccess(s);
   pill.innerHTML = need.length

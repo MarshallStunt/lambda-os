@@ -143,6 +143,13 @@
     </fieldset>
 
     <fieldset>
+      <legend>Atium</legend>
+      <label for="atiumUrl">Atium address</label>
+      <input type="url" id="atiumUrl" placeholder="https://kelsier.aws.lambdalabs.cloud">
+      <p class="hint">Builds, hand-offs, onsite schedules and purchase orders, read with your Atium (Okta) sign-in.</p>
+    </fieldset>
+
+    <fieldset>
       <legend>Grafana</legend>
       <label for="grafanaUrl">Grafana address</label>
       <input type="url" id="grafanaUrl" placeholder="https://grafana.aws.lambdalabs.cloud">
@@ -268,11 +275,11 @@
     <fieldset id="help">
       <legend>Help and ideas</legend>
       <p class="hint">Questions, ideas, something broken or a site/source you'd like added? Message <b>Hadi Khodja</b> on Slack.</p>
-      <div class="row" style="margin-top:6px"><a class="btn primary" id="helpSlack" href="https://lambda.slack.com/team/U0AAMLCUCUA" target="_blank" rel="noopener">💬 Message Hadi on Slack</a></div>
+      <div class="row" style="margin-top:6px"><a class="btn" href="newtab.html#tour" target="_blank" title="The four-stop tour of Lambda OS">🧭 Take the tour</a> <a class="btn primary" id="helpSlack" href="https://lambda.slack.com/team/U0AAMLCUCUA" target="_blank" rel="noopener">💬 Message Hadi on Slack</a></div>
     </fieldset>
 
     <div class="row">
-      <button class="btn primary" id="save" title="Changes save automatically; this checks every source">Test connections</button>
+      <button class="btn primary" id="save" title="Changes save automatically; this checks that every source answers">Check connections</button>
       <button class="btn" id="open">Open dashboard</button>
       <span class="spacer"></span>
       <button class="btn" id="exportBtn" title="Download your settings and tracked deployments as a file">Save backup</button>
