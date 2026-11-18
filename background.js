@@ -73,6 +73,8 @@ async function buildD(snap) {
   await LambdaData.prepare(); // load tracked deployments
   return LambdaData.buildLive(snap);
 }
+// Notifications and the brief follow the site picker in the top bar (all sites, your sites, or chosen ones).
+const scoped = async D => LambdaData.scope(D, await LambdaData.loadScope());
 // Toolbar badge: your urgent ticket count wins; otherwise "NEW" while an update is waiting (until "Later" for that version).
 async function setBadge(count, on) {
   if (count !== undefined) await chrome.storage.session.set({ badgeUrgent: on ? count : 0 });
@@ -141,7 +143,7 @@ async function runAlerts(snap) {
     const watch = D.SITES.filter(x => x.atium && LambdaAlerts.mySites(D).has(x.id)).map(x => x.atium.id).slice(0, 6);
     const { atiumWatch } = await chrome.storage.local.get('atiumWatch');
     if (JSON.stringify(watch) !== JSON.stringify(atiumWatch || [])) await chrome.storage.local.set({ atiumWatch: watch });
-    const res = LambdaAlerts.evaluate(D, alertState, s.alerts);
+    const res = LambdaAlerts.evaluate(await scoped(D), alertState, s.alerts); // the daily record below stays fleet-wide
     await chrome.storage.local.set({ alertState: res.state, history: LambdaAlerts.addToHistory(history, D) });
     await setBadge(res.urgentCount, s.alerts.enabled && s.alerts.badge);
     if (s.alerts.enabled && res.notes.length && !LambdaAlerts.quiet(s.alerts)) await notify(res.notes);
@@ -160,7 +162,7 @@ async function briefNotification() {
   const { snapshot, history } = await chrome.storage.local.get(['snapshot', 'history']);
   let message = 'Open it for today’s meetings, your tickets and tracked deployments.';
   if (snapshot && s.mode === 'live') {
-    const b = LambdaAlerts.brief(await buildD(snapshot), history);
+    const b = LambdaAlerts.brief(await scoped(await buildD(snapshot)), history);
     const down = b.troubled.map(s => s.name);
     message = [down.length ? `⚠ ${down.join(', ')} not up to date` : '', `${b.meetings.length} meetings today`, `${b.myBreached.length} of your tickets breached`, `${b.myDue.length} due today`,
       `${b.tracked.length} tracked deployments`, b.partsArrived.length ? `${b.partsArrived.length} parts arrived` : ''].filter(Boolean).join(' · ');

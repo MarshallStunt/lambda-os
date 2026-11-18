@@ -136,6 +136,47 @@ LambdaData.ready.then(D => {
     b.hidden = false; b.title = `Lambda OS ${u.latest} is available (you have ${u.current}). Click for how to update.`;
     b.onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL('settings.html#updates') });
   }).catch(() => {});
+  /* ---------------- Site picker: everything on the page follows it (search still covers every site) ---------------- */
+  {
+    const ALL = D.ALL || D, btn = $('#siteBtn'), pop = $('#sitePop'), mine = ALL.yourSites ? ALL.yourSites() : [];
+    const choice = D.SCOPE_CHOICE || 'all', chosen = D.SCOPE ? [...D.SCOPE] : [];
+    const pickable = ALL.SITES.filter(s => s.kind === 'dc' || s.openTickets).sort((a, b) => a.id.localeCompare(b.id));
+    btn.textContent = `📍 ${!D.SCOPE ? 'All sites' : choice === 'mine' ? `Your sites (${chosen.length})` : chosen.length === 1 ? chosen[0] : `${chosen.length} sites`} ▾`;
+    btn.classList.toggle('on', !!D.SCOPE);
+    btn.title = D.SCOPE ? `Showing ${chosen.join(', ')} only (cards, tickets, feed, sites, health, deployments, notifications). Search still covers every site.` : 'Showing every site. Click to show only your site(s).';
+    let pending = new Set(choice === 'mine' ? [] : chosen);
+    const apply = async v => { await LambdaData.saveScope(v); location.reload(); };
+    const paint = () => {
+      pop.innerHTML = `<div class="sp-head">Show</div>
+        <label class="sp-row ${!D.SCOPE ? 'cur' : ''}"><input type="radio" name="spm" data-sp="all" ${!D.SCOPE ? 'checked' : ''}> All sites</label>
+        ${mine.length ? `<label class="sp-row ${choice === 'mine' && D.SCOPE ? 'cur' : ''}" title="Sites of your tickets and tracked deployments"><input type="radio" name="spm" data-sp="mine" ${choice === 'mine' && D.SCOPE ? 'checked' : ''}> Your sites <small>${esc(mine.join(', '))}</small></label>` : ''}
+        <div class="sp-sep"></div>
+        <input class="sp-find" placeholder="Find a site…" aria-label="Find a site">
+        <div class="sp-list">${pickable.map(s => `<label class="sp-row site" data-q="${esc((s.id + ' ' + s.name + ' ' + (s.city || '')).toLowerCase())}">
+          <input type="checkbox" data-site="${esc(s.id)}" ${pending.has(s.id) ? 'checked' : ''}> <b>${esc(s.id)}</b> <span>${esc(s.name)}</span><button class="sp-only" data-only="${esc(s.id)}" title="Show only ${esc(s.id)}">only</button></label>`).join('')}</div>
+        <div class="sp-foot"><button class="btn" data-sp-clear>Clear</button><button class="btn primary" data-sp-apply ${pending.size ? '' : 'disabled'}>Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}</button></div>`;
+    };
+    const open = () => { paint(); pop.hidden = false; setTimeout(() => pop.querySelector('.sp-find')?.focus(), 0); };
+    btn.addEventListener('click', e => { e.stopPropagation(); pop.hidden ? open() : (pop.hidden = true); });
+    document.addEventListener('click', e => { if (!pop.hidden && !e.target.closest('.sitepick')) pop.hidden = true; });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
+    pop.addEventListener('input', e => {
+      if (e.target.matches('.sp-find')) { const q = e.target.value.trim().toLowerCase(); pop.querySelectorAll('.sp-row.site').forEach(r => { r.hidden = !!q && !r.dataset.q.includes(q); }); }
+    });
+    pop.addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.sp === 'all') return apply('all');
+      if (t.dataset.sp === 'mine') return apply('mine');
+      if (t.dataset.site) { t.checked ? pending.add(t.dataset.site) : pending.delete(t.dataset.site);
+        const b = pop.querySelector('[data-sp-apply]'); b.disabled = !pending.size; b.textContent = `Show ${pending.size || ''} site${pending.size === 1 ? '' : 's'}`; }
+    });
+    pop.addEventListener('click', e => {
+      const only = e.target.closest('[data-only]'); if (only) { e.preventDefault(); return apply([only.dataset.only]); }
+      if (e.target.closest('[data-sp-apply]') && pending.size) return apply([...pending].sort());
+      if (e.target.closest('[data-sp-clear]')) { pending = new Set(); pop.querySelectorAll('[data-site]').forEach(c => { c.checked = false; }); const b = pop.querySelector('[data-sp-apply]'); b.disabled = true; b.textContent = 'Show sites'; }
+    });
+    pop.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.sp-find')) { const r = [...pop.querySelectorAll('.sp-row.site')].filter(x => !x.hidden); if (r.length === 1) apply([r[0].querySelector('[data-site]').dataset.site]); } });
+  }
   $('#settingsBtn').addEventListener('click', () => isExt ? chrome.runtime.openOptionsPage() : toast('Settings are available when running as the extension.'));
   // Newer data (from the background refresh or another tab): reload in place once you've been idle for a minute,
   // never while something is open. The view you were on is kept.
@@ -162,8 +203,8 @@ LambdaData.ready.then(D => {
   tickClock(); setInterval(tickClock, 15000);
   {
     const mine = mineSorted(), soon = mine.filter(t => ['critical', 'serious'].includes(slaStatus(t))).length;
-    const sites = D.SITES.filter(s => s.health !== 'idle').length;
-    $('#greetingSub').textContent = mine.length ? `${mine.length} tickets for you · ${soon} breached or due within 4h` : `${D.TICKETS.length.toLocaleString()} open tickets across ${sites} live sites`;
+    const sites = D.SCOPE ? [...D.SCOPE].join(', ') : `${D.SITES.filter(s => s.health !== 'idle').length} live sites`;
+    $('#greetingSub').textContent = mine.length ? `${mine.length} tickets for you · ${soon} breached or due within 4h` : `${D.TICKETS.length.toLocaleString()} open tickets across ${sites}`;
   }
 
   /* ---------------- KPI tiles ---------------- */
@@ -191,7 +232,7 @@ LambdaData.ready.then(D => {
         return [k.key, pts.map((v, i) => ({ day: dayKeyOf(Date.now() - (29 - i) * DAYMS), v, ...(k.key === 'open' ? { opened: Math.round(3 + rnd() * 8), closed: Math.round(2 + rnd() * 8) } : {}) }))]; }));
     }
     const today = dayKeyOf(Date.now()), days = Object.keys(hist || {}).filter(x => x < today).sort().slice(-29);
-    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, k.trend?.length ? k.trend : [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
+    return Object.fromEntries(D.KPIS.filter(k => k.key).map(k => [k.key, k.trend?.length ? k.trend : k.scoped ? [{ day: today, v: k.num }] : [...days.map(dd => ({ day: dd, v: hist[dd].kpi?.[k.key] ?? backfill(k.key, hist[dd]) }))
       .filter(p => Number.isFinite(p.v)), { day: today, v: k.num }]]));
   }
   const kDay = dd => new Date(dd + 'T12:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
@@ -207,7 +248,7 @@ LambdaData.ready.then(D => {
       let flow = '';
       const tday = pts.length && pts[pts.length - 1].opened != null ? pts[pts.length - 1] : null;
       if (k.key === 'open' && tday) flow = `<span class="kflow" title="Today, from Jira: ${tday.opened} new, ${tday.closed} closed"><b class="up-bad">+${tday.opened}</b> new <b class="up-good">−${tday.closed}</b> closed</span>`;
-      else if (k.key === 'open' && hist && prevRec && hist[prevRec]?.keys) {
+      else if (k.key === 'open' && !k.scoped && hist && prevRec && hist[prevRec]?.keys) {
         const was = new Set(hist[prevRec].keys), now = new Set(D.TICKETS.map(t => t.key));
         const added = [...now].filter(x => !was.has(x)).length, closed = [...was].filter(x => !now.has(x)).length;
         flow = `<span class="kflow"><b class="up-bad">+${added}</b> new · <b class="up-good">−${closed}</b> closed</span>`;
@@ -222,7 +263,7 @@ LambdaData.ready.then(D => {
       return `<div class="kpi slim" data-k="${esc(k.key || '')}" title="${esc(why)}">
         <div class="kpi-label">${esc(SHORT[k.key] || k.label)}</div>
         <div class="kpi-row"><span class="kpi-value">${esc(k.value)}</span>${arrow}</div>
-        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : '<div class="spark-wait">chart starts tomorrow</div>'}</div>`; }).join('');
+        ${pts.length > 1 ? spark(pts.map(p => p.v)) + '<div class="spark-tip" hidden></div>' : (k.noHist ? '<div class="spark-wait" title="This history is only kept for all sites together">chart: all sites only</div>' : '<div class="spark-wait">chart starts tomorrow</div>')}</div>`; }).join('');
     document.querySelectorAll('.kpi').forEach((el, i) => {
       const k = D.KPIS[i], svg = el.querySelector('svg'), pts = H[k.key] || [];
       if (!svg) return;
@@ -402,7 +443,7 @@ LambdaData.ready.then(D => {
   renderQueue(); setInterval(renderQueue, 60000);
 
   /* ---------------- Sites list ---------------- */
-  const listSites = () => D.SITES.filter(s => s.openTickets || s.devices || s.kind === 'dc')
+  const listSites = () => D.SITES.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.openTickets || s.devices || s.kind === 'dc')
     .sort((a, b) => b.openTickets - a.openTickets || (b.devices || 0) - (a.devices || 0));
   function renderSites() {
     const sites = listSites(), max = Math.max(1, ...sites.map(s => s.openTickets));
@@ -610,7 +651,7 @@ LambdaData.ready.then(D => {
 
     // Frame the live data centers (wherever they are), weighted by size.
     function fit() {
-      let pts = placed.filter(s => s.kind === 'dc' && s.health !== 'idle');
+      let pts = D.SCOPE ? placed.filter(s => D.SCOPE.has(s.id)) : placed.filter(s => s.kind === 'dc' && s.health !== 'idle');
       if (!pts.length) pts = placed;
       if (!pts.length) return { lon: -98, lat: 38, zoom: 1 };
       const v = [0, 0, 0];
@@ -618,7 +659,7 @@ LambdaData.ready.then(D => {
       const n = Math.hypot(...v) || 1, c = v.map(x => x / n);
       const lat = Math.asin(c[2]) / DEG, lon = Math.atan2(c[1], c[0]) / DEG;
       const spread = Math.max(...pts.map(s => { const g = geo(s.lat, s.lon); return Math.acos(Math.min(1, g[0] * c[0] + g[1] * c[1] + g[2] * c[2])); }));
-      return { lon, lat, zoom: Math.max(1, Math.min(2.6, 0.92 / Math.sin(Math.min(spread + 0.1, 1.45)))) };
+      return { lon, lat, zoom: Math.max(1, Math.min(D.SCOPE ? 5 : 2.6, 0.92 / Math.sin(Math.min(spread + 0.1, 1.45)))) };
     }
     const home = fit();
     let w = 1, h = 1, dpr = 1, lon0 = home.lon, lat0 = home.lat, zoom = home.zoom, zoomT = home.zoom, cx = 0, R = 1, target = null, lastInteract = 0;
@@ -841,7 +882,7 @@ LambdaData.ready.then(D => {
       const availW = w - shift, sx = (availW * 0.78) / Math.max(maxX - minX, 0.02), sy = (h * 0.7) / Math.max(maxY - minY, 0.02);
       return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, S: Math.max(availW * 0.95, Math.min(sx, sy, availW * 60)) };
     }
-    const homeBox = () => fitBox(placed.filter(s => s.kind === 'dc' && s.health !== 'idle'));
+    const homeBox = () => fitBox(placed.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.kind === 'dc' && s.health !== 'idle'));
 
     function resize() {
       const r = cv.getBoundingClientRect(); dpr = devicePixelRatio || 1; w = r.width || 1; h = r.height || 1; cv.width = w * dpr; cv.height = h * dpr;
@@ -1872,10 +1913,11 @@ LambdaData.ready.then(D => {
     const score = (...fields) => { let best = 0; for (const f of fields) { const v = String(f ?? '').toLowerCase(); if (!v) continue; if (v === s) best = Math.max(best, 3); else if (v.startsWith(s)) best = Math.max(best, 2); else if (v.includes(s)) best = Math.max(best, 1); } return best; };
     const push = (group, items, n = 4) => items.filter(x => x.sc > 0).sort((a, b) => b.sc - a.sc).slice(0, n).forEach(x => out.push({ group, ...x }));
     push('Sites', D.SITES.map(x => ({ sc: score(x.id, x.name, x.fullName, x.city), icon: 'S', color: C['c-site'], title: `${x.id} · ${x.name}`, sub: `${x.openTickets} open tickets${x.racks != null ? ` · ${x.racks} racks` : ''} · ${siteStatusLabel(x)}`, run: () => { closePalette(); setView('globe'); SiteCard.open(x); } })));
-    push('Deployments', (D.DEPLOYMENTS || []).map(x => ({ sc: score(x.key, x.title, x.summary, x.gpuModel, ...x.sites), icon: '◆', color: XC.deployment, title: `${x.key} · ${x.title}`, sub: `${x.sites.join(', ') || '?'} · ${depStatus(x)} · ${pct(x.progress)} · due ${fmtDate(x.end)}`, run: () => { closePalette(); openEntity('deployment', x); } })), 5);
-    push('Projects', (D.PROJECTS || []).map(x => ({ sc: score(x.key, x.title, x.summary), icon: '⬡', color: XC.project, title: `${x.key} · ${x.title}`, sub: `${x.deployments.length} deployments · ${x.status}`, run: () => { closePalette(); openEntity('project', x); } })), 3);
-    push('Tickets', D.TICKETS.map(x => ({ sc: score(x.key, x.summary, x.device), icon: 'T', color: C['c-ticket'], title: `${x.key} · ${x.summary}`, sub: `${x.site || '?'} · ${x.status} · ${x.assigneeName}`, run: () => { closePalette(); openEntity('ticket', x); } })), 5);
-    push('Devices', D.DEVICES.map(x => ({ sc: score(x.id, x.serial, x.model), icon: 'D', color: C['c-device'], title: x.id, sub: `${x.model} · ${x.site || '?'} ${x.rack}${x.u ? ` U${x.u}` : ''}`, run: () => { closePalette(); openEntity('device', x); } })));
+    const A = D.ALL || D; // search always covers every site
+    push('Deployments', (A.DEPLOYMENTS || []).map(x => ({ sc: score(x.key, x.title, x.summary, x.gpuModel, ...x.sites), icon: '◆', color: XC.deployment, title: `${x.key} · ${x.title}`, sub: `${x.sites.join(', ') || '?'} · ${depStatus(x)} · ${pct(x.progress)} · due ${fmtDate(x.end)}`, run: () => { closePalette(); openEntity('deployment', x); } })), 5);
+    push('Projects', (A.PROJECTS || []).map(x => ({ sc: score(x.key, x.title, x.summary), icon: '⬡', color: XC.project, title: `${x.key} · ${x.title}`, sub: `${x.deployments.length} deployments · ${x.status}`, run: () => { closePalette(); openEntity('project', x); } })), 3);
+    push('Tickets', A.TICKETS.map(x => ({ sc: score(x.key, x.summary, x.device), icon: 'T', color: C['c-ticket'], title: `${x.key} · ${x.summary}`, sub: `${x.site || '?'} · ${x.status} · ${x.assigneeName}`, run: () => { closePalette(); openEntity('ticket', x); } })), 5);
+    push('Devices', A.DEVICES.map(x => ({ sc: score(x.id, x.serial, x.model), icon: 'D', color: C['c-device'], title: x.id, sub: `${x.model} · ${x.site || '?'} ${x.rack}${x.u ? ` U${x.u}` : ''}`, run: () => { closePalette(); openEntity('device', x); } })));
     push('Parts', D.PARTS.map(x => ({ sc: score(x.pn, x.name, x.mfr), icon: 'P', color: C['c-part'], title: partLabel(x), sub: 'Stock by site', run: () => { closePalette(); openEntity('part', x); } })));
     push('People', D.PEOPLE.map(x => ({ sc: score(x.name, x.handle), icon: '@', color: C['c-person'], title: x.name, sub: 'Assigned tickets', run: () => { closePalette(); openEntity('person', x); } })));
     push('Slack', (D.CHANNELS || []).map(c => ({ sc: score(c.name, c.topic, c.purpose), icon: '#', color: XC.channel, title: '#' + c.name, sub: `${c.members} members${c.site ? ' · ' + c.site : ''}`, run: () => { closePalette(); openUrl(c.url, 'Slack'); } })), 3);

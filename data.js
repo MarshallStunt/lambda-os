@@ -231,6 +231,7 @@
       pollFeed: since => LambdaLive.pollFeed(since), feedEveryMs: 60000,
     });
     if (jr?.portfolioError) D.SOURCES[1].title += ` (Projects/deployments failed: ${jr.portfolioError})`;
+    D.RAW = { closed30: jr?.closed30 || null, closedEpics: jr?.closedEpics || null, codeOf };
     return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, codeOf, meId });
   }
 
@@ -695,6 +696,82 @@
     });
   }
 
+  /* ---------------- Site picker (top bar) ---------------- */
+  // The choice is per person: 'all', 'mine' (sites of your tickets and tracked deployments) or a list of site codes.
+  // Kept in chrome.storage (so notifications follow it too) and mirrored in localStorage (so the page opens instantly).
+  const SCOPE_KEY = 'siteScope';
+  async function loadScope() {
+    try { if (typeof chrome !== 'undefined' && chrome.storage?.local) { const v = (await chrome.storage.local.get(SCOPE_KEY))[SCOPE_KEY]; if (v) return v; } } catch { /* fall back */ }
+    try { return JSON.parse(localStorage.getItem('lambdaos-' + SCOPE_KEY)) || 'all'; } catch { return 'all'; }
+  }
+  async function saveScope(v) {
+    try { localStorage.setItem('lambdaos-' + SCOPE_KEY, JSON.stringify(v)); } catch { /* ignore */ }
+    try { if (typeof chrome !== 'undefined' && chrome.storage?.local) await chrome.storage.local.set({ [SCOPE_KEY]: v }); } catch { /* ignore */ }
+  }
+  // Sites of your own tickets and tracked deployments (same idea as the Health tab's "Your sites").
+  const yourSiteCodes = D => [...new Set([...D.TICKETS.filter(t => t.mine || t.assignee === 'me').map(t => t.site),
+    ...(D.tracked ? D.tracked() : []).flatMap(d => d.sites || [])].filter(Boolean))].sort();
+
+  // A copy of D limited to some sites: tickets, devices, deployments, shipments, builds, feed, health and the top cards
+  // (with their 30-day charts where the history knows the site). The globe keeps every site; search keeps everything (D.ALL).
+  function scope(D, choice) {
+    const codes = choice === 'mine' ? yourSiteCodes(D) : Array.isArray(choice) ? choice.filter(c => D.siteById(c)) : [];
+    if (!codes.length || choice === 'all') return Object.assign(D, { SCOPE: null, SCOPE_CHOICE: choice === 'mine' ? 'mine' : 'all', ALL: D });
+    const S = new Set(codes), inS = c => !!c && S.has(c), anyS = arr => (arr || []).some(inS), now = Date.now();
+    const siteIds = new Set(D.SITES.map(s => s.id));
+    const codesIn = text => (String(text || '').toUpperCase().replace(/[-_]/g, ' ').match(/\b[A-Z]{3}\d{2}\b/g) || []).filter(c => siteIds.has(c));
+    const TICKETS = D.TICKETS.filter(t => inS(t.site)), TK = new Set(TICKETS.map(t => t.key));
+    const DEPLOYMENTS = (D.DEPLOYMENTS || []).filter(d => anyS(d.sites)), DK = new Set(DEPLOYMENTS.map(d => d.key));
+    const PROJECTS = (D.PROJECTS || []).filter(p => anyS(p.sites));
+    const ALLDK = new Set((D.DEPLOYMENTS || []).map(d => d.key)), ALLTK = new Set(D.TICKETS.map(t => t.key));
+    const FEED = (D.FEED || []).filter(f => {
+      if (f.src === 'mail') return true;
+      if (f.ref && ALLTK.has(f.ref)) return TK.has(f.ref);
+      if (f.ref && ALLDK.has(f.ref)) return DK.has(f.ref);
+      if (f.ref && siteIds.has(f.ref)) return S.has(f.ref);
+      const cs = codesIn(f.text); return cs.length ? cs.some(inS) : false;
+    });
+    const H = D.HEALTH ? { ...D.HEALTH, sites: D.HEALTH.sites.filter(s => S.has(s.code)) } : D.HEALTH;
+
+    // Top cards for these sites.
+    const R = D.RAW || {}, codeOf = R.codeOf || (x => x);
+    const closed = R.closed30 && R.closed30.every(x => x.length >= 6)
+      ? R.closed30.filter(([, , , , raws, host]) => { const c = (raws || []).map(codeOf).find(Boolean) || codeOf(host); return inS(c); }) : null;
+    const tTrend = closed ? ticketTrend(TICKETS, closed, now) : null;
+    const breached = TICKETS.filter(isBreached).length, due24 = TICKETS.filter(t => !isBreached(t) && t.slaDue && t.slaDue < now + DAY).length;
+    const opened = TICKETS.filter(t => t.created >= startOfDay(now)).length;
+    const live = D.SITES.filter(s => S.has(s.id) && (s.status === 'active' || s.status === 'staging'));
+    const devs = live.reduce((a, s) => a + (s.devices || 0), 0), racks = live.reduce((a, s) => a + (s.racks || 0), 0);
+    const waiting = TICKETS.filter(t => /part|rma/i.test(t.status));
+    const stocked = waiting.filter(t => t.part && t.site && (D.siteById(t.site)?.inventory.find(i => i.part === t.part)?.stock || 0) > 0);
+    const gpus = DEPLOYMENTS.reduce((a, d) => a + (d.gpus || 0), 0), risky = DEPLOYMENTS.filter(d => d.health === 'critical' || d.health === 'warning').length;
+    const CE = R.closedEpics ? R.closedEpics.filter(([, , sm]) => codesIn(sm).some(inS)) : null;
+    const depTrend = CE ? last30(now).map(({ day, e }) => { const lv = DEPLOYMENTS.filter(d => d.created && d.created <= e), gone = CE.filter(([c, r]) => c <= e && r > e);
+      return { day, v: lv.length + gone.length, g: lv.reduce((a, d) => a + (d.gpus || 0), 0) + gone.reduce((a, [, , sm]) => a + (parseDeploy(sm).gpus || 0), 0) }; }) : null;
+    if (depTrend) { depTrend[depTrend.length - 1].v = DEPLOYMENTS.length; depTrend[depTrend.length - 1].g = gpus; }
+    const only = 'the 30-day chart is for all sites only';
+    const KPIS = D.KPIS.map(k => {
+      switch (k.key) {
+        case 'open': return { ...k, num: TICKETS.length, value: TICKETS.length.toLocaleString(), sub: `+${opened} opened today`, trend: tTrend, scoped: true };
+        case 'breached': return { ...k, num: breached, value: breached.toLocaleString(), sub: `${due24} more due in 24h`, tone: breached ? 'bad' : 'good', scoped: true,
+          trend: tTrend && tTrend.map((x, i) => ({ day: x.day, v: i === tTrend.length - 1 ? breached : x.breached })) };
+        case 'devices': return { ...k, num: devs, value: kfmt(devs), sub: `${racks.toLocaleString()} racks · ${only}`, trend: null, scoped: true, noHist: true };
+        case 'waiting': return { ...k, num: waiting.length, value: waiting.length.toLocaleString(), sub: `${stocked.length} have the part on site · ${only}`, tone: stocked.length ? 'bad' : 'good', trend: null, scoped: true, noHist: true };
+        case 'deps': return { ...k, num: DEPLOYMENTS.length, value: String(DEPLOYMENTS.length), sub: `${risky} at risk, off track or overdue`, tone: risky ? 'bad' : 'good', trend: depTrend, scoped: true };
+        case 'gpus': return { ...k, num: gpus, value: kfmt(gpus), sub: '', trend: depTrend && depTrend.map(x => ({ day: x.day, v: x.g })), scoped: true };
+        default: return k;
+      }
+    });
+    return Object.assign(Object.create(D), {
+      SCOPE: S, SCOPE_CHOICE: choice === 'mine' ? 'mine' : codes, ALL: D,
+      TICKETS, DEPLOYMENTS, PROJECTS, FEED, HEALTH: H, KPIS,
+      DEVICES: D.DEVICES.filter(d => inS(d.site)),
+      MOVES: (D.MOVES || []).filter(m => inS(m.site)),
+      BUILDS: (D.BUILDS || []).filter(b => inS(b.site)),
+      tracked: () => D.tracked().filter(d => anyS(d.sites) || D.isTracked(d.key)),
+    });
+  }
+
   /* ---------------- Start ---------------- */
   const bootStatus = msg => { const el = document.getElementById('bootMsg'); if (el) el.textContent = msg; };
 
@@ -716,6 +793,10 @@
   }
 
   async function start() {
+    const D = await startRaw(); D.yourSites = () => yourSiteCodes(D);
+    return scope(D, await loadScope());
+  }
+  async function startRaw() {
     TRACKED = new Set(await loadTracked());
     const ext = typeof chrome !== 'undefined' && chrome.storage?.local && typeof LambdaLive !== 'undefined';
     if (!ext) return buildMock('Opened outside the extension, so this is demo data.');
@@ -738,6 +819,6 @@
   const root = typeof self !== 'undefined' ? self : window;
   const prepare = async () => { TRACKED = new Set(await loadTracked()); };
   root.LambdaData = typeof document !== 'undefined'
-    ? { ready: start(), buildLive, buildMock, prepare }
-    : { buildLive, buildMock, prepare };
+    ? { ready: start(), buildLive, buildMock, prepare, scope, loadScope, saveScope }
+    : { buildLive, buildMock, prepare, scope, loadScope, saveScope };
 })();

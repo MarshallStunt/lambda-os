@@ -237,15 +237,18 @@ const LambdaLive = (() => {
 
   // Tickets closed in the last 31 days as [created, resolved, key]. Jira closes ~2,000 a month at 100 per page, so the
   // full read happens once a day; every other refresh only asks for what closed since the last one and merges it in.
-  async function closedTickets(get, jql, slaIds = []) {
+  async function closedTickets(get, jql, slaIds = [], F = {}) {
     let prev = null; try { ({ snapshot: { jira: prev } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* none yet */ }
     const now = Date.now(), cut = now - 31 * 864e5, old = prev?.closed30, at = prev?.closed30At || 0, fullAt = prev?.closed30Full || 0;
-    // [created, resolved, key, SLA deadline] (the deadline lets the SLA breached card rebuild its 30 days too)
+    // [created, resolved, key, SLA deadline, site values, hostname] (the deadline rebuilds SLA breached; the site and
+    // host let the top cards' charts follow the site picker)
     const slaOf = f => { for (const id of slaIds) { const v = f[id]; const c = v?.completedCycles?.at?.(-1) || v?.ongoingCycle; const t = c?.breachTime?.epochMillis; if (t) return t; } return 0; };
-    const fields = ['created', 'resolutiondate', ...slaIds].join(',');
-    const row = i => [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.key, slaOf(i.fields)];
+    const siteIds = F.site || [], hostIds = F.host || [], first = (f, ids) => ids.map(id => f[id]).find(filled);
+    const fields = ['created', 'resolutiondate', ...slaIds, ...siteIds, ...hostIds].join(',');
+    const row = i => { const sv = first(i.fields, siteIds);
+      return [Date.parse(i.fields.created), Date.parse(i.fields.resolutiondate), i.key, slaOf(i.fields), (Array.isArray(sv) ? sv.map(val) : [val(sv)]).filter(Boolean), val(first(i.fields, hostIds)).split(/[\s,|]+/)[0] || '']; };
     let rows, full = fullAt;
-    if (old && now - fullAt < 864e5 && old.every(x => x.length === 4)) {
+    if (old && now - fullAt < 864e5 && old.every(x => x.length === 6)) {
       const mins = Math.ceil((now - at) / 60e3) + 10;
       const fresh = (await search(get, `${jql.replace(/resolved >= -31d$/, '')}resolved >= "-${mins}m"`, 2000, fields, null, 'closed tickets')).map(row);
       const byKey = new Map(old.map(x => [x[2], x])); fresh.forEach(x => byKey.set(x[2], x));
@@ -300,7 +303,7 @@ const LambdaLive = (() => {
       search(get, s.fleetJql, s.maxTickets, want, progress),
       search(get, s.mineJql, 500, 'summary').catch(() => []),
       portfolio(get, F, s, base, progress).then(v => ({ v }), e => ({ e })),
-      closedTickets(get, closedJql, F.sla || []).catch(() => null),
+      closedTickets(get, closedJql, F.sla || [], F).catch(() => null),
       closedEpics(get, s).catch(() => null),
     ]);
     const mine = new Set(mineIssues.map(i => i.key));
