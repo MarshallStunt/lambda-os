@@ -797,8 +797,9 @@ body.stage-max .stage-expand { color: var(--accent); border-color: color-mix(in 
 .kmode { margin-top: 8px; display: inline-flex; }
 .kmode[hidden] { display: none; }
 /* Live feed source filters: one compact row */
-.feed-filters { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; max-width: 70%; }
-.feed-filters::-webkit-scrollbar { display: none; }
+/* Live feed: source filters get their own full-width row under the title (they used to scroll under it) */
+.feed-panel .panel-head { flex-wrap: wrap; row-gap: 6px; }
+.feed-filters { flex: 1 0 100%; flex-wrap: wrap !important; max-width: none; overflow: visible; }
 .feed-filters .chip { font-size: 10.5px; padding: 2px 7px; flex-shrink: 0; }
 .source-pill.sum { cursor: default; }
 /* Globe toolbar: one row; the colour key is a popover */
