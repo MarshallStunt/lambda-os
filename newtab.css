@@ -890,3 +890,10 @@ html[data-motion="reduced"] .source-pill.attn.pulse, html[data-motion="reduced"]
 .spin-dot { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--accent, #7aa2f7); animation: spindot 1s ease-in-out infinite; vertical-align: middle; }
 @keyframes spindot { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .spin-dot { animation: none; } }
+/* First-load checklist */
+.boot-list { list-style: none; margin: 16px 0 8px; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 6px; }
+.boot-app { display: grid; grid-template-columns: 20px 92px 1fr; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line); font-size: 13px; }
+.boot-app.ready { border-color: rgba(60,207,110,.35); }
+.boot-app.signin, .boot-app.allow, .boot-app.failed { border-color: rgba(250,178,25,.4); }
+.ba-ico { display: grid; place-items: center; }
+.boot-note { margin-top: 6px; }

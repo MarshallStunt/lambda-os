@@ -991,7 +991,11 @@ const LambdaLive = (() => {
       const once = async f => { try { return await f(); } catch (e) {
         if (e?.auth || e?.access || e?.paused || !RETRY.test(String(e?.message || e))) throw e;
         await new Promise(r => setTimeout(r, 2500)); return f(); } };
-      const go = (k, f) => !on(k) ? off : resting(k) ? Promise.resolve(SKIP) : once(f);
+      // opts.onApp hears each app start and finish (the first-load screen shows them as a checklist).
+      const tell = (k, state, why) => { try { opts.onApp?.({ key: k, name: NAMES[k], state, why }); } catch { /* display only */ } };
+      const go = (k, f) => { if (!on(k)) return off; if (resting(k)) return Promise.resolve(SKIP);
+        tell(k, 'loading');
+        const p = once(f); p.then(() => tell(k, 'ready'), e => tell(k, e?.auth ? 'signin' : e?.access ? 'allow' : 'failed', String(e?.message || e))); return p; };
       const val = v => v === SKIP ? null : v;
       const nbP = go('netbox', () => netbox(s, progress));
       const jrP = go('jira', () => jira(s, progress));

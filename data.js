@@ -867,6 +867,29 @@
 
   /* ---------------- Start ---------------- */
   const bootStatus = msg => { const el = document.getElementById('bootMsg'); if (el) el.textContent = msg; };
+  // First-load screen: one line per app, filled in as each one loads ("NetBox: 1,830 devices" style details come from
+  // the progress messages). The dashboard opens as soon as NetBox or Jira is in, so this is only on screen briefly.
+  const BOOT = { order: ['netbox', 'jira', 'slack', 'gmail', 'calendar', 'netsuite', 'atium', 'grafana', 'yard'], apps: {}, detail: {} };
+  function bootPaint() {
+    const card = document.querySelector('#boot .boot-card'); if (!card) return;
+    if (!card.querySelector('.boot-list')) card.innerHTML = `<div class="brand-mark">λ</div><h2>Setting up your dashboard</h2>
+      <p class="muted small">First time only: after this, new tabs open instantly. It opens as soon as Jira or NetBox is ready; the other apps keep loading behind it.</p>
+      <ul class="boot-list"></ul><p class="muted small boot-note"></p>`;
+    const ico = { loading: '<span class="spin-dot"></span>', ready: '<b class="st-good">✓</b>', signin: '🔑', allow: '🔓', failed: '<b class="st-warning">!</b>' };
+    const word = { loading: 'loading…', ready: 'ready', signin: 'needs you to sign in (you can do it after)', allow: 'needs your OK (you can do it after)', failed: "couldn't load; it'll retry" };
+    const keys = BOOT.order.filter(k => BOOT.apps[k]);
+    card.querySelector('.boot-list').innerHTML = keys.map(k => { const a = BOOT.apps[k];
+      return `<li class="boot-app ${a.state}"><span class="ba-ico">${ico[a.state] || ''}</span><b>${a.name}</b><span class="muted">${BOOT.detail[k] && a.state !== 'failed' ? BOOT.detail[k] + (a.state === 'loading' ? '…' : '') : word[a.state] || ''}</span></li>`; }).join('');
+    const done = keys.filter(k => BOOT.apps[k].state !== 'loading').length;
+    card.querySelector('.boot-note').textContent = keys.length ? `${done} of ${keys.length} apps done` : '';
+  }
+  const bootApp = e => { BOOT.apps[e.key] = e; bootPaint(); };
+  const bootProgress = msg => { // "Jira: 1304 tickets" → a detail on Jira's line
+    const m = /^(NetBox|Jira|NetSuite|Slack|Gmail|Calendar|Atium|Grafana|Yard):\s*(.+)$/.exec(String(msg || ''));
+    if (!m) return bootStatus(msg);
+    const k = BOOT.order.find(x => x === m[1].toLowerCase()) || m[1].toLowerCase();
+    BOOT.detail[k] = m[2].replace(/\b(\d{4,})\b/g, n => Number(n).toLocaleString()); bootPaint();
+  };
 
   function connectHelp(snap) {
     const box = document.getElementById('boot'), s = snap.sources;
@@ -922,7 +945,7 @@
     const fresh = await new Promise((res, rej) => {
       const on = (ch, area) => { const v = ch.snapshot?.newValue; if (area === 'local' && v && (v.nb || v.jira)) { chrome.storage.onChanged.removeListener(on); res(v); } };
       chrome.storage.onChanged.addListener(on);
-      LambdaLive.refresh(bootStatus).then(v => { chrome.storage.onChanged.removeListener(on); res(v); }, e => { chrome.storage.onChanged.removeListener(on); rej(e); });
+      LambdaLive.refresh(bootProgress, { onApp: bootApp }).then(v => { chrome.storage.onChanged.removeListener(on); res(v); }, e => { chrome.storage.onChanged.removeListener(on); rej(e); });
     });
     if (!fresh.nb && !fresh.jira) await connectHelp(fresh);
     return buildLive(fresh);
