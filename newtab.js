@@ -2865,7 +2865,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     ];
     // First stop (live only): which apps you use, so the ones you don't have never ask you to sign in.
     const APPS = ALLSRC.filter(x => x.key !== 'claude'), CORE = x => x.key === 'netbox' || x.key === 'jira';
-    if (D.MODE === 'live' && isExt) STEPS.unshift(['.statusbar', 'Which apps do you use?', 'Untick any you don\'t have an account for: Lambda OS won\'t read them or ask you to sign in. You can change this later in Settings → Sources.',
+    if (D.MODE === 'live' && isExt) STEPS.unshift(['.statusbar', 'Which apps do you have access to or use?', 'Untick any you don\'t have access to or don\'t use: Lambda OS won\'t read them or ask you to sign in. You can change this later in Settings → Sources.',
       `<div class="tour-apps">${APPS.map(x => `<label class="${CORE(x) ? 'core' : ''}"><input type="checkbox" data-app="${x.key}" ${x.state !== 'off' && x.state !== 'na' ? 'checked' : ''} ${CORE(x) ? 'disabled title="Lambda OS needs Jira and NetBox"' : ''}> ${esc(x.name)}</label>`).join('')}</div>`, true]);
     let appsChanged = false;
     async function saveApps() {
