@@ -250,7 +250,7 @@ LambdaData.ready.then(D => {
     const waiting = ALLSRC.filter(x => x.auth && broken(x) && (signingIn || !isLater(x.key)));
     if (!isExt || D.MODE !== 'live' || !waiting.length) return;
     if (!signingIn && Date.now() - lastAuthCheck < 60e3) return;
-    if (LambdaLive.busy?.()) return; // a load is already running here: it picks up the sign-in
+    if (watching || LambdaLive.busy?.()) return; // a sign-in watch or a load is already on it
     signingIn = false; lastAuthCheck = Date.now();
     updated.hidden = false; updated.textContent = 'Checking sign-ins…';
     LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).then(snap => {
@@ -258,6 +258,29 @@ LambdaData.ready.then(D => {
       paintUpdated(); toast(`Still not signed in to ${waiting.map(x => x.name).join(', ')}.`);
     }).catch(() => paintUpdated());
   };
+  // After "Sign in": quietly check every few seconds (for up to 10 minutes) whether it worked; the moment it does, load
+  // the app's data and refresh this page, even before you come back. Apps without a quick check are rechecked on return.
+  let watching = null;
+  async function watchSignIn(s) {
+    if (!isExt || watching === s.key) return;
+    watching = s.key;
+    const until = Date.now() + 10 * 60e3;
+    while (watching === s.key && Date.now() < until) {
+      await new Promise(r => setTimeout(r, 4000));
+      const ok = await LambdaLive.probe(s.key).catch(() => false);
+      if (ok === null) { watching = null; return; } // no quick check for this app: the return-to-tab recheck covers it
+      if (ok) {
+        watching = null; signingIn = false;
+        toast(`Signed in to ${s.name}. Loading it…`);
+        updated.hidden = false; updated.innerHTML = `<span class="spin-dot"></span> loading ${esc(s.name)}…`;
+        // A load already running here may have read the app before you signed in: let it finish, then read again.
+        while (LambdaLive.busy()) await new Promise(r => setTimeout(r, 1000));
+        await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).catch(() => {});
+        return location.reload();
+      }
+    }
+    watching = null;
+  }
   addEventListener('focus', recheck);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') recheck(); });
   $('#sources').addEventListener('click', async e => {
@@ -273,7 +296,7 @@ LambdaData.ready.then(D => {
     if (a === 'allow') return isExt ? allowAccess() : toast('Only in the extension.');
     if (a === 'later') { setLater(k, true); shown.delete(k); return renderSources(); }
     if (!isExt) return toast('Only in the extension (this is a preview).');
-    if (a === 'signin') { signingIn = true; window.open(s.url, '_blank'); return toast(`Sign in to ${s.name} there, then come back: Lambda OS checks again by itself.`); }
+    if (a === 'signin') { signingIn = true; window.open(s.url, '_blank'); watchSignIn(s); return toast(`Sign in to ${s.name} there. Lambda OS notices when you're in and loads it by itself.`); }
     if (a === 'retry') return checkAgain();
     if (a === 'off') {
       const { settings: st = {} } = await chrome.storage.local.get('settings');

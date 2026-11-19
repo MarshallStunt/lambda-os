@@ -932,6 +932,16 @@ const LambdaLive = (() => {
 
   // On demand, for hosts listed in the dashboard (site health, search, the second brain…): up to 40 at a time, answers
   // kept 30 minutes in `yardExtra` (the next refresh folds them into the snapshot). Only when Yard is on and reachable.
+  // A cheap "are you signed in yet?" check for the sign-in prompt: true / false, or null for apps without a quick check.
+  async function probe(key) {
+    const s = await settings();
+    try {
+      if (key === 'jira') { await getJson(`${trim(s.jiraUrl)}/rest/api/3/myself`, { login: trim(s.jiraUrl), name: 'Jira' }); return true; }
+      if (key === 'netbox') { await getJson(`${trim(s.netboxUrl)}/api/status/`, { headers: nbHeaders(s), login: trim(s.netboxUrl), name: 'NetBox' }); return true; }
+      if (key === 'grafana') { await getJson(`${trim(s.grafanaUrl)}/api/user`, { login: trim(s.grafanaUrl), name: 'Grafana' }); return true; }
+    } catch { return false; }
+    return null;
+  }
   async function yardLookup(hosts) {
     const s = await settings();
     if (s.sources?.yard === false) throw new Error('Yard is turned off in Settings.');
@@ -1100,7 +1110,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, busy, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
+  return { DEFAULTS, NAMES, settings, refresh, busy, probe, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;
