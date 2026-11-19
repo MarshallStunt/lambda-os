@@ -250,6 +250,7 @@ LambdaData.ready.then(D => {
     const waiting = ALLSRC.filter(x => x.auth && broken(x) && (signingIn || !isLater(x.key)));
     if (!isExt || D.MODE !== 'live' || !waiting.length) return;
     if (!signingIn && Date.now() - lastAuthCheck < 60e3) return;
+    if (LambdaLive.busy?.()) return; // a load is already running here: it picks up the sign-in
     signingIn = false; lastAuthCheck = Date.now();
     updated.hidden = false; updated.textContent = 'Checking sign-ins…';
     LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).then(snap => {
@@ -383,7 +384,7 @@ LambdaData.ready.then(D => {
   ['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
   const busyNow = () => !!document.querySelector('.tour') || !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden || !$('#sitePop').hidden;
   function tryReload() {
-    if (!pendingReload) return;
+    if (!pendingReload || LambdaLive.busy?.()) return; // never reload while this page is running a load (it would die)
     // After a first load (only NetBox + Jira shown), the rest comes in as soon as you pause for a few seconds.
     if (document.visibilityState === 'hidden' || (!busyNow() && Date.now() - lastActivity > (D.PARTIAL ? 5000 : 60000))) location.reload();
   }

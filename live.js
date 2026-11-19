@@ -961,22 +961,30 @@ const LambdaLive = (() => {
   const QUIET_AFTER = 3, QUIET_RETRY = 864e5, SKIP = Symbol('quiet');
   // One load at a time across every new tab and the background: whoever starts first does the work (a shared lock in
   // storage), the others wait for its result. A lock older than LOCK_MS is from a load that died (tab closed).
-  const LOCK_MS = 4 * 60e3;
+  // The loader renews the lock every few seconds; a lock that hasn't been renewed for STALE_MS belongs to a load that
+  // died (its tab closed or reloaded), and the next caller takes over at once instead of waiting.
+  const BEAT_MS = 5e3, STALE_MS = 20e3;
+  const lockAlive = async () => { const { refreshLock } = await chrome.storage.local.get('refreshLock'); return !!refreshLock && Date.now() - refreshLock < STALE_MS; };
+  // Waits for the other load's finished snapshot; null if that load died (then this caller loads itself).
   const waitFinal = () => new Promise(res => {
-    const done = v => { chrome.storage.onChanged.removeListener(on); clearTimeout(t); res(v); };
+    const done = v => { chrome.storage.onChanged.removeListener(on); clearInterval(t); res(v); };
     const on = (ch, area) => { if (area === 'local' && ch.snapshot?.newValue && !ch.snapshot.newValue.partial) done(ch.snapshot.newValue); };
-    const t = setTimeout(() => chrome.storage.local.get('snapshot').then(r => done(r.snapshot)), LOCK_MS);
+    const t = setInterval(() => lockAlive().then(alive => { if (!alive) done(null); }), BEAT_MS);
     chrome.storage.onChanged.addListener(on);
   });
   function refresh(progress, opts = {}) {
     inflight ||= (async () => {
-      const { refreshLock } = await chrome.storage.local.get('refreshLock');
-      if (!opts.retryAll && refreshLock && Date.now() - refreshLock < LOCK_MS) { progress?.('Another Lambda OS tab is loading; waiting for it…'); return waitFinal(); }
+      while (!opts.retryAll && await lockAlive()) {
+        progress?.('Another Lambda OS tab is loading; waiting for it…');
+        const done = await waitFinal(); if (done) return done;
+      }
       await chrome.storage.local.set({ refreshLock: Date.now() });
-      try { return await load(progress, opts); } finally { await chrome.storage.local.remove('refreshLock').catch(() => {}); }
+      const beat = setInterval(() => chrome.storage.local.set({ refreshLock: Date.now() }).catch(() => {}), BEAT_MS);
+      try { return await load(progress, opts); } finally { clearInterval(beat); await chrome.storage.local.remove('refreshLock').catch(() => {}); }
     })().finally(() => { inflight = null; });
     return inflight;
   }
+  const busy = () => !!inflight; // a load is running in this page (don't reload it away)
   async function load(progress, opts) {
     {
       const s = await settings();
@@ -1092,7 +1100,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
+  return { DEFAULTS, NAMES, settings, refresh, busy, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;
