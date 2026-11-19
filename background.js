@@ -218,5 +218,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'test-brief') { briefNotification().then(() => reply({ ok: true })); return true; }
 });
 
-chrome.runtime.onInstalled.addListener(d => { scheduleBrief(); scheduleRefresh(); updateCheck(true).catch(() => {}); if (d.reason === 'install') chrome.tabs.create({ url: DASH() }); });
-chrome.runtime.onStartup.addListener(() => { scheduleBrief(); scheduleRefresh(); });
+// Lambda Rackside (the Jira side panel, a separate extension) asks to show a ticket here. Its ID is remembered
+// from the sender; on startup we say hello so Rackside learns ours and can show its "Lambda OS" button.
+chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
+  if (msg?.app !== 'lambda-rackside' || msg.type !== 'lambdaos.open' || !sender.id) return;
+  chrome.storage.local.set({ peerRackside: sender.id });
+  const key = /^[A-Z][A-Z0-9_]+-\d+$/.test(msg.ticket || '') ? msg.ticket : '';
+  chrome.tabs.create({ url: DASH() + (key ? '#ticket=' + key : '') }).then(() => reply({ ok: true }), e => reply({ ok: false, error: String(e.message || e) }));
+  return true;
+});
+async function helloRackside() {
+  const { peerRackside } = await chrome.storage.local.get('peerRackside');
+  if (!peerRackside) return;
+  const r = await chrome.runtime.sendMessage(peerRackside, { app: 'lambda-os', type: 'hello' }).catch(() => null);
+  if (!r?.ok) await chrome.storage.local.remove('peerRackside'); // removed or reinstalled: found again on the next click
+}
+
+chrome.runtime.onInstalled.addListener(d => { helloRackside(); scheduleBrief(); scheduleRefresh(); updateCheck(true).catch(() => {}); if (d.reason === 'install') chrome.tabs.create({ url: DASH() }); });
+chrome.runtime.onStartup.addListener(() => { helloRackside(); scheduleBrief(); scheduleRefresh(); });

@@ -147,6 +147,38 @@ LambdaData.ready.then(D => {
   const openUrl = (url, what) => url ? window.open(url, '_blank', 'noopener') : toast(`${what} link isn't available${D.MODE === 'demo' ? ' in demo data' : ''}.`);
   const btn = (label, url, primary) => `<button class="btn ${primary ? 'primary' : ''}" data-url="${esc(url || '')}" data-what="${esc(label)}">${esc(label)}</button>`;
 
+  /* ---------------- Lambda Rackside link: open a ticket with the Rackside side panel ---------------- */
+  // Rackside is a separate extension. Its ID differs per install (unpacked), so it's found once by name through the
+  // optional "management" permission, which is dropped again right after, then kept in storage ('peerRackside').
+  const Rackside = (() => {
+    let peer = '', winId;
+    if (isExt) {
+      chrome.storage.local.get('peerRackside').then(r => { peer = r.peerRackside || ''; }).catch(() => {});
+      chrome.windows?.getCurrent().then(w => { winId = w.id; }).catch(() => {});
+    }
+    const send = (id, msg) => chrome.runtime.sendMessage(id, msg).catch(() => null);
+    async function find() {
+      if (!await chrome.permissions.request({ permissions: ['management'] }).catch(() => false)) return '';
+      try {
+        const all = await chrome.management.getAll();
+        return all.find(x => x.type === 'extension' && x.enabled && x.id !== chrome.runtime.id && /^Lambda Rackside$/i.test(x.name))?.id || '';
+      } catch { return ''; } finally { chrome.permissions.remove({ permissions: ['management'] }).catch(() => {}); }
+    }
+    async function open(key, url) {
+      const msg = { app: 'lambda-os', type: 'rackside.open', key, windowId: winId };
+      let r = peer ? await send(peer, msg) : null;          // first: panel opens in this window (needs the click)
+      if (!r?.ok) {
+        peer = await find();
+        if (peer) { chrome.storage.local.set({ peerRackside: peer }); r = await send(peer, msg); }
+        else chrome.storage.local.remove('peerRackside');
+      }
+      await chrome.tabs.create({ url, windowId: winId });  // then the ticket tab: the panel follows the active tab
+      if (!r?.ok) toast('Lambda Rackside isn’t installed or is turned off, so the ticket opened in Jira only.');
+      else if (!r.panel) toast('Opened in Jira. Click the Rackside icon in the toolbar to show its panel.');
+    }
+    return { open };
+  })();
+
   /* ---------------- Top bar ---------------- */
   const badge = $('#modeBadge');
   badge.textContent = D.MODE === 'live' ? 'LIVE' : 'DEMO DATA';
@@ -2114,7 +2146,7 @@ LambdaData.ready.then(D => {
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
         ${yardBlock(t.device, t)}
         ${alertsBlock(t.alerts)}
-        <div class="links">${btn('Open in Jira', t.url, true)}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in Jira', t.url, true)}${isExt && t.url ? `<button class="btn" data-rackside="${esc(t.key)}" data-rurl="${esc(t.url)}" title="Open the ticket in Jira with the Lambda Rackside side panel">Open in Rackside</button>` : ''}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
     }
     if (type === 'cluster') {
       const id = String(ref.id || ref).toLowerCase(), hs = Object.entries(D.YARD?.hosts || {}).filter(([, y]) => y?.found && String(y.region).toLowerCase() === id);
@@ -2158,8 +2190,9 @@ LambdaData.ready.then(D => {
   }
 
   document.addEventListener('click', e => {
-    const el = e.target.closest('[data-exact],[data-track],[data-ticket],[data-site],[data-part],[data-dep],[data-proj],[data-open],[data-url],[data-href],[data-close],[data-close-drawer],[data-ref]');
+    const el = e.target.closest('[data-rackside],[data-exact],[data-track],[data-ticket],[data-site],[data-part],[data-dep],[data-proj],[data-open],[data-url],[data-href],[data-close],[data-close-drawer],[data-ref]');
     if (!el) return;
+    if (el.dataset.rackside) return Rackside.open(el.dataset.rackside, el.dataset.rurl);
     if (el.dataset.exact) return Fleet.exact(D.siteById(el.dataset.exact));
     if (el.dataset.track) {
       const on = D.toggleTrack(el.dataset.track);
@@ -2648,7 +2681,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     const [k, v] = h.split('=');
     if (k === 'view' && ['globe', 'graph', 'deploys'].includes(v)) return setView(v);
     if (k === 'dep' && D.deploymentByKey?.(v)) openEntity('deployment', D.deploymentByKey(v));
-    if (k === 'ticket' && D.ticketByKey(v)) openEntity('ticket', D.ticketByKey(v));
+    if (k === 'ticket') D.ticketByKey(v) ? openEntity('ticket', D.ticketByKey(v)) : toast(`${v} isn’t in your open fleet tickets.`);
     if (k === 'site' && D.siteById(v)) { setView('globe'); SiteCard.open(D.siteById(v)); }
   }
   window.addEventListener('hashchange', route);
