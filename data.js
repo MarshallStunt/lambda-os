@@ -231,8 +231,7 @@
     };
     const D = finish({
       MODE: 'live', AT: snap.at, PARTIAL: !!snap.partial,
-      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'), src('yard', 'Yard'),
-        { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
+      SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'), src('yard', 'Yard')],
       ME: { name: jr?.me?.name || '', email: jr?.me?.email || '' },
       LINKS: { jira: jr?.base || '', netbox: nb?.base || '', slack: snap.slack?.url || '', netsuite: snap.netsuite?.base || '', atium: snap.atium?.base || '', grafana: snap.grafana?.base || '' },
       SITES, PARTS: [...PARTS.values()], PEOPLE: [...PEOPLE.values()], DEVICES: [...DEVICES.values()], TICKETS, KPIS, FEED,
@@ -834,36 +833,7 @@
   /* ---------------- Management cards (the top-row switch: DC Ops / Management) ---------------- */
   // SLA met %, sites healthy, deployments at risk and GPUs handed off this month, plus open tickets and active
   // deployments from the DC Ops cards. Works on the full or the site-picker copy of D.
-  function managementKpis(D) {
-    const now = Date.now(), R = D.RAW || {}, S = D.SCOPE || null, codeOf = R.codeOf || (x => x);
-    const by = Object.fromEntries((D.KPIS || []).filter(k => k.key).map(k => [k.key, k]));
-    const out = [];
-    // SLA met: of the tickets closed with an SLA deadline, the share closed in time. Card: last 30 days; chart: a 7-day rolling share.
-    const rows = (R.closed30 || []).filter(x => x[3] && (!S || (x.length >= 6 && S.has((x[4] || []).map(codeOf).find(Boolean) || codeOf(x[5])))));
-    if (R.closed30) {
-      const share = (from, to) => { const r = rows.filter(([, res]) => res > from && res <= to); return r.length ? Math.round(100 * r.filter(([, res, , dl]) => res <= dl).length / r.length) : null; };
-      const pct = share(now - 30 * DAY, now), trend = last30(now).map(({ day, e }) => ({ day, v: share(e - 7 * DAY, e) })).filter(p => p.v != null);
-      out.push({ key: 'slaPct', num: pct ?? 0, upGood: true, trend, label: 'SLA met (last 30 days)', value: pct == null ? '—' : pct + '%',
-        sub: `${rows.filter(([, res]) => res > now - 30 * DAY).length} tickets closed with an SLA · chart: 7-day rolling`, tone: pct != null && pct < 80 ? 'bad' : 'good' });
-    }
-    const live = D.SITES.filter(s => (!S || S.has(s.id)) && s.kind === 'dc' && s.health !== 'idle'), good = live.filter(s => s.health === 'good').length;
-    out.push({ key: 'healthy', num: good, upGood: true, scoped: !!S, label: 'Sites healthy', value: `${good}/${live.length}`,
-      sub: `${live.filter(s => s.health === 'critical').map(s => s.id).join(', ') || 'none'} critical · tickets and Grafana site health`, tone: good < live.length ? 'bad' : 'good' });
-    const deps = D.DEPLOYMENTS || [], risky = deps.filter(d => d.health === 'critical' || d.health === 'warning');
-    out.push({ key: 'risk', num: risky.length, upBad: true, scoped: !!S, label: 'Deployments at risk', value: String(risky.length),
-      sub: `${risky.filter(d => d.overdue).length} overdue · of ${deps.length} active`, tone: risky.length ? 'bad' : 'good' });
-    // GPUs handed off this month (Atium hand-off milestones). Chart: month-to-date for each of the last 30 days.
-    const builds = (D.BUILDS || []).filter(b => b.handoff?.done && b.handoff.at), gpusOf = b => b.planned || b.gpus || 0;
-    const monthStart = t => { const d = new Date(t); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); };
-    const mtd = e => builds.filter(b => b.handoff.at >= monthStart(e) && b.handoff.at <= e).reduce((a, b) => a + gpusOf(b), 0);
-    if ((D.BUILDS || []).length) {
-      const n = mtd(now);
-      out.push({ key: 'handed', num: n, upGood: true, trend: last30(now).map(({ day, e }) => ({ day, v: mtd(e) })), label: 'GPUs handed off this month',
-        value: kfmt(n), sub: `${builds.filter(b => b.handoff.at >= monthStart(now)).length} builds handed off (Atium)` });
-    }
-    for (const k of ['open', 'deps', 'breached', 'gpus']) if (by[k] && out.length < 6) out.push(by[k]); // fill the row from the DC Ops cards
-    return out.slice(0, 6);
-  }
+
 
   /* ---------------- Start ---------------- */
   const bootStatus = msg => { const el = document.getElementById('bootMsg'); if (el) el.textContent = msg; };
@@ -910,7 +880,7 @@
 
   async function start() {
     const D = await startRaw(); (D.RAW ||= {}).myPrefs = await loadMySites(); D.yourSites = () => yourSiteCodes(D); D.yourSitesInfo = () => yourSitesInfo(D);
-    const S = scope(D, await loadScope()); S.KPIS_MGMT = managementKpis(S); return S;
+    return scope(D, await loadScope());
   }
   // After a fresh install, forget what this browser remembered for the old copy (tour, views, "Later"…).
   async function cleanStart() {
@@ -955,6 +925,6 @@
   const root = typeof self !== 'undefined' ? self : window;
   const prepare = async () => { TRACKED = new Set(await loadTracked()); };
   root.LambdaData = typeof document !== 'undefined'
-    ? { ready: start(), buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites, managementKpis }
-    : { buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites, managementKpis };
+    ? { ready: start(), buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites }
+    : { buildLive, buildMock, prepare, scope, loadScope, saveScope, yourSitesInfo, loadMySites, saveMySites };
 })();

@@ -216,7 +216,7 @@ LambdaData.ready.then(D => {
   const laterMap = () => { try { return JSON.parse(localStorage.getItem(LATER)) || {}; } catch { return {}; } };
   const isLater = k => laterMap()[k] === today;
   const setLater = (k, on) => { const m = laterMap(); if (on) m[k] = today; else delete m[k]; try { localStorage.setItem(LATER, JSON.stringify(m)); } catch { /* per-viewer convenience */ } };
-  const ALLSRC = D.SOURCES.filter(s => s.key !== 'claude');
+  const ALLSRC = D.SOURCES;
   const shown = new Set(); // sources you clicked: in the bar even if they're quiet or set to Later
   const needBar = $('#needBar') || (() => { const b = Object.assign(document.createElement('div'), { id: 'needBar', className: 'needbar', hidden: true }); b.setAttribute('role', 'region'); b.setAttribute('aria-label', 'Apps that need you'); $('.statusbar').before(b); return b; })();
   const barRow = s => {
@@ -459,6 +459,8 @@ LambdaData.ready.then(D => {
   const backfill = (key, h) => key === 'open' ? h.open : key === 'breached' ? h.breached : key === 'deps' ? (h.deps ? Object.keys(h.deps).length : undefined) : undefined;
   // DC Ops or Management cards (the switch under the greeting); remembered per person.
   const cards = () => D.KPIS; // one set of cards for everyone (DC Ops and managers see the same)
+  // Forget choices from features that no longer exist (the DC Ops / Management switch, the old view switches).
+  try { ['lambdaos-kpimode', 'lambdaos-vscope-graph', 'lambdaos-vscope-deploys', 'lambdaos-health-scope2'].forEach(k => localStorage.removeItem(k)); } catch { /* ignore */ }
   function kpiHistory(hist) {
     if (D.MODE === 'demo') { // demo: a steady made-up fortnight ending at today's number
       let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -2864,7 +2866,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ['#cmdTrigger', 'Search or ask', `Find any site, device, ticket, deployment or part (${KEY('K')}), or ask a question. ✨ Ask AI (${KEY('J')}) answers from the loaded data.`],
     ];
     // First stop (live only): which apps you use, so the ones you don't have never ask you to sign in.
-    const APPS = ALLSRC.filter(x => x.key !== 'claude'), CORE = x => x.key === 'netbox' || x.key === 'jira';
+    const APPS = ALLSRC, CORE = x => x.key === 'netbox' || x.key === 'jira';
     if (D.MODE === 'live' && isExt) STEPS.unshift(['.statusbar', 'Which apps do you have access to?', 'Untick any you don\'t have access to: Lambda OS won\'t read them or ask you to sign in. You can change this later in Settings → Sources.',
       `<div class="tour-apps">${APPS.map(x => `<label class="${CORE(x) ? 'core' : ''}"><input type="checkbox" data-app="${x.key}" ${x.state !== 'off' && x.state !== 'na' ? 'checked' : ''} ${CORE(x) ? 'disabled title="Lambda OS needs Jira and NetBox"' : ''}> ${esc(x.name)}</label>`).join('')}</div>`, true]);
     let appsChanged = false;
