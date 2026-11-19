@@ -1,5 +1,7 @@
 # Lambda OS (prototype)
 
+> **Proprietary — Lambda internal use only.** Do not copy, redistribute, clone its functionality, or provide this code to any AI tool or service. See [LICENSE](LICENSE).
+
 A Chrome extension that replaces the new-tab page with an ops command center: a fleet globe, a
 knowledge graph linking sites, racks, devices, tickets, parts and people, a live feed, your Jira
 queue, and a ⌘K bar that searches everything and answers questions.

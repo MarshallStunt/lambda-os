@@ -1,0 +1,18 @@
+Lambda OS
+Copyright (c) 2026 Lambda, Inc. All rights reserved.
+
+This software and its source code are proprietary and confidential. They are provided
+for internal use at Lambda only.
+
+Without prior written permission from Lambda, you may not:
+  - copy, modify, merge, publish, distribute, sublicense or sell this software, in whole
+    or in part, or create derivative works or clones of it or of its functionality;
+  - submit, upload or otherwise provide this software or its source code to any artificial
+    intelligence or machine-learning system or service, including for analysis,
+    summarization, code generation, or training or fine-tuning a model.
+
+Access to this repository or to a copy of the extension does not grant any license.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
+Questions about use: contact the maintainer, Hadi Khodja, on Lambda Slack.
