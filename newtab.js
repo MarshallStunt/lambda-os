@@ -2743,11 +2743,19 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
   }
   window.addEventListener('hashchange', route);
   setTimeout(route, 0);
-  // Auto-open once a day, on the first new tab after the brief time.
+  // Auto-open once a day, on the first new tab after the brief time. `briefDecided` lets the tour wait its turn.
+  let briefDone; const briefDecided = new Promise(r => { briefDone = r; });
   if (isExt && !location.hash) LambdaLive.settings().then(async s => {
     let seen = ''; try { seen = localStorage.getItem('lambdaos-brief-seen') || ''; } catch { /* ignore */ }
     if (D.MODE === 'live' && s.brief.autoOpen && LambdaAlerts.briefDue(s.brief) && seen !== LambdaAlerts.dayKey(Date.now())) { await historyReady; openBrief(); }
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => briefDone());
+  else briefDone();
+  // Resolves once the daily brief isn't on screen (right away if it isn't open).
+  const briefClosed = () => new Promise(res => {
+    const b = $('#brief'); if (!b || b.hidden) return res();
+    const mo = new MutationObserver(() => { if (b.hidden) { mo.disconnect(); res(); } });
+    mo.observe(b, { attributes: true, attributeFilter: ['hidden'] });
+  });
 
   /* ---------------- Alert center (🔔): every alert, even when the OS hides pop-ups ---------------- */
   const bellBtn = $('#bellBtn'), alertPop = $('#alertPop');
@@ -2849,7 +2857,8 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     if (seenV && !seen && location.hash !== '#tour') { const fresh = STEPS.filter(x => x[4]); STEPS.length = 0; STEPS.push(...fresh); }
     if (!STEPS.length) { try { localStorage.setItem(KEYT, TOUR_V); } catch { /* ignore */ } }
     // Starts right away, even on a first load: the page waits to fill in the other apps until you finish or skip it.
-    if (location.hash === '#tour' || (!seen && STEPS.length)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
+    // The daily brief goes first: the tour starts once it's closed (or right away if it didn't open).
+    if (location.hash === '#tour' || (!seen && STEPS.length)) briefDecided.then(() => new Promise(r => setTimeout(r, 900))).then(briefClosed).then(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); });
   }
 }).catch(err => {
   console.error(err);
