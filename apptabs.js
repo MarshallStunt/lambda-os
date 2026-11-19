@@ -41,7 +41,7 @@ const LambdaTabs = (() => {
       // Grafana is normally read directly; a temporary tab is only used if its sign-in refuses direct reads.
       gf && { key: 'grafana', name: 'Grafana', url: `${gf}/dashboards`, home: '/', pinned: false },
       // Yard Central keeps its Okta sign-in in the page too, so it's read from its own tab (read-only host searches).
-      yd && { key: 'yard', name: 'Yard', url: `${yd}/dashboard`, home: '/', pinned: true },
+      yd && { key: 'yard', name: 'Yard', url: `${yd}/dashboard`, home: '/', pinned: true, busyOk: true }, // its page never reports "finished loading", so it's read once it's on the app
     ].filter(Boolean);
     return Object.fromEntries(list.map(a => [a.key, a]));
   }
@@ -142,7 +142,7 @@ const LambdaTabs = (() => {
 
   // Get our tab into a readable state. Never yanks a tab the user is looking at (they may be signing in there).
   async function heal(app, tab, rec = {}, depth = 0) {
-    const u = urlOf(tab), kind = pageKind(u, tab.status === 'complete' ? tab.title : '');
+    const u = urlOf(tab), kind = pageKind(u, tab.status === 'complete' || app.busyOk ? tab.title : '');
     const stale = Date.now() - (rec.refreshedAt || 0) > REFRESH_MS;
     let action = null;
     if (kind) {
@@ -151,7 +151,7 @@ const LambdaTabs = (() => {
       if (!depth && stale && !tab.active) action = 'navigate';
       else if (kind === 'bot') throw pausedError(app.name, await pause(app.key));
       else throw signInError(app);
-    } else if (tab.active) return remember(app, tab.status === 'complete' ? tab : (await waitComplete(tab.id)) || tab, rec);
+    } else if (tab.active) return remember(app, tab.status === 'complete' || app.busyOk ? tab : (await waitComplete(tab.id)) || tab, rec);
     else if (!atHome(app, u)) {
       if (depth) throw new TabError(`${app.name}: the pinned tab keeps leaving ${app.url} (now at ${originOf(u) || 'an unknown page'}).`);
       action = 'navigate';
@@ -160,10 +160,11 @@ const LambdaTabs = (() => {
     if (action === 'navigate') await chrome.tabs.update(tab.id, { url: app.url });
     if (action === 'reload') await chrome.tabs.reload(tab.id);
     if (action && app.pinned) { rec = { ...rec, id: tab.id, refreshedAt: Date.now() }; await saveOwn(app.key, rec); }
-    if (!action && tab.status === 'complete') return remember(app, tab, rec);
-    const loaded = await waitComplete(tab.id);
+    // Some apps (Yard) keep a request open forever, so Chrome never calls them loaded: on their own page, that's fine.
+    if (!action && (tab.status === 'complete' || app.busyOk)) return remember(app, tab, rec);
+    const loaded = await waitComplete(tab.id, app.busyOk ? 12e3 : LOAD_TIMEOUT_MS);
     if (!loaded) throw new TabError(`${app.name}: the ${app.pinned ? 'pinned' : 'temporary'} tab closed while loading.`);
-    if (loaded.status !== 'complete') throw new TabError(`${app.name}: the ${app.pinned ? 'pinned' : 'temporary'} tab didn't finish loading within 30 seconds.`);
+    if (loaded.status !== 'complete' && !app.busyOk) throw new TabError(`${app.name}: the ${app.pinned ? 'pinned' : 'temporary'} tab didn't finish loading within 30 seconds.`);
     if (action) await sleep(SETTLE_MS); // let the app start up before reading
     return heal(app, loaded, rec, depth + 1);
   }
@@ -213,7 +214,7 @@ const LambdaTabs = (() => {
   async function userTab(app) {
     const isMine = await mine();
     const tabs = (await chrome.tabs.query({ url: `${originOf(app.url)}/*` }))
-      .filter(t => !isMine(t) && t.status === 'complete' && !t.discarded && !t.frozen && !pageKind(urlOf(t), t.title));
+      .filter(t => !isMine(t) && (t.status === 'complete' || app.busyOk) && !t.discarded && !t.frozen && !pageKind(urlOf(t), t.title));
     return tabs.sort((a, b) => (b.active - a.active) || ((b.lastAccessed || 0) - (a.lastAccessed || 0)))[0] || null;
   }
   // { tab, own }: the user's tab if there is one; otherwise ours (opened if needed, unless useOwn is false).
@@ -242,7 +243,7 @@ const LambdaTabs = (() => {
       }
       if (tab.active) throw e; // don't reload a tab the user is looking at
       await chrome.tabs.reload(tab.id);
-      const loaded = await waitComplete(tab.id);
+      const loaded = await waitComplete(tab.id, app.busyOk ? 12e3 : LOAD_TIMEOUT_MS);
       if (!loaded) throw e;
       await sleep(SETTLE_MS);
       tab = await heal(app, loaded, { ...((await load(OWN_KEY))[app.key] || {}), refreshedAt: Date.now() }, 1);
@@ -254,7 +255,7 @@ const LambdaTabs = (() => {
   async function reload(app, tab) {
     if (tab.active) return tab;
     await chrome.tabs.reload(tab.id);
-    const loaded = await waitComplete(tab.id);
+    const loaded = await waitComplete(tab.id, app.busyOk ? 12e3 : LOAD_TIMEOUT_MS);
     if (!loaded) throw new TabError(`${app.name}: the tab closed while reloading.`);
     await sleep(SETTLE_MS);
     const rec = { ...((await load(OWN_KEY))[app.key] || {}), refreshedAt: Date.now() };
