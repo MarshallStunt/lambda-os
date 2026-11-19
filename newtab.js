@@ -2847,9 +2847,8 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     const seen = seenV === TOUR_V;
     if (seenV && !seen && location.hash !== '#tour') { const fresh = STEPS.filter(x => x[4]); STEPS.length = 0; STEPS.push(...fresh); }
     if (!STEPS.length) { try { localStorage.setItem(KEYT, TOUR_V); } catch { /* ignore */ } }
-    // On a first load the tour waits for the full data (the page fills in by itself a few seconds later), so it never
-    // starts on a half-loaded page or gets cut off by that reload.
-    if (location.hash === '#tour' || (!seen && STEPS.length && !D.PARTIAL)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
+    // Starts right away, even on a first load: the page waits to fill in the other apps until you finish or skip it.
+    if (location.hash === '#tour' || (!seen && STEPS.length)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
   }
 }).catch(err => {
   console.error(err);
