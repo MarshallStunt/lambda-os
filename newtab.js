@@ -366,7 +366,7 @@ LambdaData.ready.then(D => {
   // never while something is open. The view you were on is kept.
   let lastActivity = Date.now(), pendingReload = false;
   ['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
-  const busyNow = () => !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden || !$('#sitePop').hidden;
+  const busyNow = () => !!document.querySelector('.tour') || !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden || !$('#sitePop').hidden;
   function tryReload() {
     if (!pendingReload) return;
     // After a first load (only NetBox + Jira shown), the rest comes in as soon as you pause for a few seconds.
@@ -2843,7 +2843,9 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     document.addEventListener('click', async e => { const b = e.target.closest('[data-tour]'); if (!b) return; const a = b.dataset.tour; if (a !== 'back') await saveApps(); a === 'next' ? go(i + 1) : a === 'back' ? go(i - 1) : end(); });
     addEventListener('resize', () => { if (box) go(i); });
     let seen = false; try { seen = localStorage.getItem(KEYT) === '1'; } catch { /* ignore */ }
-    if (location.hash === '#tour' || !seen) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
+    // On a first load the tour waits for the full data (the page fills in by itself a few seconds later), so it never
+    // starts on a half-loaded page or gets cut off by that reload.
+    if (location.hash === '#tour' || (!seen && !D.PARTIAL)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
   }
 }).catch(err => {
   console.error(err);
