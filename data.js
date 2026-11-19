@@ -889,7 +889,20 @@
     const D = await startRaw(); (D.RAW ||= {}).myPrefs = await loadMySites(); D.yourSites = () => yourSiteCodes(D); D.yourSitesInfo = () => yourSitesInfo(D);
     const S = scope(D, await loadScope()); S.KPIS_MGMT = managementKpis(S); return S;
   }
+  // After a fresh install, forget what this browser remembered for the old copy (tour, views, "Later"…).
+  async function cleanStart() {
+    try {
+      const { installId, freshInstall } = await chrome.storage.local.get(['installId', 'freshInstall']);
+      if (!freshInstall || !installId) return;
+      if (localStorage.getItem('lambdaos-install') !== installId) {
+        Object.keys(localStorage).filter(k => k.startsWith('lambdaos-')).forEach(k => localStorage.removeItem(k));
+        localStorage.setItem('lambdaos-install', installId);
+      }
+      await chrome.storage.local.remove('freshInstall');
+    } catch { /* not the extension */ }
+  }
   async function startRaw() {
+    await cleanStart();
     TRACKED = new Set(await loadTracked());
     const ext = typeof chrome !== 'undefined' && chrome.storage?.local && typeof LambdaLive !== 'undefined';
     if (!ext) return buildMock('Opened outside the extension, so this is demo data.');

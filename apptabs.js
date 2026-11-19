@@ -124,7 +124,10 @@ const LambdaTabs = (() => {
         const rec = (await load(OWN_KEY))[app.key];
         let tab = rec?.id != null ? await chrome.tabs.get(rec.id).catch(() => null) : null;
         if (tab && !tab.pinned) { await saveOwn(app.key, null); tab = null; } // the user unpinned it: it's theirs now
-        if (!tab && rec) tab = (await pinnedCopies(app))[0] || null;     // Chrome restart: same tab, new id
+        // Chrome restart: same tab, new id. After a fresh install (Lambda OS removed and added again), the old copy's pinned
+        // tabs at exactly our addresses are reused instead of opening duplicates.
+        const adopt = rec || (await chrome.storage.local.get('adoptPinned').catch(() => ({}))).adoptPinned;
+        if (!tab && adopt) tab = (await pinnedCopies(app))[0] || null;
         if (tab) {
           // Other pinned tabs at the same address are left alone: they may be your own (e.g. your pinned Gmail).
           if (tab.id !== rec?.id) await saveOwn(app.key, { ...rec, id: tab.id });

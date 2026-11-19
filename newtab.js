@@ -2802,7 +2802,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
 
   /* ---------------- First-run tour: four quick stops, once per person (again from Settings → Help) ---------------- */
   {
-    const KEYT = 'lambdaos-tour-done';
+    const KEYT = 'lambdaos-tour-done', TOUR_V = '2';
     const STEPS = [
       ['#siteBtn', 'Pick your sites', 'Show every site, just yours, or any you tick. Cards, tickets, feed, the brain, Health and notifications all follow. ★ a site in this menu to mark it as yours.'],
       ['#kpis', 'The top cards', 'Each card shows the number now, ▲/▼ since yesterday and the last 30 days. Hover a card for details, hover the chart for any day. Switch between DC Ops and Management cards under the greeting.'],
@@ -2812,7 +2812,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     // First stop (live only): which apps you use, so the ones you don't have never ask you to sign in.
     const APPS = ALLSRC.filter(x => x.key !== 'claude'), CORE = x => x.key === 'netbox' || x.key === 'jira';
     if (D.MODE === 'live' && isExt) STEPS.unshift(['.statusbar', 'Which apps do you use?', 'Untick any you don\'t have an account for: Lambda OS won\'t read them or ask you to sign in. You can change this later in Settings → Sources.',
-      `<div class="tour-apps">${APPS.map(x => `<label class="${CORE(x) ? 'core' : ''}"><input type="checkbox" data-app="${x.key}" ${x.state !== 'off' && x.state !== 'na' ? 'checked' : ''} ${CORE(x) ? 'disabled title="Lambda OS needs Jira and NetBox"' : ''}> ${esc(x.name)}</label>`).join('')}</div>`]);
+      `<div class="tour-apps">${APPS.map(x => `<label class="${CORE(x) ? 'core' : ''}"><input type="checkbox" data-app="${x.key}" ${x.state !== 'off' && x.state !== 'na' ? 'checked' : ''} ${CORE(x) ? 'disabled title="Lambda OS needs Jira and NetBox"' : ''}> ${esc(x.name)}</label>`).join('')}</div>`, true]);
     let appsChanged = false;
     async function saveApps() {
       const boxes = [...(box?.querySelectorAll('[data-app]') || [])]; if (!boxes.length) return;
@@ -2821,7 +2821,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       if (appsChanged) await chrome.storage.local.set({ settings: { ...st, sources: src } });
     }
     let i = 0, box = null;
-    const end = () => { box?.remove(); box = null; try { localStorage.setItem(KEYT, '1'); } catch { /* ignore */ } document.removeEventListener('keydown', onKey, true);
+    const end = () => { box?.remove(); box = null; try { localStorage.setItem(KEYT, TOUR_V); } catch { /* ignore */ } document.removeEventListener('keydown', onKey, true);
       if (appsChanged) { toast('Saved: Lambda OS skips the apps you unticked.'); setTimeout(() => location.reload(), 900); } };
     const onKey = e => { if (!box) return; if (e.key === 'Escape') { e.stopImmediatePropagation(); end(); } else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); saveApps().then(() => go(i + 1)); } else if (e.key === 'ArrowLeft') go(i - 1); };
     function go(k) {
@@ -2842,10 +2842,14 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     }
     document.addEventListener('click', async e => { const b = e.target.closest('[data-tour]'); if (!b) return; const a = b.dataset.tour; if (a !== 'back') await saveApps(); a === 'next' ? go(i + 1) : a === 'back' ? go(i - 1) : end(); });
     addEventListener('resize', () => { if (box) go(i); });
-    let seen = false; try { seen = localStorage.getItem(KEYT) === '1'; } catch { /* ignore */ }
+    // Version 2 added "Which apps do you use?": people who took the earlier tour see just that new stop, once.
+    let seenV = null; try { seenV = localStorage.getItem(KEYT); } catch { /* ignore */ }
+    const seen = seenV === TOUR_V;
+    if (seenV && !seen && location.hash !== '#tour') { const fresh = STEPS.filter(x => x[4]); STEPS.length = 0; STEPS.push(...fresh); }
+    if (!STEPS.length) { try { localStorage.setItem(KEYT, TOUR_V); } catch { /* ignore */ } }
     // On a first load the tour waits for the full data (the page fills in by itself a few seconds later), so it never
     // starts on a half-loaded page or gets cut off by that reload.
-    if (location.hash === '#tour' || (!seen && !D.PARTIAL)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
+    if (location.hash === '#tour' || (!seen && STEPS.length && !D.PARTIAL)) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
   }
 }).catch(err => {
   console.error(err);

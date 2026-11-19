@@ -234,5 +234,10 @@ async function helloRackside() {
   if (!r?.ok) await chrome.storage.local.remove('peerRackside'); // removed or reinstalled: found again on the next click
 }
 
+// A fresh install (also after removing and adding Lambda OS again) starts clean: the page clears its own leftovers
+// (tour, view choices, "Later") the first time it opens. An update keeps everything.
+chrome.runtime.onInstalled.addListener(d => { chrome.storage.local.get('installId').then(({ installId }) => {
+  if (d.reason === 'install') chrome.storage.local.set({ installId: String(Date.now()), freshInstall: true, adoptPinned: true });
+  else if (!installId) chrome.storage.local.set({ installId: String(Date.now()) }); }).catch(() => {}); });
 chrome.runtime.onInstalled.addListener(d => { helloRackside(); scheduleBrief(); scheduleRefresh(); updateCheck(true).catch(() => {}); if (d.reason === 'install') chrome.tabs.create({ url: DASH() }); });
 chrome.runtime.onStartup.addListener(() => { helloRackside(); scheduleBrief(); scheduleRefresh(); });
