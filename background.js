@@ -195,7 +195,7 @@ chrome.alarms.onAlarm.addListener(async a => {
 // Every new snapshot (from this worker or from a dashboard tab) runs the alerts; settings changes reschedule the brief.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.snapshot?.newValue) runAlerts(changes.snapshot.newValue);
+  if (changes.snapshot?.newValue && !changes.snapshot.newValue.partial) runAlerts(changes.snapshot.newValue); // alerts only on a finished load
   if (changes.settings) { scheduleBrief(); scheduleRefresh(); tabsTick(); } // tick: a source turned off closes its tab now
 });
 chrome.notifications.onClicked.addListener(async id => {

@@ -910,14 +910,20 @@
     if (s.mode === 'demo' || sessionStorage.getItem('lambdaos-demo')) return buildMock();
     const { snapshot } = await chrome.storage.local.get('snapshot');
     if (snapshot && (snapshot.nb || snapshot.jira)) {
-      if (Date.now() - snapshot.at > 2 * 60e3 || (snapshot.jira && !('closed30' in snapshot.jira))) { // old snapshot, or one from before the 30-day ticket history
+      // Saved data shows at once, even if a load is still adding apps (partial). Old, unfinished or pre-history data also
+      // starts a load in the background (if another tab is already loading, this one just waits for it).
+      if (snapshot.partial || Date.now() - snapshot.at > 2 * 60e3 || (snapshot.jira && !('closed30' in snapshot.jira))) {
         LambdaLive.refresh().then(snap => window.dispatchEvent(new CustomEvent('lambda:snapshot', { detail: snap })));
       }
       return buildLive(snapshot);
     }
     bootStatus('Connecting to NetBox and Jira with your browser sign-ins…');
-    // The dashboard shows as soon as NetBox and Jira are in; the other apps keep loading and the page picks them up.
-    const fresh = await new Promise((res, rej) => { LambdaLive.refresh(bootStatus, { onCore: res }).then(res, rej); });
+    // The dashboard shows as soon as NetBox or Jira is saved (apps are saved one by one); the rest fills in after.
+    const fresh = await new Promise((res, rej) => {
+      const on = (ch, area) => { const v = ch.snapshot?.newValue; if (area === 'local' && v && (v.nb || v.jira)) { chrome.storage.onChanged.removeListener(on); res(v); } };
+      chrome.storage.onChanged.addListener(on);
+      LambdaLive.refresh(bootStatus).then(v => { chrome.storage.onChanged.removeListener(on); res(v); }, e => { chrome.storage.onChanged.removeListener(on); rej(e); });
+    });
     if (!fresh.nb && !fresh.jira) await connectHelp(fresh);
     return buildLive(fresh);
   }

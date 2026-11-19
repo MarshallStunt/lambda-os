@@ -912,7 +912,10 @@ const LambdaLive = (() => {
       if ((now - (v.at || 0) < 6 * 3600e3 || mine(v)) && (!keep[h] || (v.at || 0) > (keep[h].at || 0))) keep[h] = v; // older than 6h: dropped
     const tickets = [...(jr?.tickets || [])].filter(t => t.host).sort((a, b) => (b.mine - a.mine) || ((a.slaDue || 9e15) - (b.slaDue || 9e15)));
     const locks = Object.keys(keep).filter(h => mine(keep[h]));
-    const want = [...new Set([...tickets.map(t => t.host.toLowerCase()), ...locks])].filter(h => !keep[h] || now - keep[h].at > 30 * 60e3).slice(0, 150);
+    // First time (nothing looked up yet): just your own tickets' hosts, so Yard is ready fast; the rest fill in over the
+    // next refreshes (150 at a time).
+    const first = !Object.keys(keep).length, pool = first ? tickets.filter(t => t.mine) : tickets;
+    const want = [...new Set([...pool.map(t => t.host.toLowerCase()), ...locks])].filter(h => !keep[h] || now - keep[h].at > 30 * 60e3).slice(0, first ? 40 : 150);
     if (!want.length) return { at: now, base: new URL(app.url).origin, hosts: keep };
     const read = () => LambdaTabs.run(app, yardInPage, [want], { useOwn: s.appTabs !== false });
     let result, own, tab;
@@ -956,8 +959,26 @@ const LambdaLive = (() => {
   // A source this account doesn't have (never signed in, 3 tries in a row) goes quiet: no pill, no pinned tab, and it's
   // only tried again once a day (or when you click Check connections in Settings). One that worked before stays loud.
   const QUIET_AFTER = 3, QUIET_RETRY = 864e5, SKIP = Symbol('quiet');
+  // One load at a time across every new tab and the background: whoever starts first does the work (a shared lock in
+  // storage), the others wait for its result. A lock older than LOCK_MS is from a load that died (tab closed).
+  const LOCK_MS = 4 * 60e3;
+  const waitFinal = () => new Promise(res => {
+    const done = v => { chrome.storage.onChanged.removeListener(on); clearTimeout(t); res(v); };
+    const on = (ch, area) => { if (area === 'local' && ch.snapshot?.newValue && !ch.snapshot.newValue.partial) done(ch.snapshot.newValue); };
+    const t = setTimeout(() => chrome.storage.local.get('snapshot').then(r => done(r.snapshot)), LOCK_MS);
+    chrome.storage.onChanged.addListener(on);
+  });
   function refresh(progress, opts = {}) {
     inflight ||= (async () => {
+      const { refreshLock } = await chrome.storage.local.get('refreshLock');
+      if (!opts.retryAll && refreshLock && Date.now() - refreshLock < LOCK_MS) { progress?.('Another Lambda OS tab is loading; waiting for it…'); return waitFinal(); }
+      await chrome.storage.local.set({ refreshLock: Date.now() });
+      try { return await load(progress, opts); } finally { await chrome.storage.local.remove('refreshLock').catch(() => {}); }
+    })().finally(() => { inflight = null; });
+    return inflight;
+  }
+  async function load(progress, opts) {
+    {
       const s = await settings();
       const { snapshot: prev } = await chrome.storage.local.get('snapshot');
       const resting = k => !opts.retryAll && prev?.sources?.[k]?.quiet && Date.now() - (prev.sources[k].triedAt || 0) < QUIET_RETRY;
@@ -1000,13 +1021,16 @@ const LambdaLive = (() => {
         // "Showing data from …" = the last refresh that worked, which stays put while the outage lasts
         if (snapshot[key]) snapshot.sources[k].staleAt = was?.ok ? was.at : (was?.staleAt || prev?.at);
       };
-      // First load: hand back NetBox + Jira as soon as they're in, so the dashboard can show while the other apps load
-      // (the full snapshot is saved when everything is done, and the page picks it up).
-      if (opts.onCore) Promise.allSettled([nbP, jrP]).then(([n, j]) => {
-        const snap = { at: Date.now(), version: 2, sources: {}, partial: true };
-        record(snap, 'netbox', n); record(snap, 'jira', j);
-        if (snap.nb || snap.jira) opts.onCore(snap);
-      }).catch(() => {});
+      // Each app is saved as soon as it's done (marked partial until all are), so new tabs and a first load show what's
+      // in already, and one slow app never holds up the others. Apps still loading keep their previous data meanwhile.
+      const working = { at: Date.now(), version: 2, sources: {}, partial: true, smart: prev?.smart || null };
+      for (const k of Object.keys(results)) if (prev?.sources?.[k]) { working.sources[k] = prev.sources[k]; working[KEYS[k]] = prev[KEYS[k]] ?? null; }
+      let writing = null, again = false;
+      const flush = async () => { if (writing) { again = true; return; }
+        writing = chrome.storage.local.set({ snapshot: { ...working, at: Date.now() } }).catch(() => {});
+        await writing; writing = null; if (again) { again = false; flush(); } };
+      for (const [k, p] of Object.entries(results)) Promise.resolve(p).then(v => ({ status: 'fulfilled', value: v }), e => ({ status: 'rejected', reason: e }))
+        .then(r => { if (r.value === SKIP) return; record(working, k, r); if (working.nb || working.jira) flush(); });
       const settled = await Promise.allSettled(Object.values(results));
       const snapshot = { at: Date.now(), version: 2, sources: {} };
       Object.keys(results).forEach((k, i) => record(snapshot, k, settled[i]));
@@ -1016,10 +1040,10 @@ const LambdaLive = (() => {
         try { snapshot.smart = await LambdaSmart.enrich(snapshot, s, prev?.smart, progress || (() => {})); }
         catch (e) { snapshot.smart = { ...(prev?.smart || {}), at: Date.now(), live: false, why: `AI step failed (${e.message}). Using the local rules.` }; }
       } else snapshot.smart = prev?.smart || null;
+      while (writing) await writing;
       await chrome.storage.local.set({ snapshot });
       return snapshot;
-    })().finally(() => { inflight = null; });
-    return inflight;
+    }
   }
 
   // New feed items since `since` (ms) from every connected source.

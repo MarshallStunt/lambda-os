@@ -887,3 +887,6 @@ html[data-motion="reduced"] .source-pill.attn.pulse, html[data-motion="reduced"]
 .tour-apps { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 13px; }
 .tour-apps label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .tour-apps label.core { color: var(--text-2); }
+.spin-dot { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--accent, #7aa2f7); animation: spindot 1s ease-in-out infinite; vertical-align: middle; }
+@keyframes spindot { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .spin-dot { animation: none; } }

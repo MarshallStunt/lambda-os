@@ -279,7 +279,8 @@ LambdaData.ready.then(D => {
     updated.hidden = false;
     const every = SET_REFRESH ? ` · every ${SET_REFRESH >= 60 ? '1h' : SET_REFRESH + 'm'}` : SET_REFRESH === 0 ? ' · manual' : '';
     // Compact in the top bar ("↻ 3m"); the full story is in the tooltip.
-    updated.innerHTML = fresh ? '<b>↻ New</b>' : D.PARTIAL ? '↻ loading other apps…' : `↻ ${rel(D.AT)}`;
+    const loadingNames = D.SOURCES.filter(x => x.state === 'wait').map(x => x.name);
+    updated.innerHTML = fresh ? '<b>↻ New</b>' : D.PARTIAL ? `<span class="spin-dot"></span> loading ${esc(loadingNames.slice(0, 3).join(', ') || 'other apps')}${loadingNames.length > 3 ? ` +${loadingNames.length - 3}` : ''}…` : `↻ ${rel(D.AT)}`;
     updated.title = fresh ? 'New data is ready. It loads by itself once you’ve been idle for a minute, or click to load it now.'
       : `Updated ${rel(D.AT)}${rel(D.AT) === 'now' ? '' : ' ago'}${every.replace(' · ', ' · refreshes ')}. Click to refresh now (change the interval in Settings → Data).`;
     updated.classList.toggle('fresh', !!fresh);
@@ -374,7 +375,7 @@ LambdaData.ready.then(D => {
   }
   function newData() { pendingReload = true; paintUpdated(true); tryReload(); }
   window.addEventListener('lambda:snapshot', newData);
-  if (isExt) chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.snapshot?.newValue && ch.snapshot.newValue.at > D.AT) newData(); });
+  if (isExt) chrome.storage.onChanged.addListener((ch, area) => { const v = ch.snapshot?.newValue; if (area === 'local' && v && v.at > D.AT && !v.partial) newData(); }); // apps saved one by one (partial) wait for the finished load
   setInterval(tryReload, D.PARTIAL ? 3000 : 15000);
   document.addEventListener('visibilitychange', tryReload);
 
