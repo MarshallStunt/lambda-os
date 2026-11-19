@@ -562,8 +562,32 @@ LambdaData.ready.then(D => {
   $('#qtabs').addEventListener('click', e => {
     const b = e.target.closest('[data-q]'); if (!b) return;
     qMode = b.dataset.q; document.querySelectorAll('#qtabs [data-q]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
+    if (qMode === 'news') markNewsSeen();
     renderQueue();
   });
+
+  /* Lambda news: the Lambda blog's RSS feed (news.js). The badge counts posts from the last 14 days you haven't seen
+     in this tab yet; Settings → Appearance can hide the tab. */
+  const NEWS_SEEN = 'lambdaos-news-seen';
+  let news = null;
+  const newsSeen = () => { try { return Number(localStorage.getItem(NEWS_SEEN)) || 0; } catch { return 0; } };
+  const markNewsSeen = () => { const top = news?.items?.[0]?.at; if (top) try { localStorage.setItem(NEWS_SEEN, String(top)); } catch { /* per-viewer convenience */ } };
+  const newsRow = n => `<li class="qitem news" data-href="${esc(n.url)}" title="Open on the Lambda blog">
+    <div style="min-width:0"><div class="qkey"><span class="srctag src-news">Lambda blog</span>${n.tags[0] ? ` ${esc(n.tags[0])}` : ''}</div>
+      <div class="qsum">${esc(n.title)}</div>${n.summary ? `<div class="qmeta news-sum">${esc(n.summary)}</div>` : ''}</div>
+    <span class="ftime" title="${esc(new Date(n.at).toLocaleString())}">${n.at ? rel(n.at) : ''}</span></li>`;
+  function renderNews() {
+    const items = news?.items || [], seen = newsSeen();
+    $('#newsCount').textContent = items.filter(n => n.at > seen && n.at > Date.now() - 14 * 864e5).length || '';
+    if (qMode !== 'news') return;
+    $('#queueCount').textContent = items.length ? `${items.length} posts` : '';
+    const note = news && !news.ok ? `<li class="src-note small">${items.length ? `Couldn't check the blog just now (${esc(news.error)}); showing the posts from ${news.lastOk ? rel(news.lastOk) + ' ago' : 'earlier'}.` : `Couldn't read the Lambda blog (${esc(news.error)}). Lambda OS tries again in a couple of hours.`}</li>` : '';
+    $('#queue').innerHTML = note + (items.map(newsRow).join('') || (news ? '' : '<li class="src-note loading small">Loading the Lambda blog…</li>'))
+      + `<li class="vol-all"><button class="btn" data-href="${LambdaNews.PAGE}">All posts on the Lambda blog ↗</button></li>`;
+  }
+  async function loadNews(force) {
+    news = await LambdaNews.get(force).catch(e => ({ ok: false, items: news?.items || [], error: e.message })); renderNews();
+  }
   const inboxItems = () => [
     ...(D.MENTIONS || []).map(m => ({ src: 'slack', at: m.at, url: m.link, who: m.user, where: m.isDm ? 'DM' : '#' + m.channel, text: m.text })),
     ...(D.MAIL?.entries || []).map(e => ({ src: 'mail', at: e.at, url: e.link, who: e.from, where: 'Gmail', text: e.title })),
@@ -663,6 +687,8 @@ LambdaData.ready.then(D => {
       loadOnsite();
       return;
     }
+    renderNews();
+    if (qMode === 'news') return;
     if (qMode === 'inbox') {
       $('#queueCount').textContent = D.MAIL ? `${D.MAIL.unread} unread mail` : '';
       $('#queue').innerHTML = inbox.slice(0, 60).map(m => `<li class="qitem inbox" data-href="${esc(m.url)}">
@@ -698,6 +724,9 @@ LambdaData.ready.then(D => {
   let yFilter = '';
   document.addEventListener('click', e => { const b = e.target.closest('[data-yf]'); if (!b) return; yFilter = b.dataset.yf; renderQueue(); });
   renderQueue(); setInterval(renderQueue, 60000);
+  if (isExt) chrome.storage.local.get('settings').then(({ settings: st = {} }) => { if (st.news === false) { $('#newsTab').remove(); if (qMode === 'news') qMode = 'tickets'; } else loadNews(); });
+  else loadNews();
+  setInterval(() => $('#newsTab') && loadNews(), 30 * 60e3); // news.js only goes to the blog every 2 hours
 
   /* ---------------- Sites list ---------------- */
   const listSites = () => D.SITES.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.openTickets || s.devices || s.kind === 'dc')
@@ -2172,7 +2201,7 @@ LambdaData.ready.then(D => {
         <div class="section-title"><span>Open tickets</span><span>${tickets.length}</span></div>
         ${tickets.slice(0, 10).map(ticketRow).join('') || '<p class="muted small">None.</p>'}
         ${tickets.length > 10 ? `<p class="muted small">+${tickets.length - 10} more · <a class="linkish" data-url="${esc(s.jiraUrl || '')}" data-what="Jira">see all in Jira</a></p>` : ''}`;
-      $('#siteCard').hidden = false; $('#siteCard').scrollTop = 0; renderSites();
+      cardOpened(SiteCard, $('#siteCard')); $('#siteCard').hidden = false; $('#siteCard').scrollTop = 0; renderSites();
       if (s.atium && $('#sitePOs')) loadPOs(s);
     },
     close() { $('#siteCard').hidden = true; Fleet.clear(); renderSites(); },
@@ -2181,9 +2210,29 @@ LambdaData.ready.then(D => {
 
   /* ---------------- Drawer ---------------- */
   const Drawer = {
-    open(html, cls = '') { volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
+    open(html, cls = '') { cardOpened(Drawer, $('#drawer')); volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
     close() { $('#drawer').hidden = true; volOpen = false; },
   };
+  /* Cards close the way they open: clicking the same row or button again closes the card, and clicking anywhere
+     outside it closes it too (clicking another row just switches the card). Popups inside other popups, the search,
+     the brief, Ask AI and the tour keep it open; so does a drag (rotating the globe, panning the brain). */
+  let clickKey = null, downAt = null;
+  const OPENER = '[data-ticket],[data-dep],[data-site],[data-part],[data-proj],[data-open],[data-ref],[data-vol],[data-feed],[data-hcell]';
+  const keyOf = t => { const el = t.closest(OPENER); return el ? Object.entries(el.dataset).map(([k, v]) => `${k}=${v}`).join('|') : null; };
+  const KEEP_OPEN = '#palette,#brief,#aiPanel,#alertPop,#sitePop,.tour,.toast,#needBar,.palette-backdrop,.brief-backdrop';
+  function cardOpened(card, box) { if (clickKey != null || box.hidden) card.key = clickKey; card.openedAt = Date.now(); }
+  document.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; }, true);
+  document.addEventListener('click', e => {
+    const t = e.target; if (!(t instanceof Element) || !t.isConnected) return;
+    const key = keyOf(t); clickKey = key; setTimeout(() => { clickKey = null; }, 0);
+    if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return; // a drag, not a click
+    if (t.closest(KEEP_OPEN)) return;
+    for (const [card, box] of [[Drawer, $('#drawer')], [SiteCard, $('#siteCard')]]) {
+      if (box.hidden || box.contains(t) || Date.now() - (card.openedAt || 0) < 400) continue; // 400 ms: the globe opens a card on pointerup, just before this click
+      if (key && card.key === key) { card.close(); e.stopPropagation(); e.preventDefault(); return; } // same opener again: close
+      card.close();
+    }
+  }, true);
   const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}${yardChip(t.device, t)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
   function openDeployment(d) {
     const days = d.end ? Math.round((d.end - Date.now()) / 864e5) : null;
@@ -2387,7 +2436,8 @@ LambdaData.ready.then(D => {
         ? [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask ${st.label}: “${qt}”`, sub: `${st.model} · grounded in your loaded data${SET?.privacy?.mode === 'redact' ? ' · private values masked' : ''}`, run: () => askAI(q) },
            { group: 'Ask', icon: '⌁', color: C.accent, title: `Quick answer: “${qt}”`, sub: 'Instant, from local data only (nothing leaves your browser)', run: () => ask(q) }]
         : [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask: “${qt}”`, sub: `Answered from local data · ${st.why}`, run: () => ask(q) },
-           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) }];
+           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) },
+           ...(SET?.privacy?.mode === 'local' ? [] : [['claude', 'Claude'], ['chatgpt', 'ChatGPT']].map(([k, n]) => ({ group: 'Ask', icon: '↗', color: C['accent-2'], title: `Ask in ${n}: “${qt}”`, sub: `Copies the question and dashboard data (masked), opens ${n}: you paste and send`, run: () => { closePalette(); AIPanel.handoff(k, qt); } })))];
       const lq = q.toLowerCase(), go = apps().filter(a => `${a[0]} ${a[1]}`.toLowerCase().includes(lq) || (lq.length >= 3 && a[0].toLowerCase().startsWith(lq))).map(goRow);
       const hits = q.startsWith('?') ? [] : [...search(q), ...go];
       results = looksLikeQuestion(q) || !hits.length ? [...askRows, ...hits] : [...hits, ...askRows];
@@ -2625,7 +2675,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const st = aiState();
       msgs.innerHTML = `<div class="aip-hello"><div class="brand-mark">λ</div><h3>Ask about anything on this dashboard</h3>
         <p class="muted small">Sites, tickets, deployments, spares, shipments, meetings. Answers link straight to what they mention.</p>
-        ${st.ok ? '' : `<p class="note small">${esc(st.why)}${isExt ? ' Until then, answers come from local data only.' : ''}</p>${isExt ? '<button class="btn primary" data-aip-setup>Set up AI</button>' : ''}`}
+        ${st.ok ? '' : `<p class="note small">${esc(st.why)}${isExt ? ' Until then, answers come from local data only.' : ''}</p>${SET?.privacy?.mode === 'local' ? '' : `<p class="small">No API key? Type your question below, then send it to the chat you already use:</p><div class="aip-tools aip-hand-row">${handoffChips()}</div>`}${isExt ? '<button class="btn" data-aip-setup>Set up an API key</button>' : ''}`}
         <div class="aip-suggest">${SUGGEST.map(s => `<button class="chip" data-aip-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
     }
     function open(prefill) {
@@ -2638,6 +2688,40 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     const bubble = (role, html) => { msgs.querySelector('.aip-hello')?.remove(); const d = document.createElement('div'); d.className = `aip-msg ${role}`; d.innerHTML = html; msgs.appendChild(d); scroll(); return d; };
     function busyUI(on) { busy = on; sendBtn.textContent = on ? 'Stop' : 'Ask'; sendBtn.classList.toggle('stop', on); }
 
+    /* Continue in Claude / ChatGPT: no API key needed. The question and the same dashboard data Ask AI would send
+       (masked the same way) go to the clipboard, and claude.ai or chatgpt.com opens; you paste and send it yourself,
+       on your own account. Pasting its answer back here turns the placeholders back into real names and adds links. */
+    const HANDOFF = { claude: { name: 'Claude', url: 'https://claude.ai/new' }, chatgpt: { name: 'ChatGPT', url: 'https://chatgpt.com/' } };
+    const HANDOFF_MAX = 60000; // characters of data: big enough for the context, small enough to paste into either chat
+    const handoffChips = () => Object.entries(HANDOFF).map(([k, h]) => `<button class="chip" data-aip-hand="${k}" title="Copy this question and the dashboard data, then open ${h.name} to paste it">Ask in ${h.name} ↗</button>`).join('');
+    async function handoff(where, q, shown = false) {
+      const h = HANDOFF[where]; q = String(q || '').trim();
+      if (!q) { toast(`Type your question first, then click “Ask in ${h.name}”.`); return ta.focus(); }
+      if (SET?.privacy?.mode === 'local') return toast('Privacy is set to “Never send to AI” (Settings → Privacy), so nothing is copied for an AI.');
+      const priv = SET?.privacy || LambdaLive.DEFAULTS.privacy;
+      R ||= redactorFor(priv);
+      let data = buildContext(q, priv); if (data.length > HANDOFF_MAX) data = data.slice(0, HANDOFF_MAX) + '\n… (more data trimmed to fit)';
+      const text = R.redact(`${AI_SYSTEM}\n\nQUESTION: ${q}\n\nDATA:\n${data}`);
+      try { await navigator.clipboard.writeText(text); } catch { return toast("Couldn't copy to the clipboard. Click the page and try again."); }
+      if (isExt) chrome.tabs.create({ url: h.url }); else window.open(h.url, '_blank', 'noopener');
+      if (box.hidden) open();
+      if (!shown) { ta.value = ''; bubble('user', esc(q)); }
+      const masked = priv.mode === 'redact' && R.count() ? `${R.count()} private values are masked (${esc(R.summary())}).` : priv.mode === 'redact' ? 'Private values are masked.' : 'Masking is off (Settings → Privacy).';
+      const el = bubble('assistant', `<div class="ai-text"><p>📋 Copied your question and the dashboard data. In the <b>${h.name}</b> tab that just opened, paste (${KEY('V')}) and press Enter.</p>
+        <p class="muted small">${masked} It goes to your own ${h.name} account, so it may be kept in your chat history there.</p></div>
+        <textarea class="aip-paste" rows="2" placeholder="Optional: paste ${h.name}'s answer here to see real names and links to the dashboard"></textarea>`);
+      const pa = el.querySelector('.aip-paste');
+      const show = raw => {
+        raw = String(raw || '').trim(); if (!raw) return;
+        const out = document.createElement('div'); out.className = 'ai-text';
+        out.innerHTML = md(R.restore(raw)) + `<div class="aip-meta muted small">${h.name}'s answer · names restored here only</div>`;
+        pa.replaceWith(out); turns.push({ q, raw, local: true }); scroll();
+      };
+      pa.addEventListener('paste', e => { e.preventDefault(); show(e.clipboardData.getData('text')); });
+      pa.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); show(pa.value); } });
+      scroll();
+    }
+
     async function ask(q) {
       q = String(q || '').trim(); if (!q) return;
       if (box.hidden) open();
@@ -2649,7 +2733,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       if (!st.ok) { // no provider: answer from local data
         const a = answerFor(q);
         const t = a.table && a.table.rows.length ? `<table><tr>${a.table.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr>${a.table.rows.slice(0, 12).map(r => `<tr>${r.map(c => `<td>${linkify(esc(c))}</td>`).join('')}</tr>`).join('')}</table>` : '';
-        bubble('assistant', `<div class="ai-text">${md(a.text)}${t}</div><div class="aip-meta muted small">Local answer · ${esc(st.why)}</div>`);
+        bubble('assistant', `<div class="ai-text">${md(a.text)}${t}</div><div class="aip-meta muted small">Local answer · ${esc(st.why)}</div>${SET?.privacy?.mode === 'local' ? '' : `<div class="aip-tools" data-hq="${esc(q)}"><span class="muted small">Better answer:</span>${handoffChips()}</div>`}`);
         turns.push({ q, raw: a.text, local: true });
         return;
       }
@@ -2673,7 +2757,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         else { text.innerHTML = `<p class="st-critical">${esc(e.message)}</p>`; meta.textContent = ''; }
       } finally { busyUI(false); }
       const sent = `SYSTEM PROMPT\n${AI_SYSTEM}\n\n${history.length ? `—— EARLIER TURNS (${history.length / 2}) ——\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : ''}—— THIS MESSAGE (exactly as sent${SET.privacy.mode === 'redact' ? `; masked so far: ${R.summary() || 'none'}` : ''}) ——\n${userMsg}`;
-      el.insertAdjacentHTML('beforeend', `<div class="aip-tools"><button class="chip" data-aip-sent>What was sent</button><button class="chip" data-aip-copy>Copy</button></div><pre class="ai-sent" hidden></pre>`);
+      el.insertAdjacentHTML('beforeend', `<div class="aip-tools" data-hq="${esc(q)}"><button class="chip" data-aip-sent>What was sent</button><button class="chip" data-aip-copy>Copy</button>${handoffChips()}</div><pre class="ai-sent" hidden></pre>`);
       el.querySelector('.ai-sent').textContent = sent;
       el.querySelector('[data-aip-copy]').onclick = () => navigator.clipboard?.writeText(R.restore(raw)).then(() => toast('Copied.'));
       el.querySelector('[data-aip-sent]').onclick = () => { const p = el.querySelector('.ai-sent'); p.hidden = !p.hidden; };
@@ -2685,11 +2769,12 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     box.addEventListener('click', e => {
       const q = e.target.closest('[data-aip-q]'); if (q) return ask(q.dataset.aipQ);
       if (e.target.closest('[data-aip-close]')) return close();
+      const hd = e.target.closest('[data-aip-hand]'); if (hd) { const tq = hd.closest('[data-hq]')?.dataset.hq; return handoff(hd.dataset.aipHand, tq || ta.value, !!tq); }
       if (e.target.closest('[data-aip-new]')) { ctrl?.abort(); turns = []; R = null; empty(); head(); return; }
       if (e.target.closest('[data-aip-setup]')) return chrome.runtime.openOptionsPage();
     });
     $('#aiBtn').addEventListener('click', () => (box.hidden ? open() : close()));
-    return { open, close, ask, toggle: () => (box.hidden ? open() : close()), isOpen: () => !box.hidden };
+    return { open, close, ask, handoff, toggle: () => (box.hidden ? open() : close()), isOpen: () => !box.hidden };
   })();
   window.__lambdaOS.setAISettings = s => { SET = s; }; // preview/testing hook
 

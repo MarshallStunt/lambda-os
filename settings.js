@@ -154,6 +154,7 @@ function fill(s) {
   paintAlerts(s.alerts, s.brief);
   $('refreshMinutes').value = String(s.refreshMinutes ?? 10);
   $('appTabs').checked = s.appTabs !== false;
+  $('news').checked = s.news !== false;
   ai = JSON.parse(JSON.stringify(s.ai)); $('aiProvider').value = ai.provider; shownProvider = ai.provider; paintAI();
   paintPrivacy(s.privacy);
   look = window.LambdaLook.current(); paintLook(); // theme.js keeps this in sync with the saved settings
@@ -190,6 +191,7 @@ function read() {
   s.ai = readAI(); s.privacy = readPrivacy(); s.look = look; s.alerts = readAlerts(); s.brief = readBrief();
   s.refreshMinutes = Number($('refreshMinutes').value);
   s.appTabs = $('appTabs').checked;
+  s.news = $('news').checked;
   s.smart = { mode: document.querySelector('input[name=smartMode]:checked')?.value === 'ai' ? 'ai' : 'local', slack: $('smartSlack').checked };
   document.querySelectorAll('[data-smart]').forEach(c => (s.smart[c.dataset.smart] = c.checked));
   return s;
@@ -245,7 +247,7 @@ async function importBackup(file) {
   try { data = JSON.parse(await file.text()); } catch { return say('<p class="st-critical">That file isn’t a Lambda OS backup (not valid JSON).</p>'); }
   if (data?.app !== 'lambda-os' || typeof data.settings !== 'object') return say('<p class="st-critical">That file isn’t a Lambda OS backup.</p>');
   const { settings: current = {} } = await chrome.storage.local.get('settings');
-  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'smart']);
+  const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'news', 'smart']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
   settings.ai = { ...(settings.ai || current.ai || {}), keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser (even if the backup has no AI section)
@@ -306,6 +308,7 @@ const typing = el => el.matches('input[type=text], input[type=url], input[type=e
 document.addEventListener('input', e => { if (skip(e.target)) return; clearTimeout(autoT); autoT = setTimeout(autoSave, typing(e.target) ? 700 : 0); });
 document.addEventListener('change', e => { if (skip(e.target)) return; autoSave(); });
 window.addEventListener('beforeunload', () => { if (autoT) autoSave(); }); // a pending edit is saved even if you close the page right away
+$('news').addEventListener('change', async () => { await save({ quiet: true }); say(`<p class="st-good">Saved. ${$('news').checked ? 'The News tab shows' : 'The News tab is hidden'} on new tabs.</p>`); });
 $('appTabs').addEventListener('change', async () => { await save({ quiet: true }); say($('appTabs').checked ? '<p class="st-good">Saved. Lambda OS keeps its own pinned tabs when you don\'t have the app open.</p>' : '<p class="st-good">Saved. Lambda OS closed its pinned tabs and only reads from tabs you open.</p>'); });
 $('refreshMinutes').addEventListener('change', async () => { await save({ quiet: true }); say(`<p class="st-good">Saved. Data now refreshes ${$('refreshMinutes').value === '0' ? 'only when you click ↻' : `every ${$('refreshMinutes').selectedOptions[0].text.replace(/^Every /, '').replace(/ \(default\)/, '')}`}.</p>`); });
 $('open').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('newtab.html') }));

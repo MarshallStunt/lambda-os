@@ -374,7 +374,12 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 .fmeta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
 .srctag { display: inline-block; font: 600 10px/1.6 var(--font); letter-spacing: .02em; padding: 0 7px; border-radius: 99px; color: #fff; vertical-align: 1px; }
 .srctag.src-mail { color: #0b0b0b; }
+.srctag.src-news { background: var(--accent); color: #fff; }
+.qitem.news .qsum { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.qitem.news .qkey { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qitem.news .news-sum { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
 .qitem.inbox { grid-template-columns: 1fr auto; }
+.qitem.news { grid-template-columns: 1fr auto; align-items: start; }
 .feed-filters { flex-wrap: wrap; justify-content: flex-end; }
 /* real map imagery */
 .globegl { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -557,7 +562,10 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 .aip-msg .ai-text code { font: 12px var(--mono); background: var(--panel-hi); padding: 0 4px; border-radius: 4px; }
 .aip-msg .aih { font-weight: 600; margin: 8px 0 4px; }
 .aip-meta { margin-top: 4px; }
-.aip-tools { display: flex; gap: 6px; margin-top: 6px; } .aip-tools .chip { cursor: pointer; }
+.aip-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; } .aip-tools .chip { cursor: pointer; }
+.aip-hand-row { justify-content: center; margin: 4px 0 12px; }
+.aip-paste { width: 100%; margin-top: 8px; resize: vertical; min-height: 40px; padding: 8px 10px; border-radius: 10px; border: 1px dashed var(--line-hi); background: var(--field); color: var(--text); font: 12.5px var(--font); outline: none; }
+.aip-paste:focus { border-color: var(--accent); border-style: solid; }
 .aip-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
 .aip-input textarea { flex: 1; resize: none; min-height: 42px; max-height: 140px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line-hi); background: var(--field); color: var(--text); font: 13px var(--font); outline: none; }
 .aip-input textarea:focus { border-color: var(--accent); }
@@ -668,15 +676,20 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; } a.bt
 .agenda-panel .agenda { max-height: 132px; overflow-y: auto; }
 .queue-panel { min-height: 260px; }
 .queue-panel .panel-head { padding: 10px 10px 6px; }
-.qtabs { display: grid; grid-template-columns: repeat(4, auto); gap: 3px; width: 100%; padding: 3px; border-radius: 10px; background: var(--panel-hi); }
+.qtabs { display: grid; grid-template-columns: repeat(5, auto); gap: 3px; width: 100%; padding: 3px; border-radius: 10px; background: var(--panel-hi); }
 .qtabs button { padding: 7px 5px; text-align: center; letter-spacing: 0; text-transform: none; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qtabs b { display: inline-block; min-width: 16px; margin-left: 3px; padding: 0 4px; border-radius: 99px; font-size: 10px; line-height: 15px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .qtabs b:empty { display: none; }
 .queue-panel #queueCount { font-size: 11px; padding: 0 4px; }
 @media (min-width: 1281px) { .layout { grid-template-columns: 350px minmax(0, 1fr) 340px; } }
 .qtabs { display: flex; }
-.qtabs button { flex: 1 1 auto; padding: 7px 4px; overflow: visible; text-overflow: clip; }
-.qtabs b { margin-left: 2px; }
+.qtabs button { flex: 1 1 auto; padding: 7px 3px; overflow: visible; text-overflow: clip; font-size: 11px; }
+.qtabs b { margin-left: 2px; padding: 0 3px; min-width: 14px; }
+.qtabs .nicon { display: none; }
+/* Five tabs: tight, plain counts; in the narrow left column (≤1280px) News becomes 📰 */
+.qtabs { gap: 1px; padding: 2px; } .qtabs button { padding: 6px 1px; font-size: 10.5px; letter-spacing: -.01em; }
+.qtabs b { min-width: 0; margin-left: 2px; padding: 0 2px; background: none; }
+@media (max-width: 1280px) { .queue-panel .panel-head { padding-left: 5px; padding-right: 5px; } .qtabs .ntxt { display: none; } .qtabs .nicon { display: inline; } }
 
 /* Smart processing (optional AI) */
 .smart-tag { flex-shrink: 0; font-size: 11px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--text-2); cursor: help; white-space: nowrap; }

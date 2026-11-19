@@ -36,12 +36,13 @@ Only **Jira and NetBox** are required. An app you don't have stays out of the wa
 ## Features
 - **Fleet globe**: satellite imagery (Esri) with a street-level map when you zoom in; site colors from tickets and Grafana health; ◎ Exact location; Dots mode works offline.
 - **Site cards**: tickets, spares, NetSuite material, Atium builds and purchase orders, Grafana health, Yard totals, volunteer requests.
-- **Your tickets** (left): SLA countdown, ⚠ Grafana alerts, Yard state, ⚠ In prod / 🔒 Locked filter; plus Tracking (☆ deployments), Inbox (Slack + Gmail) and Volunteer tabs.
+- **Your tickets** (left): SLA countdown, ⚠ Grafana alerts, Yard state, ⚠ In prod / 🔒 Locked filter; plus Tracking (☆ deployments), Inbox (Slack + Gmail), Volunteer and News tabs.
+- **News**: the newest posts on the Lambda blog, read from its public RSS feed every 2 hours (no sign-in, no AI); the badge counts new posts. If the feed can't be read, the last posts stay with a note. Hide it in Settings → Data.
 - **Six top cards** for everyone: open tickets, SLA breached, deployments, GPUs, devices, waiting parts, each with ▲/▼ vs yesterday and a 30-day chart.
 - **Views**: Fleet (**F**), Second brain (**B**, 2D/3D graph of everything linked, including Yard clusters), Deployments (**D**, timeline by project), Health (**H**, every site's leaks, breakers, PDUs, power shelves, hardware faults, heat, network). **E** enlarges the middle panel.
 - **📍 Site picker**: all sites, your sites (from your Jira history, deployments and ★ stars) or any you tick. Each view also has its own All sites / Your sites switch.
 - **Live feed**: Jira, NetBox, Grafana, Atium, NetSuite, Slack and Gmail events; click one for its details and links.
-- **⌘K search** (or **/**) for sites, hosts, tickets, deployments, parts and questions; **✨ Ask AI** (⌘J) with Claude, OpenAI, Gemini or a local model, using your key and privacy masking (names, hosts, serials… hidden before sending).
+- **⌘K search** (or **/**) for sites, hosts, tickets, deployments, parts and questions; **✨ Ask AI** (⌘J) with Claude, OpenAI, Gemini or a local model, using your key and privacy masking (names, hosts, serials… hidden before sending). No key? **Ask in Claude ↗ / Ask in ChatGPT ↗** copies the question and the same masked data, opens claude.ai or chatgpt.com for you to paste and send, and pasting the answer back shows real names and links.
 - **Alerts and daily brief**: SLA, new assignments, tracked deployments, parts on hand, Atium milestones and late POs, Grafana hardware alerts, leaks and breakers, Yard warnings (host still in production, locked by someone else, still locked by you), and apps that stop updating.
 - **Smart processing** (optional AI): fills in only what the rules can't decide (volunteer requests, unmatched builds/shipments/meetings, renamed Jira fields, new statuses and alert names), once, and remembers the answer.
 - **Lambda Rackside**: open a ticket in Rackside from its details, and Rackside can open tickets here.
@@ -78,6 +79,7 @@ To release:
 | `background.js` | Background refresh, alerts, the brief, fresh-install cleanup, Rackside link |
 | `settings.html/.js` | Settings: sources, appearance, AI, privacy, alerts, backup |
 | `updates.js` | New-version check |
+| `news.js` | Lambda blog posts for the News tab (RSS) |
 | `theme.js`, `world.js`, `icons/` | Theme before first paint, land outlines (Natural Earth), icons |
 
 ## How the data maps
