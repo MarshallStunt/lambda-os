@@ -226,6 +226,7 @@
       if (st.ok) return { key, name, state: 'ok', title: `${name}: live, using your sign-in` };
       if (st.access) return { key, name, state: 'error', access: st.access, title: st.error, since: st.failingSince || null };
       return { key, name, state: data ? 'stale' : 'error', url: st.login, since: st.failingSince || null, staleAt: data ? st.staleAt || null : null, error: st.error, auth: !!st.auth,
+        core: key === 'netbox' || key === 'jira', // the rest of the page depends on these two; the other apps are optional
         title: `${st.error}${data && st.staleAt ? ` Showing data from ${new Date(st.staleAt).toLocaleString()}.` : ''}${st.auth ? ' Click to sign in.' : ''}` };
     };
     const D = finish({

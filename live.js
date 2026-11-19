@@ -964,7 +964,13 @@ const LambdaLive = (() => {
       const on = k => s.sources[k] !== false;
       const off = Promise.resolve(undefined);
       // Off: undefined. Resting (quiet, tried within the day): SKIP, so it isn't even started. Otherwise: read it.
-      const go = (k, f) => !on(k) ? off : resting(k) ? Promise.resolve(SKIP) : f();
+      // A tab-related hiccup (tab still loading, page didn't answer) gets one more try after a short pause before the
+      // source counts as failing; sign-in, access and paused problems don't (only you can fix those).
+      const RETRY = /tab|loading|didn.t answer|did not answer|timed? ?out|starting/i;
+      const once = async f => { try { return await f(); } catch (e) {
+        if (e?.auth || e?.access || e?.paused || !RETRY.test(String(e?.message || e))) throw e;
+        await new Promise(r => setTimeout(r, 2500)); return f(); } };
+      const go = (k, f) => !on(k) ? off : resting(k) ? Promise.resolve(SKIP) : once(f);
       const val = v => v === SKIP ? null : v;
       const nbP = go('netbox', () => netbox(s, progress));
       const jrP = go('jira', () => jira(s, progress));

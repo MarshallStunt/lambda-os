@@ -863,3 +863,27 @@ input.bad { border-color: var(--critical) !important; box-shadow: 0 0 0 1px var(
 /* Second brain: node types on the first line, All/Your sites · Fit · 2D/3D on the next */
 .stage-legend:has(.lbreak) { flex-wrap: wrap; overflow: visible; row-gap: 6px; }
 .stage-legend .lbreak { flex-basis: 100%; height: 0; padding: 0; margin: 0; }
+/* "Needs you" bar: only when an app needs something only you can do */
+.needbar { margin: 6px 24px 0; padding: 8px 12px; border-radius: 12px; border: 1px solid rgba(250,178,25,.45); background: rgba(250,178,25,.08); display: flex; flex-direction: column; gap: 6px; }
+.needbar[hidden] { display: none; }
+.needbar.flash { animation: nbflash 1.2s ease 1; }
+@keyframes nbflash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px rgba(250,178,25,.45); } }
+.nb-head { font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--warning); }
+.nb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.nb-icon { font-size: 14px; }
+.nb-text { flex: 1 1 260px; min-width: 0; }
+.nb-text u { text-decoration: underline dotted; cursor: help; }
+.nb-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.nb-btns .btn { padding: 4px 10px; font-size: 12px; }
+.nb-btns .btn.ghost { background: none; border-color: transparent; color: var(--text-2); }
+.source-pill.attn { cursor: pointer; }
+.source-pill.attn.pulse { animation: pillpulse 2.4s ease-in-out infinite; }
+@keyframes pillpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(250,178,25,0); } 50% { box-shadow: 0 0 0 4px rgba(250,178,25,.28); } }
+.source-pill.old { cursor: pointer; color: var(--text-2); border-style: dashed; }
+.source-pill.old i { background: var(--muted) !important; box-shadow: none !important; }
+html[data-motion="reduced"] .source-pill.attn.pulse, html[data-motion="reduced"] .needbar.flash { animation: none; }
+@media (prefers-reduced-motion: reduce) { .source-pill.attn.pulse, .needbar.flash { animation: none; } }
+/* Tour: which apps do you use? */
+.tour-apps { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 13px; }
+.tour-apps label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.tour-apps label.core { color: var(--text-2); }

@@ -184,33 +184,88 @@ LambdaData.ready.then(D => {
   badge.textContent = D.MODE === 'live' ? 'LIVE' : 'DEMO DATA';
   badge.classList.toggle('live', D.MODE === 'live');
   badge.title = D.MODE === 'live' ? 'Live NetBox and Jira data, using your own sign-ins' : (D.NOTE || 'Demo data. Switch to live in Settings.');
-  // Healthy sources are just dots (name on hover); only sources that need you get a labeled, clickable pill.
-  const needsYou = s => s.access || s.state === 'error' || s.state === 'stale';
-  const pillLabel = s => s.access ? `${s.name} · allow` : s.auth ? `${s.name} · sign in` : s.state === 'stale' ? `${s.name} · stale` : `${s.name} · sign in`; // a sign-in problem says so, even with older data on screen
-  // Every data source by name in the status strip; the ones that need you say why and are clickable.
-  // (AI isn't listed here: its status lives in the ✨ Ask AI panel.)
-  // One quiet summary for the sources that are fine ("● 8 live", names on hover); each one that needs you gets its own
-  // clickable pill. (The Live feed's filters are where the source names live.)
-  {
-    const all = D.SOURCES.filter(s => s.key !== 'claude'), fine = all.filter(s => !needsYou(s));
-    const ok = fine.filter(s => s.state === 'ok'), wait = fine.filter(s => s.state === 'wait'), off = fine.filter(s => s.state === 'off'), demo = fine.filter(s => s.state === 'demo'), na = fine.filter(s => s.state === 'na');
-    const word = s => s.state === 'ok' ? 'live' : s.state === 'off' ? 'off (Settings)' : s.state === 'demo' ? 'demo data' : s.state === 'na' ? 'not available for your account' : 'loading';
-    const parts = [ok.length && `${ok.length} live`, demo.length && 'demo data', wait.length && `${wait.length} loading`, off.length && `${off.length} off`, na.length && `${na.length} not available`].filter(Boolean);
-    const summary = fine.length ? `<span class="source-pill ${ok.length ? 'ok' : demo.length ? 'demo' : 'wait'} sum" tabindex="0" title="${esc(fine.map(s => `${s.name}: ${word(s)}`).join('\n'))}"><i></i>${fine.length} sources · ${parts.join(' · ')}</span>` : '';
-    $('#sources').innerHTML = all.filter(needsYou).map(s => `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''}" data-key="${s.key}" data-src-url="${esc(s.url || '')}" title="${esc(s.title)}"><i></i>${esc(pillLabel(s))}</button>`).join('') + summary;
+  /* Sources, and how loudly each one asks for you:
+     • attention: only you can fix it (allow access, sign in), or Jira / NetBox (the core) are down → the "needs you" bar
+       under the top bar (Sign in · I don't have it · Later) and a pulsing pill;
+     • old: an optional app that hasn't updated for 30+ minutes for another reason → a quiet grey pill (still retried);
+     • retrying: failing for under 30 minutes → just counted in the summary (Lambda OS retries it, often fixing it alone).
+     An app you've never had stays quiet ("not available") and never shows in the bar. */
+  if (D.MODE !== 'live' && location.hash === '#needs') { // preview of the bar with demo data
+    const f = (k, o) => Object.assign(D.SOURCES.find(s => s.key === k) || {}, o);
+    f('slack', { state: 'stale', auth: true, url: 'https://app.slack.com/', since: Date.now() - 50 * 60e3, staleAt: Date.now() - 2 * 3600e3, error: 'Not signed in to Slack.' });
+    f('grafana', { state: 'stale', auth: false, since: Date.now() - 45 * 60e3, staleAt: Date.now() - 70 * 60e3, error: 'Grafana: the pinned tab did not answer.' });
   }
+  const failingMin = s => s.since ? (Date.now() - s.since) / 60e3 : 0;
+  const broken = s => s.state === 'error' || s.state === 'stale';
+  const attention = s => !!s.access || (broken(s) && (s.auth || s.core));
+  const oldData = s => !attention(s) && broken(s) && failingMin(s) >= 30;
+  const needsYou = s => attention(s) || oldData(s);
+  const ago = t => t ? (rel(t) === 'now' ? 'just now' : `${rel(t)} ago`) : '';
+  const pillLabel = s => s.access ? `${s.name} · allow` : s.auth ? `🔑 ${s.name} · sign in` : s.core ? `${s.name} · not connected`
+    : s.staleAt ? `${s.name} · old data ${rel(s.staleAt)}` : `${s.name} · not updating`;
+  const LATER = 'lambdaos-later', today = LambdaAlerts.dayKey(Date.now());
+  const laterMap = () => { try { return JSON.parse(localStorage.getItem(LATER)) || {}; } catch { return {}; } };
+  const isLater = k => laterMap()[k] === today;
+  const setLater = (k, on) => { const m = laterMap(); if (on) m[k] = today; else delete m[k]; try { localStorage.setItem(LATER, JSON.stringify(m)); } catch { /* per-viewer convenience */ } };
+  const ALLSRC = D.SOURCES.filter(s => s.key !== 'claude');
+  const shown = new Set(); // sources you clicked: in the bar even if they're quiet or set to Later
+  const needBar = $('#needBar') || (() => { const b = Object.assign(document.createElement('div'), { id: 'needBar', className: 'needbar', hidden: true }); b.setAttribute('role', 'region'); b.setAttribute('aria-label', 'Apps that need you'); $('.statusbar').before(b); return b; })();
+  const barRow = s => {
+    const why = s.access ? `${s.name} needs your OK to read it` : s.auth ? `${s.name} needs you to sign in` : s.core ? `${s.name} isn't connected` : `${s.name} isn't updating`;
+    const data = s.staleAt ? `showing data from ${ago(s.staleAt)}` : 'nothing loaded from it yet';
+    const main = s.access ? `<button class="btn primary" data-nb="allow" data-key="${s.key}">Allow</button>`
+      : s.url ? `<button class="btn primary" data-nb="signin" data-key="${s.key}">Sign in</button>`
+      : `<button class="btn primary" data-nb="retry" data-key="${s.key}">Try again</button>`;
+    return `<div class="nb-row"><span class="nb-icon" aria-hidden="true">${s.access ? '🔓' : s.auth ? '🔑' : '⚠'}</span>
+      <span class="nb-text"><b>${esc(why)}</b> <span class="muted">· ${data}${!s.auth && !s.access && s.error ? ` · <u title="${esc(s.error)}">why?</u>` : ''}</span></span>
+      <span class="nb-btns">${main}${s.core ? '' : `<button class="btn" data-nb="off" data-key="${s.key}" title="Turns ${esc(s.name)} off for you: no pill, no pinned tab, no alerts. Turn it back on in Settings → Sources.">I don't have ${esc(s.name)}</button>`}<button class="btn ghost" data-nb="later" data-key="${s.key}" title="Hide this until tomorrow">Later</button></span></div>`;
+  };
+  function renderSources() {
+    const fine = ALLSRC.filter(s => !needsYou(s));
+    const ok = fine.filter(s => s.state === 'ok'), wait = fine.filter(s => s.state === 'wait'), off = fine.filter(s => s.state === 'off'), demo = fine.filter(s => s.state === 'demo'),
+      na = fine.filter(s => s.state === 'na'), retry = fine.filter(broken);
+    const word = s => s.state === 'ok' ? 'live' : s.state === 'off' ? 'off (Settings)' : s.state === 'demo' ? 'demo data' : s.state === 'na' ? 'not available for your account'
+      : broken(s) ? `retrying (since ${LambdaAlerts.clock(s.since || Date.now())})` : 'loading';
+    const parts = [ok.length && `${ok.length} live`, demo.length && 'demo data', retry.length && `${retry.length} retrying`, wait.length && `${wait.length} loading`, off.length && `${off.length} off`, na.length && `${na.length} not available`].filter(Boolean);
+    const summary = fine.length ? `<span class="source-pill ${ok.length ? 'ok' : demo.length ? 'demo' : 'wait'} sum" tabindex="0" title="${esc(fine.map(s => `${s.name}: ${word(s)}`).join('\n'))}"><i></i>${fine.length} sources · ${parts.join(' · ')}</span>` : '';
+    $('#sources').innerHTML = ALLSRC.filter(needsYou).map(s => `<button class="source-pill ${s.state} ${s.access ? 'grant' : ''} ${attention(s) ? `attn ${isLater(s.key) ? '' : 'pulse'}` : 'old'}" data-key="${s.key}" title="${esc(s.title || s.error || '')}${attention(s) ? '' : ' Lambda OS keeps retrying.'} Click for options."><i></i>${esc(pillLabel(s))}</button>`).join('') + summary;
+    const rows = ALLSRC.filter(s => needsYou(s) && ((attention(s) && !isLater(s.key)) || shown.has(s.key)));
+    needBar.hidden = !rows.length || (D.MODE !== 'live' && location.hash !== '#needs');
+    needBar.innerHTML = (rows.length > 1 ? `<div class="nb-head">${rows.length} apps need you</div>` : '') + rows.map(barRow).join('');
+  }
+  renderSources();
+  const allowAccess = async () => {
+    // Must be the first await after the click so Chrome treats it as a user gesture.
+    const ok = await chrome.permissions.request({ origins: [...new Set(D.SOURCES.filter(x => x.access).flatMap(x => x.access))] });
+    if (!ok) return toast('Access not granted, so those sources stay off.');
+    toast('Access granted. Loading…'); updated.hidden = false; updated.textContent = 'Refreshing…';
+    await LambdaLive.refresh(m => (updated.textContent = m));
+    location.reload();
+  };
+  const checkAgain = async () => { updated.hidden = false; updated.textContent = 'Checking…'; await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }); location.reload(); };
+  let signingIn = false; // after "Sign in", coming back to this tab checks again by itself
+  addEventListener('focus', () => { if (signingIn && isExt) { signingIn = false; checkAgain(); } });
   $('#sources').addEventListener('click', async e => {
-    const b = e.target.closest('.source-pill'); if (!b) return;
-    const needs = D.SOURCES.filter(x => x.access).flatMap(x => x.access);
-    if (D.SOURCES.find(x => x.key === b.dataset.key)?.access && isExt) {
-      // Must be the first await after the click so Chrome treats it as a user gesture.
-      const ok = await chrome.permissions.request({ origins: [...new Set(needs)] });
-      if (!ok) return toast('Access not granted, so those sources stay off.');
-      toast('Access granted. Loading…'); updated.hidden = false; updated.textContent = 'Refreshing…';
-      await LambdaLive.refresh(m => (updated.textContent = m));
-      return location.reload();
+    const b = e.target.closest('.source-pill[data-key]'); if (!b) return;
+    const s = D.SOURCES.find(x => x.key === b.dataset.key);
+    if (s?.access && isExt) return allowAccess();
+    shown.add(b.dataset.key); setLater(b.dataset.key, false); renderSources();
+    needBar.classList.remove('flash'); void needBar.offsetWidth; needBar.classList.add('flash');
+  });
+  needBar.addEventListener('click', async e => {
+    const b = e.target.closest('[data-nb]'); if (!b) return;
+    const k = b.dataset.key, s = D.SOURCES.find(x => x.key === k), a = b.dataset.nb;
+    if (a === 'allow') return isExt ? allowAccess() : toast('Only in the extension.');
+    if (a === 'later') { setLater(k, true); shown.delete(k); return renderSources(); }
+    if (!isExt) return toast('Only in the extension (this is a preview).');
+    if (a === 'signin') { signingIn = true; window.open(s.url, '_blank'); return toast(`Sign in to ${s.name} there, then come back: Lambda OS checks again by itself.`); }
+    if (a === 'retry') return checkAgain();
+    if (a === 'off') {
+      const { settings: st = {} } = await chrome.storage.local.get('settings');
+      await chrome.storage.local.set({ settings: { ...st, sources: { ...(st.sources || {}), [k]: false } } });
+      toast(`${s.name} is off for you. Turn it back on in Settings → Sources.`);
+      setTimeout(() => location.reload(), 900);
     }
-    if (b.dataset.srcUrl) window.open(b.dataset.srcUrl, '_blank');
   });
   const updated = $('#updated');
   let SET_REFRESH = null;
@@ -2753,13 +2808,25 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ['.stage-head .tabs', 'Four views', 'Fleet globe (F), Second brain (B), Deployments (D) and Health (H). E makes the middle bigger, Esc goes back. Each view can show All sites or Your sites.'],
       ['#cmdTrigger', 'Search or ask', `Find any site, device, ticket, deployment or part (${KEY('K')}), or ask a question. ✨ Ask AI (${KEY('J')}) answers from the loaded data.`],
     ];
+    // First stop (live only): which apps you use, so the ones you don't have never ask you to sign in.
+    const APPS = ALLSRC.filter(x => x.key !== 'claude'), CORE = x => x.key === 'netbox' || x.key === 'jira';
+    if (D.MODE === 'live' && isExt) STEPS.unshift(['.statusbar', 'Which apps do you use?', 'Untick any you don\'t have an account for: Lambda OS won\'t read them or ask you to sign in. You can change this later in Settings → Sources.',
+      `<div class="tour-apps">${APPS.map(x => `<label class="${CORE(x) ? 'core' : ''}"><input type="checkbox" data-app="${x.key}" ${x.state !== 'off' && x.state !== 'na' ? 'checked' : ''} ${CORE(x) ? 'disabled title="Lambda OS needs Jira and NetBox"' : ''}> ${esc(x.name)}</label>`).join('')}</div>`]);
+    let appsChanged = false;
+    async function saveApps() {
+      const boxes = [...(box?.querySelectorAll('[data-app]') || [])]; if (!boxes.length) return;
+      const { settings: st = {} } = await chrome.storage.local.get('settings'), src = { ...(st.sources || {}) };
+      for (const c of boxes) if (!c.disabled && (src[c.dataset.app] !== false) !== c.checked) { src[c.dataset.app] = c.checked; appsChanged = true; }
+      if (appsChanged) await chrome.storage.local.set({ settings: { ...st, sources: src } });
+    }
     let i = 0, box = null;
-    const end = () => { box?.remove(); box = null; try { localStorage.setItem(KEYT, '1'); } catch { /* ignore */ } document.removeEventListener('keydown', onKey, true); };
-    const onKey = e => { if (!box) return; if (e.key === 'Escape') { e.stopImmediatePropagation(); end(); } else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); go(i + 1); } else if (e.key === 'ArrowLeft') go(i - 1); };
+    const end = () => { box?.remove(); box = null; try { localStorage.setItem(KEYT, '1'); } catch { /* ignore */ } document.removeEventListener('keydown', onKey, true);
+      if (appsChanged) { toast('Saved: Lambda OS skips the apps you unticked.'); setTimeout(() => location.reload(), 900); } };
+    const onKey = e => { if (!box) return; if (e.key === 'Escape') { e.stopImmediatePropagation(); end(); } else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); saveApps().then(() => go(i + 1)); } else if (e.key === 'ArrowLeft') go(i - 1); };
     function go(k) {
       if (k >= STEPS.length) return end();
       i = Math.max(0, k);
-      const [sel, title, text] = STEPS[i], el = $(sel);
+      const [sel, title, text, extra] = STEPS[i], el = $(sel);
       if (!el || !el.getClientRects().length) return go(i + 1); // hidden at this width: skip that stop
       const r = el.getBoundingClientRect(), pad = 6;
       box ||= Object.assign(document.createElement('div'), { className: 'tour', role: 'dialog' });
@@ -2768,11 +2835,11 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const below = r.bottom + 200 < innerHeight, left = Math.max(12, Math.min(r.left, innerWidth - 372));
       box.innerHTML = `<div class="tour-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>
         <div class="tour-card" style="left:${left}px;${below ? `top:${r.bottom + 14}px` : `bottom:${innerHeight - r.top + 14}px`}">
-          <small class="muted">${i + 1} of ${STEPS.length}</small><h3>${esc(title)}</h3><p>${esc(text)}</p>
+          <small class="muted">${i + 1} of ${STEPS.length}</small><h3>${esc(title)}</h3><p>${esc(text)}</p>${extra || ''}
           <div class="tour-btns"><button class="btn" data-tour="skip">Skip tour</button><span>${i ? '<button class="btn" data-tour="back">Back</button>' : ''}<button class="btn primary" data-tour="next">${i === STEPS.length - 1 ? 'Done' : 'Next'}</button></span></div></div>`;
       box.querySelector('[data-tour=next]').focus();
     }
-    document.addEventListener('click', e => { const b = e.target.closest('[data-tour]'); if (!b) return; const a = b.dataset.tour; a === 'next' ? go(i + 1) : a === 'back' ? go(i - 1) : end(); });
+    document.addEventListener('click', async e => { const b = e.target.closest('[data-tour]'); if (!b) return; const a = b.dataset.tour; if (a !== 'back') await saveApps(); a === 'next' ? go(i + 1) : a === 'back' ? go(i - 1) : end(); });
     addEventListener('resize', () => { if (box) go(i); });
     let seen = false; try { seen = localStorage.getItem(KEYT) === '1'; } catch { /* ignore */ }
     if (location.hash === '#tour' || !seen) setTimeout(() => { document.addEventListener('keydown', onKey, true); go(0); if (location.hash === '#tour') history.replaceState(null, '', location.pathname); }, 900);
