@@ -247,9 +247,15 @@ LambdaData.ready.then(D => {
   // you used "Sign in" here or signed in some other way. Right away after using "Sign in".
   let signingIn = false, lastAuthCheck = Date.now();
   const recheck = () => {
-    if (!isExt || D.MODE !== 'live' || !ALLSRC.some(x => x.auth && broken(x))) return;
+    const waiting = ALLSRC.filter(x => x.auth && broken(x) && (signingIn || !isLater(x.key)));
+    if (!isExt || D.MODE !== 'live' || !waiting.length) return;
     if (!signingIn && Date.now() - lastAuthCheck < 60e3) return;
-    signingIn = false; lastAuthCheck = Date.now(); checkAgain();
+    signingIn = false; lastAuthCheck = Date.now();
+    updated.hidden = false; updated.textContent = 'Checking sign-ins…';
+    LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).then(snap => {
+      if (waiting.some(x => snap?.sources?.[x.key]?.ok)) return location.reload(); // signed in now: show it
+      paintUpdated(); toast(`Still not signed in to ${waiting.map(x => x.name).join(', ')}.`);
+    }).catch(() => paintUpdated());
   };
   addEventListener('focus', recheck);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') recheck(); });
