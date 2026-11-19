@@ -222,7 +222,7 @@
       if (st?.off) return { key, name, state: 'off', title: `${name} is turned off in Settings` };
       if (st?.quiet) return { key, name, state: 'na', title: `${name}: not available for your account (never signed in). Lambda OS checks again once a day; sign in to ${name} any time, or use Settings → Check connections.` };
       // A source added in an update (or switched on) has no result until the next refresh finishes.
-      if (!st) return { key, name, state: 'wait', title: `${name}: not loaded yet; it appears after the next refresh (or click ↻ in the top bar)` };
+      if (!st) return { key, name, state: 'wait', title: snap.partial ? `${name}: still loading; it appears in a moment` : `${name}: not loaded yet; it appears after the next refresh (or click ↻ in the top bar)` };
       if (st.ok) return { key, name, state: 'ok', title: `${name}: live, using your sign-in` };
       if (st.access) return { key, name, state: 'error', access: st.access, title: st.error, since: st.failingSince || null };
       return { key, name, state: data ? 'stale' : 'error', url: st.login, since: st.failingSince || null, staleAt: data ? st.staleAt || null : null, error: st.error, auth: !!st.auth,
@@ -230,7 +230,7 @@
         title: `${st.error}${data && st.staleAt ? ` Showing data from ${new Date(st.staleAt).toLocaleString()}.` : ''}${st.auth ? ' Click to sign in.' : ''}` };
     };
     const D = finish({
-      MODE: 'live', AT: snap.at,
+      MODE: 'live', AT: snap.at, PARTIAL: !!snap.partial,
       SOURCES: [src('netbox', 'NetBox'), src('jira', 'Jira'), src('slack', 'Slack'), src('netsuite', 'NetSuite'), src('gmail', 'Gmail'), src('calendar', 'Calendar'), src('atium', 'Atium'), src('grafana', 'Grafana'), src('yard', 'Yard'),
         { key: 'claude', name: 'Claude', state: 'off', title: 'Not connected yet: needs an org-approved API path' }],
       ME: { name: jr?.me?.name || '', email: jr?.me?.email || '' },
@@ -903,7 +903,8 @@
       return buildLive(snapshot);
     }
     bootStatus('Connecting to NetBox and Jira with your browser sign-ins…');
-    const fresh = await LambdaLive.refresh(bootStatus);
+    // The dashboard shows as soon as NetBox and Jira are in; the other apps keep loading and the page picks them up.
+    const fresh = await new Promise((res, rej) => { LambdaLive.refresh(bootStatus, { onCore: res }).then(res, rej); });
     if (!fresh.nb && !fresh.jira) await connectHelp(fresh);
     return buildLive(fresh);
   }

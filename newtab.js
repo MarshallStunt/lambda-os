@@ -279,7 +279,7 @@ LambdaData.ready.then(D => {
     updated.hidden = false;
     const every = SET_REFRESH ? ` · every ${SET_REFRESH >= 60 ? '1h' : SET_REFRESH + 'm'}` : SET_REFRESH === 0 ? ' · manual' : '';
     // Compact in the top bar ("↻ 3m"); the full story is in the tooltip.
-    updated.innerHTML = fresh ? '<b>↻ New</b>' : `↻ ${rel(D.AT)}`;
+    updated.innerHTML = fresh ? '<b>↻ New</b>' : D.PARTIAL ? '↻ loading other apps…' : `↻ ${rel(D.AT)}`;
     updated.title = fresh ? 'New data is ready. It loads by itself once you’ve been idle for a minute, or click to load it now.'
       : `Updated ${rel(D.AT)}${rel(D.AT) === 'now' ? '' : ' ago'}${every.replace(' · ', ' · refreshes ')}. Click to refresh now (change the interval in Settings → Data).`;
     updated.classList.toggle('fresh', !!fresh);
@@ -369,12 +369,13 @@ LambdaData.ready.then(D => {
   const busyNow = () => !$('#palette').hidden || !$('#drawer').hidden || !$('#siteCard').hidden || !$('#brief').hidden || !$('#aiPanel').hidden || !$('#alertPop').hidden || !$('#sitePop').hidden;
   function tryReload() {
     if (!pendingReload) return;
-    if (document.visibilityState === 'hidden' || (!busyNow() && Date.now() - lastActivity > 60000)) location.reload();
+    // After a first load (only NetBox + Jira shown), the rest comes in as soon as you pause for a few seconds.
+    if (document.visibilityState === 'hidden' || (!busyNow() && Date.now() - lastActivity > (D.PARTIAL ? 5000 : 60000))) location.reload();
   }
   function newData() { pendingReload = true; paintUpdated(true); tryReload(); }
   window.addEventListener('lambda:snapshot', newData);
   if (isExt) chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.snapshot?.newValue && ch.snapshot.newValue.at > D.AT) newData(); });
-  setInterval(tryReload, 15000);
+  setInterval(tryReload, D.PARTIAL ? 3000 : 15000);
   document.addEventListener('visibilitychange', tryReload);
 
   function tickClock() {

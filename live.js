@@ -984,10 +984,9 @@ const LambdaLive = (() => {
         grafana: go('grafana', () => grafana(s)),
         yard: go('yard', () => jrP.catch(() => null).then(j => yard(s, val(j)))), // needs the ticket hosts first
       };
-      const settled = await Promise.allSettled(Object.values(results));
-      const snapshot = { at: Date.now(), version: 2, sources: {} };
-      Object.keys(results).forEach((k, i) => {
-        const r = settled[i], key = KEYS[k];
+      // Records one source's outcome in a snapshot (shared by the early core snapshot and the full one).
+      const record = (snapshot, k, r) => {
+        const key = KEYS[k];
         if (r.status === 'fulfilled' && r.value === SKIP) { snapshot.sources[k] = prev.sources[k]; snapshot[key] = prev?.[key] || null; return; } // resting quiet source
         if (r.status === 'fulfilled' && r.value === undefined) { snapshot.sources[k] = { off: true, name: NAMES[k] }; snapshot[key] = null; return; }
         if (r.status === 'fulfilled') { snapshot.sources[k] = { ok: true, at: Date.now(), name: NAMES[k], everOk: true }; snapshot[key] = r.value; return; }
@@ -1000,7 +999,17 @@ const LambdaLive = (() => {
         snapshot[key] = prev?.[key] || null; // keep the last good data, shown as stale
         // "Showing data from …" = the last refresh that worked, which stays put while the outage lasts
         if (snapshot[key]) snapshot.sources[k].staleAt = was?.ok ? was.at : (was?.staleAt || prev?.at);
-      });
+      };
+      // First load: hand back NetBox + Jira as soon as they're in, so the dashboard can show while the other apps load
+      // (the full snapshot is saved when everything is done, and the page picks it up).
+      if (opts.onCore) Promise.allSettled([nbP, jrP]).then(([n, j]) => {
+        const snap = { at: Date.now(), version: 2, sources: {}, partial: true };
+        record(snap, 'netbox', n); record(snap, 'jira', j);
+        if (snap.nb || snap.jira) opts.onCore(snap);
+      }).catch(() => {});
+      const settled = await Promise.allSettled(Object.values(results));
+      const snapshot = { at: Date.now(), version: 2, sources: {} };
+      Object.keys(results).forEach((k, i) => record(snapshot, k, settled[i]));
       // Optional AI step on what the rules couldn't settle (see smart.js). Never blocks the data: on any problem the
       // earlier answers are kept and the local rules decide the rest.
       if (typeof LambdaSmart !== 'undefined') {
