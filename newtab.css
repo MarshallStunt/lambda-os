@@ -897,3 +897,8 @@ html[data-motion="reduced"] .source-pill.attn.pulse, html[data-motion="reduced"]
 .boot-app.signin, .boot-app.allow, .boot-app.failed { border-color: rgba(250,178,25,.4); }
 .ba-ico { display: grid; place-items: center; }
 .boot-note { margin-top: 6px; }
+/* Panels whose app is still loading */
+.src-note.loading { list-style: none; display: flex; align-items: center; gap: 6px; padding: 10px 14px; color: var(--text-2); font-size: 12.5px; }
+div.src-note.loading, p.src-note.loading { justify-content: center; padding: 28px 14px; }
+.kpi.loading .kpi-value { opacity: .6; }
+.kpi.loading .spark-wait { display: flex; align-items: center; gap: 4px; }

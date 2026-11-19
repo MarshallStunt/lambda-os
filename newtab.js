@@ -7,6 +7,10 @@ LambdaData.ready.then(D => {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const H = 3600e3;
   const ALLT = () => (D.ALL || D).TICKETS;
+  // An app still loading (first load, or one just switched on): panels say "Loading … from X" instead of "nothing".
+  const srcOf = key => D.SOURCES.find(x => x.key === key);
+  const isLoading = (...keys) => (D.MODE === 'live' || location.hash === '#loading') && keys.some(k => srcOf(k)?.state === 'wait');
+  const loadingLine = (key, what, tag = 'li') => `<${tag} class="src-note loading"><span class="spin-dot"></span>Loading ${esc(what)} from ${esc(srcOf(key)?.name || key)}…</${tag}>`;
   /* "All sites / Your sites" switch in Fleet, Second brain, Deployments and Health. Each view follows the top-bar picker
      until you pick here; then "All sites" really means every site (whatever the picker), "Your sites" means yours, and
      "📍 Picked" goes back to following the picker. Picking at the top resets the views to follow it again. */
@@ -190,6 +194,11 @@ LambdaData.ready.then(D => {
      • old: an optional app that hasn't updated for 30+ minutes for another reason → a quiet grey pill (still retried);
      • retrying: failing for under 30 minutes → just counted in the summary (Lambda OS retries it, often fixing it alone).
      An app you've never had stays quiet ("not available") and never shows in the bar. */
+  if (D.MODE !== 'live' && location.hash === '#loading') { // preview of a first load with demo data
+    for (const k of ['jira', 'calendar', 'grafana', 'slack', 'gmail']) { const x = D.SOURCES.find(s => s.key === k); if (x) x.state = 'wait'; }
+    D.EVENTS = []; D.HEALTH = null; D.DEPLOYMENTS = []; D.TICKETS.length = 0; D.FEED.length = 0; D.MENTIONS = []; D.MAIL = null; D.VOLUNTEER = [];
+    for (const k of D.KPIS || []) if (k.key !== 'devices') { k.num = 0; k.value = '0'; }
+  }
   if (D.MODE !== 'live' && location.hash === '#needs') { // preview of the bar with demo data
     const f = (k, o) => Object.assign(D.SOURCES.find(s => s.key === k) || {}, o);
     f('slack', { state: 'stale', auth: true, url: 'https://app.slack.com/', since: Date.now() - 50 * 60e3, staleAt: Date.now() - 2 * 3600e3, error: 'Not signed in to Slack.' });
@@ -449,8 +458,7 @@ LambdaData.ready.then(D => {
   const DAYMS = 864e5, dayKeyOf = t => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
   const backfill = (key, h) => key === 'open' ? h.open : key === 'breached' ? h.breached : key === 'deps' ? (h.deps ? Object.keys(h.deps).length : undefined) : undefined;
   // DC Ops or Management cards (the switch under the greeting); remembered per person.
-  let kmode = 'ops'; try { kmode = localStorage.getItem('lambdaos-kpimode') === 'mgmt' && D.KPIS_MGMT?.length ? 'mgmt' : 'ops'; } catch { /* ignore */ }
-  const cards = () => kmode === 'mgmt' ? D.KPIS_MGMT : D.KPIS;
+  const cards = () => D.KPIS; // one set of cards for everyone (DC Ops and managers see the same)
   function kpiHistory(hist) {
     if (D.MODE === 'demo') { // demo: a steady made-up fortnight ending at today's number
       let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -487,6 +495,9 @@ LambdaData.ready.then(D => {
       const strip = h => String(h).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
       const why = [k.label, `${k.value}`, dlt == null ? 'history starts today' : dlt ? `${dlt > 0 ? '+' : '−'}${amount(dlt)} vs ${prev.day === dayKeyOf(Date.now() - DAYMS) ? 'yesterday' : kDay(prev.day)}` : 'same as yesterday',
         strip(flow), k.sub, pts.length > 1 ? `hover the chart for any of the last ${pts.length} days` : ''].filter(Boolean).join(' · ');
+      const from = k.key === 'devices' ? 'netbox' : k.key === 'handed' ? 'atium' : k.key === 'healthy' ? 'netbox' : 'jira';
+      if (isLoading(from) && !k.num) return `<div class="kpi slim loading" data-k="${esc(k.key || '')}" title="Loading from ${esc(srcOf(from)?.name || from)}…">
+        <div class="kpi-label">${esc(SHORT[k.key] || k.label)}</div><div class="kpi-row"><span class="kpi-value muted">…</span></div><div class="spark-wait"><span class="spin-dot"></span>loading</div></div>`;
       return `<div class="kpi slim" data-k="${esc(k.key || '')}" title="${esc(why)}">
         <div class="kpi-label">${esc(SHORT[k.key] || k.label)}</div>
         <div class="kpi-row"><span class="kpi-value">${esc(k.value)}</span>${arrow}</div>
@@ -510,20 +521,12 @@ LambdaData.ready.then(D => {
   }
   renderKpis(null);
   let KHIST = null;
-  {
-    const sw = $('#kmode');
-    if (sw && D.KPIS_MGMT?.length) {
-      sw.hidden = false;
-      const paintSw = () => sw.querySelectorAll('[data-kmode]').forEach(b => { b.classList.toggle('on', b.dataset.kmode === kmode); b.setAttribute('aria-pressed', b.dataset.kmode === kmode); });
-      paintSw();
-      sw.addEventListener('click', e => { const b = e.target.closest('[data-kmode]'); if (!b) return; kmode = b.dataset.kmode; try { localStorage.setItem('lambdaos-kpimode', kmode); } catch { /* ignore */ } paintSw(); renderKpis(KHIST); });
-    }
-  }
   if (isExt) chrome.storage.local.get('history').then(r => renderKpis(KHIST = r.history || null)).catch(() => {});
 
   // A source that isn't connected says so, instead of looking empty. Returns '' when the source is fine.
   function sourceNote(key, what) {
     const src = D.SOURCES.find(x => x.key === key);
+    if (src?.state === 'wait' && (D.MODE === 'live' || location.hash === '#loading')) return loadingLine(key, what);
     if (!src || !['error', 'stale'].includes(src.state)) return '';
     const label = LambdaAlerts.outage(src), since = src.since ? ` since ${LambdaAlerts.clock(src.since)}` : '';
     const action = src.url ? ` <a class="linkish" data-href="${esc(src.url)}">Sign in</a>` : src.access ? ' Use its yellow pill in the top bar.' : '';
@@ -535,6 +538,7 @@ LambdaData.ready.then(D => {
   /* ---------------- Today (Google Calendar) ---------------- */
   function renderAgenda() {
     const box = $('#agendaPanel'), cal = D.SOURCES.find(s => s.key === 'calendar');
+    if (!D.EVENTS?.length && cal?.state === 'wait' && (D.MODE === 'live' || location.hash === '#loading')) { box.hidden = false; $('#agendaTitle').textContent = 'Today'; $('#agendaNext').textContent = ''; $('#agenda').innerHTML = loadingLine('calendar', 'your meetings'); return; }
     if (!D.EVENTS?.length && (!cal || cal.state === 'off' || cal.state === 'wait' || cal.state === 'demo' && !D.EVENTS)) { box.hidden = true; return; }
     box.hidden = false;
     const now = Date.now(), endToday = new Date(); endToday.setHours(23, 59, 59, 999);
@@ -683,7 +687,7 @@ LambdaData.ready.then(D => {
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
           <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device, t)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
-    }).join('') || '<li class="muted" style="padding:10px">No open tickets.</li>';
+    }).join('') || (isLoading('jira') ? loadingLine('jira', 'your tickets') : '<li class="muted" style="padding:10px">No open tickets.</li>');
     if (mine.length && (yProd.size || yLock.size)) $('#queue').insertAdjacentHTML('afterbegin', `<li class="yard-filter" role="group" aria-label="Filter by Yard state"><span class="yard-tag">Yard</span>
       <button class="chip ${!yFilter ? 'on' : ''}" data-yf="" aria-pressed="${!yFilter}">All</button>
       ${yProd.size ? `<button class="chip ${yFilter === 'prod' ? 'on' : ''}" data-yf="prod" aria-pressed="${yFilter === 'prod'}" title="Your tickets whose host still runs a production app in Yard and isn't locked">⚠ In prod <b>${yProd.size}</b></button>` : ''}
@@ -699,6 +703,7 @@ LambdaData.ready.then(D => {
   function renderSites() {
     const sites = listSites(), max = Math.max(1, ...sites.map(s => s.openTickets));
     $('#siteCount').textContent = `${sites.length} · by open tickets`;
+    if (!sites.length && isLoading('netbox')) { $('#siteList').innerHTML = loadingLine('netbox', 'sites'); return; }
     $('#siteList').innerHTML = sites.map(s =>
       `<li class="srow ${Fleet.selected === s ? 'sel' : ''} ${s.health === 'idle' ? 'dim' : ''}" data-site="${esc(s.id)}" title="${esc(s.fullName || s.id)}: ${s.openTickets} open tickets, ${esc(siteStatusLabel(s))}${s.healthWhy ? ` (from ${esc(s.healthWhy)}: see the Health tab)` : ''}">
         <span class="code">${esc(s.id)}</span><span class="sname">${esc(s.name)}</span>
@@ -722,7 +727,7 @@ LambdaData.ready.then(D => {
     $('#feed').innerHTML = shown.map((f, i) =>
       `<li class="fitem ${i < newCount ? 'new' : ''}" data-feed="${fid(f)}" tabindex="0" role="button" title="Click for details">
         <div class="fmeta"><span class="srctag src-${f.src}">${SRC[f.src][1]}</span><span class="ftime">${rel(f.at)}</span></div><div class="ftext">${esc(f.text)}</div></li>`).join('')
-      || '<li class="muted" style="padding:10px">Nothing yet.</li>';
+      || (isLoading('jira', 'netbox', 'slack', 'gmail') ? `<li class="src-note loading"><span class="spin-dot"></span>Loading updates…</li>` : '<li class="muted" style="padding:10px">Nothing yet.</li>');
   }
   // Clicking an event opens what it's about: the details, everything it links to, and a button to the source.
   let feedSeq = 0; const feedById = new Map();
@@ -1829,6 +1834,7 @@ LambdaData.ready.then(D => {
       const urgentN = H ? H.sites.reduce((t, s) => t + s.checks.leak.n + s.checks.breaker.fresh, 0) : 0; // only the sites the picker shows
       $('#healthBadge').hidden = !urgentN; $('#healthBadge').textContent = urgentN || '';
       if (activeView !== 'health') return;
+      if (!H && isLoading('grafana')) { box.innerHTML = `<div class="hempty"><h3>Site health</h3>${loadingLine('grafana', 'every site\'s health checks', 'p')}</div>`; return; }
       if (!H) { box.innerHTML = `<div class="hempty"><h3>Site health</h3><p class="muted">Leaks, tripped breakers, PDU alarms, power shelves, hardware faults, hot inlets, network devices down and monitoring gaps for every site come from Grafana. Turn on <b>Grafana</b> in Settings → Sources and sign in to grafana.aws.lambdalabs.cloud once.</p></div>`; return; }
       const sites = sitesShown(), mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : LambdaAlerts.mySites(D));
       const sum = k => sites.reduce((t, s) => t + (s.checks[k].n || 0), 0), fresh = sites.reduce((t, s) => t + s.checks.breaker.fresh, 0);
@@ -1888,6 +1894,7 @@ LambdaData.ready.then(D => {
     const DAY = 864e5;
     function render() {
       const all = (vsData(dscope).DEPLOYMENTS || []).filter(d => vsEff(dscope) === 'all' || d.sites.some(vsHas(dscope))), now = Date.now();
+      if (!(D.DEPLOYMENTS || []).length && isLoading('jira')) { el.innerHTML = loadingLine('jira', 'deployments', 'div'); return; }
       if (!(D.DEPLOYMENTS || []).length) {
         el.innerHTML = `<div class="dempty muted">No deployments loaded. They come from Jira PMO epics and Cluster Intake (Settings → Jira).${D.SOURCES.find(s => s.key === 'jira')?.title?.includes('failed') ? '<br>' + esc(D.SOURCES.find(s => s.key === 'jira').title) : ''}</div>`;
         return;
@@ -2852,7 +2859,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     const KEYT = 'lambdaos-tour-done', TOUR_V = '2';
     const STEPS = [
       ['#siteBtn', 'Pick your sites', 'Show every site, just yours, or any you tick. Cards, tickets, feed, the brain, Health and notifications all follow. ★ a site in this menu to mark it as yours.'],
-      ['#kpis', 'The top cards', 'Each card shows the number now, ▲/▼ since yesterday and the last 30 days. Hover a card for details, hover the chart for any day. Switch between DC Ops and Management cards under the greeting.'],
+      ['#kpis', 'The top cards', 'Each card shows the number now, ▲/▼ since yesterday and the last 30 days. Hover a card for details, hover the chart for any day.'],
       ['.stage-head .tabs', 'Four views', 'Fleet globe (F), Second brain (B), Deployments (D) and Health (H). E makes the middle bigger, Esc goes back. Each view can show All sites or Your sites.'],
       ['#cmdTrigger', 'Search or ask', `Find any site, device, ticket, deployment or part (${KEY('K')}), or ask a question. ✨ Ask AI (${KEY('J')}) answers from the loaded data.`],
     ];
