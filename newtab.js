@@ -243,8 +243,16 @@ LambdaData.ready.then(D => {
     location.reload();
   };
   const checkAgain = async () => { updated.hidden = false; updated.textContent = 'Checking…'; await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }); location.reload(); };
-  let signingIn = false; // after "Sign in", coming back to this tab checks again by itself
-  addEventListener('focus', () => { if (signingIn && isExt) { signingIn = false; checkAgain(); } });
+  // Coming back to the dashboard while an app needs a sign-in checks again by itself (at most once a minute), whether
+  // you used "Sign in" here or signed in some other way. Right away after using "Sign in".
+  let signingIn = false, lastAuthCheck = Date.now();
+  const recheck = () => {
+    if (!isExt || D.MODE !== 'live' || !ALLSRC.some(x => x.auth && broken(x))) return;
+    if (!signingIn && Date.now() - lastAuthCheck < 60e3) return;
+    signingIn = false; lastAuthCheck = Date.now(); checkAgain();
+  };
+  addEventListener('focus', recheck);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') recheck(); });
   $('#sources').addEventListener('click', async e => {
     const b = e.target.closest('.source-pill[data-key]'); if (!b) return;
     const s = D.SOURCES.find(x => x.key === b.dataset.key);
