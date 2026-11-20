@@ -1103,6 +1103,183 @@ const LambdaLive = (() => {
     return out.sort((a, b) => b.at - a.at);
   }
 
+  /* ---------------- Linked lookup (when a ticket, device, deployment or part is opened) ----------------
+     Asks each app, with your own sign-in, what else mentions this item. One small request per app, only when you open
+     the item; the page caches the answer for a few minutes. An app you don't have or that fails just shows nothing. */
+  const jq = s => `"${String(s).replace(/["\\]/g, '')}"`;
+  // Jira: any issue whose text contains one of these exact phrases (hostnames, serials, part numbers…).
+  const textJql = words => `(${words.map(w => `text ~ "\\"${String(w).replace(/["\\]/g, '')}\\""`).join(' OR ')})`;
+  // Jira and the service desks (RMA, Shipping, Warehouse… are Jira projects too): the issue's own links, its parent
+  // and sub-tasks, plus any issue in any project that mentions one of the terms (hostname, serial, key, part number).
+  async function linkedJira({ key = '', terms = [] }) {
+    const s = await settings();
+    if (s.sources?.jira === false) return { off: true };
+    const base = trim(s.jiraUrl), get = p => getJson(base + p, { login: base, name: 'Jira' });
+    const row = (i, rel = '') => ({ key: i.key, url: `${base}/browse/${i.key}`, summary: i.fields?.summary || '', status: i.fields?.status?.name || '',
+      done: i.fields?.status?.statusCategory?.key === 'done', project: i.fields?.project?.name || i.key.split('-')[0], updated: Date.parse(i.fields?.updated) || 0, rel });
+    const out = new Map();
+    if (key) {
+      const i = await get(`/rest/api/3/issue/${encodeURIComponent(key)}?fields=issuelinks,subtasks,parent,summary`);
+      const f = i.fields || {};
+      if (f.parent) out.set(f.parent.key, row(f.parent, 'parent'));
+      for (const st of f.subtasks || []) out.set(st.key, row(st, 'sub-task'));
+      for (const l of f.issuelinks || []) {
+        const o = l.outwardIssue || l.inwardIssue; if (!o) continue;
+        out.set(o.key, row(o, l.outwardIssue ? l.type?.outward : l.type?.inward));
+      }
+    }
+    const words = [...new Set(terms.filter(t => t && String(t).length >= 4))].slice(0, 4);
+    if (words.length) {
+      const jql = `${textJql(words)}${key ? ` AND key != ${jq(key)}` : ''} ORDER BY updated DESC`;
+      const r = await get(`/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=25&fields=summary,status,project,updated`);
+      for (const i of r.issues || []) if (!out.has(i.key)) out.set(i.key, row(i, 'mentions it'));
+    }
+    return { base, items: [...out.values()] };
+  }
+  // A NetBox device id from its link, or by looking the hostname up (exact name, any case).
+  async function nbDeviceId(get, deviceUrl, name) {
+    const id = (String(deviceUrl || '').match(/\/dcim\/devices\/(\d+)/) || [])[1];
+    if (id) return id;
+    if (!name) return null;
+    const r = await get(`/api/dcim/devices/?name__ie=${encodeURIComponent(name)}&limit=2&brief=1`);
+    return r.results?.length === 1 ? String(r.results[0].id) : null;
+  }
+  // NetBox: the device's journal and recent changes made by people (automation is left out, like the live feed).
+  async function linkedNetbox(deviceUrl, name = '') {
+    const s = await settings();
+    if (s.sources?.netbox === false) return { off: true };
+    const base = trim(s.netboxUrl), headers = nbHeaders(s);
+    const get = p => getJson(base + p, { headers, login: `${base}/login/`, name: 'NetBox' });
+    const id = await nbDeviceId(get, deviceUrl, name);
+    if (!id) return { items: [], none: true };
+    const [journal, changes] = await Promise.all([
+      get(`/api/extras/journal-entries/?assigned_object_type=dcim.device&assigned_object_id=${id}&limit=10&ordering=-created`).catch(() => ({ results: [] })),
+      get(`/api/core/object-changes/?changed_object_type=dcim.device&changed_object_id=${id}&limit=25&ordering=-time`)
+        .catch(() => get(`/api/extras/object-changes/?changed_object_type=dcim.device&changed_object_id=${id}&limit=25&ordering=-time`)).catch(() => ({ results: [] })),
+    ]);
+    const items = [
+      ...(journal.results || []).map(j => ({ at: Date.parse(j.created) || 0, who: j.created_by?.username || j.created_by?.display || '', text: String(j.comments || '').slice(0, 240), kind: 'journal' })),
+      ...(changes.results || []).filter(isPerson).map(c => {
+        const pre = c.prechange_data || {}, post = c.postchange_data || {};
+        const keys = Object.keys(post).filter(k => !/^(last_updated|created|custom_field_data|id|url|display)$/.test(k) && JSON.stringify(pre[k]) !== JSON.stringify(post[k])).slice(0, 4);
+        return { at: Date.parse(c.time) || 0, who: c.user_name || '', text: `${c.action?.label || c.action?.value || 'changed'}${keys.length ? ': ' + keys.join(', ') : ''}`, kind: 'change' };
+      }),
+    ].sort((a, b) => b.at - a.at).slice(0, 12);
+    return { url: `${base}/dcim/devices/${id}/changelog/`, items };
+  }
+  // Slack: the newest messages that mention the item, read in your Slack tab like the rest of Slack.
+  async function slackSearchInPage(queries) {
+    try {
+      queries = [].concat(queries);
+      let teams = []; // a Slack tab that's just starting needs a moment to load its session (like slackInPage)
+      for (let i = 0; i < 30 && !teams.length; i++) {
+        teams = Object.values(JSON.parse(localStorage.getItem('localConfig_v2') || 'null')?.teams || {}).filter(t => t?.token);
+        if (!teams.length) await new Promise(r => setTimeout(r, 500));
+      }
+      const clean = t => String(t || '').replace(/<@[A-Z0-9]+\|([^>]+)>/g, '@$1').replace(/<@[A-Z0-9]+>/g, '@someone')
+        .replace(/<#[A-Z0-9]+\|([^>]*)>/g, '#$1').replace(/<(https?:[^|>]+)\|([^>]+)>/g, '$2').replace(/<(https?:[^>]+)>/g, '$1')
+        .replace(/<!([a-z]+)>/g, '@$1').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      for (const t of teams) {
+        const search = async q => { const fd = new FormData(); fd.append('token', t.token); fd.append('query', q); fd.append('count', '20'); fd.append('sort', 'timestamp');
+          return (await fetch('/api/search.messages', { method: 'POST', body: fd, credentials: 'include' })).json().catch(() => ({})); };
+        const res = await Promise.all(queries.map(search));
+        if (!res.some(r => r.ok)) continue;
+        const seen = new Set(), items = [];
+        for (const m of res.flatMap(r => r.ok ? r.messages?.matches || [] : [])) {
+          const k = (m.channel?.id || '') + m.ts; if (seen.has(k)) continue; seen.add(k);
+          items.push({ at: Math.round(parseFloat(m.ts) * 1000), channel: m.channel?.is_im ? 'DM' : m.channel?.name || '', user: m.username || m.user_name || '', text: clean(m.text).slice(0, 240), link: m.permalink || '' });
+        }
+        return { ok: true, items: items.sort((a, b) => b.at - a.at).slice(0, 30) };
+      }
+      return { ok: false, error: 'Not signed in to Slack in that tab.' };
+    } catch (e) { return { ok: false, error: String(e.message || e) }; }
+  }
+  async function linkedSlack(terms = []) {
+    const s = await settings();
+    if (s.sources?.slack === false || !terms.length) return { off: true };
+    await needAccess(['https://app.slack.com/*']);
+    const qs = [...new Set(terms.filter(Boolean).map(t => String(t).trim()))].slice(0, 3).map(t => `"${t.replace(/"/g, '')}"`); // Slack search has no OR: one search each
+    const { result } = await LambdaTabs.run(LambdaTabs.apps(s).slack, slackSearchInPage, [qs], { useOwn: s.appTabs !== false });
+    if (!result?.ok) throw new Error(result?.error || 'the Slack tab did not answer');
+    return { items: result.items };
+  }
+
+  /* ---------------- Trace (history of one item for the Trace view) ----------------
+     Read only when you open Trace on something, with your own sign-ins. */
+  const adfText = n => !n ? '' : typeof n === 'string' ? n : n.text || (n.content || []).map(adfText).join(n.type === 'paragraph' ? '\n' : ' ');
+  // Jira: each given issue with its full change history and comments, plus every issue in any project (service desks
+  // included, closed ones too) that mentions one of the terms, as created → resolved spans.
+  async function traceJira({ keys = [], terms = [] }) {
+    const s = await settings();
+    if (s.sources?.jira === false) return { off: true };
+    const base = trim(s.jiraUrl), get = p => getJson(base + p, { login: base, name: 'Jira' });
+    const span = i => ({ key: i.key, url: `${base}/browse/${i.key}`, summary: i.fields?.summary || '', status: i.fields?.status?.name || '',
+      done: i.fields?.status?.statusCategory?.key === 'done', project: i.fields?.project?.key || i.key.split('-')[0], projectName: i.fields?.project?.name || '',
+      created: Date.parse(i.fields?.created) || 0, resolved: Date.parse(i.fields?.resolutiondate) || 0 });
+    const issues = await Promise.all([...new Set(keys)].slice(0, 6).map(async k => {
+      const i = await get(`/rest/api/3/issue/${encodeURIComponent(k)}?expand=changelog&fields=summary,status,created,resolutiondate,project,comment`);
+      let hist = i.changelog?.histories || [];
+      if ((i.changelog?.total || 0) > hist.length) { // more than one page: read the rest (up to 1,000 changes)
+        hist = [];
+        for (let at = 0; at < Math.min(i.changelog.total, 1000); at += 100) { const p = await get(`/rest/api/3/issue/${encodeURIComponent(k)}/changelog?startAt=${at}&maxResults=100`); hist.push(...(p.values || [])); if (p.isLast || !(p.values || []).length) break; }
+      }
+      let cmts = i.fields?.comment?.comments || [];
+      if ((i.fields?.comment?.total || 0) > cmts.length) {
+        cmts = [];
+        for (let at = 0; at < Math.min(i.fields.comment.total, 500); at += 100) { const p = await get(`/rest/api/3/issue/${encodeURIComponent(k)}/comment?startAt=${at}&maxResults=100`); cmts.push(...(p.comments || [])); if (!(p.comments || []).length) break; }
+      }
+      const changes = hist.flatMap(h => (h.items || []).filter(x => /^(status|assignee|resolution|priority|Hostname|Rack Position|Cabinet Name|Link|Data Center Location|Lambda Part Number|Lifecycle Status)/i.test(x.field))
+        .map(x => ({ at: Date.parse(h.created) || 0, who: h.author?.displayName || '', field: x.field, from: x.fromString || '', to: x.toString || '' })));
+      const comments = cmts.map(c => ({ at: Date.parse(c.created) || 0, who: c.author?.displayName || '', text: adfText(c.body).replace(/\s+/g, ' ').trim().slice(0, 400) }));
+      return { ...span(i), changes, comments, full: true };
+    }).map(p => p.catch(e => { if (e.auth) throw e; return null; })));
+    const out = new Map(issues.filter(Boolean).map(i => [i.key, i]));
+    const words = [...new Set(terms.filter(t => t && String(t).length >= 4))].slice(0, 4);
+    if (words.length) {
+      const jql = `${textJql(words)} ORDER BY created DESC`;
+      let token = '', n = 0; // page through: a busy switch or chassis can be mentioned in hundreds of tickets (up to 300 here)
+      do {
+        const r = await get(`/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=100&fields=summary,status,created,resolutiondate,project${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`);
+        for (const i of r.issues || []) if (!out.has(i.key)) out.set(i.key, span(i));
+        n += (r.issues || []).length; token = r.nextPageToken || '';
+      } while (token && n < 300);
+    }
+    return { base, issues: [...out.values()] };
+  }
+  // NetBox: when the device was added, every change to it and its parts (modules, interfaces…), its journal, the chassis
+  // it sits in and the devices installed in it.
+  async function traceNetbox(deviceUrl, name = '') {
+    const s = await settings();
+    if (s.sources?.netbox === false) return { off: true };
+    const base = trim(s.netboxUrl), headers = nbHeaders(s);
+    const get = p => getJson(base + p, { headers, login: `${base}/login/`, name: 'NetBox' });
+    const id = await nbDeviceId(get, deviceUrl, name);
+    if (!id) return { none: true };
+    const soft = p => get(p).catch(e => { if (e.auth) throw e; return { results: [] }; });
+    const changesOf = q => get(`/api/core/object-changes/?${q}&limit=60&ordering=-time`).catch(e => { if (e.auth) throw e; return soft(`/api/extras/object-changes/?${q}&limit=60&ordering=-time`); }); // NetBox < 4.0 keeps it under extras
+    const [dev, bays, mods, journal, own, parts] = await Promise.all([
+      get(`/api/dcim/devices/${id}/`), soft(`/api/dcim/device-bays/?device_id=${id}&limit=50`), soft(`/api/dcim/modules/?device_id=${id}&limit=100`),
+      soft(`/api/extras/journal-entries/?assigned_object_type=dcim.device&assigned_object_id=${id}&limit=30&ordering=-created`),
+      changesOf(`changed_object_type=dcim.device&changed_object_id=${id}`), changesOf(`related_object_type=dcim.device&related_object_id=${id}`),
+    ]);
+    const change = (c, part) => {
+      const pre = c.prechange_data || {}, post = c.postchange_data || {};
+      const keys = Object.keys({ ...pre, ...post }).filter(k => !/^(last_updated|created|custom_field_data|id|url|display|tags|owner)$/.test(k) && JSON.stringify(pre[k]) !== JSON.stringify(post[k]));
+      const show = v => v == null || v === '' ? '—' : typeof v === 'object' ? (v.name || v.label || v.value || JSON.stringify(v)).toString() : String(v);
+      return { at: Date.parse(c.time) || 0, who: c.user_name || '', person: isPerson(c), action: c.action?.value || '', part: part ? (c.object_repr || c.changed_object_type) : '',
+        text: keys.slice(0, 3).map(k => c.action?.value === 'update' ? `${k}: ${show(pre[k])} → ${show(post[k])}` : k).join(' · ').slice(0, 220) };
+    };
+    const link = d => d ? { name: d.name || d.display, url: `${base}/dcim/devices/${d.id}/` } : null;
+    return {
+      url: `${base}/dcim/devices/${id}/`, created: Date.parse(dev.created) || 0, serial: dev.serial || '', status: dev.status?.label || '',
+      parent: link(dev.parent_device), children: (bays.results || []).filter(b => b.installed_device).map(b => ({ bay: b.name, ...link(b.installed_device) })),
+      modules: (mods.results || []).map(m => ({ bay: m.module_bay?.name || '', type: m.module_type?.model || m.module_type?.display || '', serial: m.serial || '', status: m.status?.label || '' })),
+      journal: (journal.results || []).map(j => ({ at: Date.parse(j.created) || 0, who: j.created_by?.username || '', kind: j.kind?.label || '', text: String(j.comments || '').slice(0, 400) })),
+      changes: [...(own.results || []).map(c => change(c, false)), ...(parts.results || []).filter(c => c.changed_object_type !== 'dcim.device').map(c => change(c, true))]
+        .filter(c => c.person || (!c.part && c.action !== 'update')).sort((a, b) => b.at - a.at).slice(0, 80),
+    };
+  }
+
   // Every site each source needs, so Settings and the dashboard can ask for all of them in one click.
   function originsFor(s) {
     const o = k => { try { return new URL(s[k]).origin + '/*'; } catch { return null; } };
@@ -1110,7 +1287,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, busy, probe, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup };
+  return { DEFAULTS, NAMES, settings, refresh, busy, probe, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup, linkedJira, linkedNetbox, linkedSlack, traceJira, traceNetbox };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;

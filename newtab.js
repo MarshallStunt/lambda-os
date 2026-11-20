@@ -557,6 +557,267 @@ LambdaData.ready.then(D => {
   }
   renderAgenda(); setInterval(renderAgenda, 60000);
 
+  /* ---------------- Filter: one query for every list ----------------
+     The box in the top bar (⌘⇧F / Ctrl+Shift+F) narrows the left column (each tab's count becomes the number of matches),
+     the live feed, the sites list, the Deployments and Health views; rows in an open card that don't match fade, and
+     so do marks in Trace. Kept while this tab is open.
+       words              gpu psu            all words (anywhere in the row)
+       OR, |              gpu OR psu         either
+       -, NOT             -done, NOT bus     leave out
+       "…"                "waiting for parts" exact phrase
+       ( )                (gpu OR nic) -bus  grouping
+       field:value        site:IAD03         the field contains it (* = anything: host:iad03-r06*)
+       field=value        status=Open        the field is exactly it;  status!=Done  is anything else
+       sla< age> updated< sla<4h  age>7d  updated<1d   (m, h, d, w)
+       is: / has:         is:breached is:mine is:unassigned is:open is:done is:locked is:prod is:tracked is:late
+                          has:alert has:part has:host
+     Fields: site status assignee host part priority key src from channel type project. A word with a colon that isn't a
+     field (a breaker like AA:L1-N-BR4) is just searched as text. */
+  const Filter = (() => {
+    const FIELDS = { site: 'site', status: 'status', state: 'status', assignee: 'assignee', owner: 'assignee', who: 'assignee', host: 'host', device: 'host',
+      part: 'part', pn: 'part', priority: 'priority', prio: 'priority', key: 'key', id: 'key', src: 'src', source: 'src', from: 'from', channel: 'channel',
+      type: 'type', project: 'project', sla: 'sla', age: 'age', updated: 'updated' };
+    const DUR = new Set(['sla', 'age', 'updated']);
+    const IS = ['breached', 'mine', 'unassigned', 'open', 'done', 'locked', 'prod', 'tracked', 'late'], HAS = ['alert', 'part', 'host'];
+    const UNIT = { m: 60e3, h: 3600e3, d: 864e5, w: 7 * 864e5 };
+    let q = '', ast = null, error = '', warn = '';
+    try { q = sessionStorage.getItem('lambdaos-filter') || ''; } catch { /* ignore */ }
+
+    // Text → tokens: ( ) | AND OR NOT, words, "phrases", field ops; a leading - negates.
+    function lex(s) {
+      const out = []; let i = 0;
+      const readWord = () => { let j = i; while (j < s.length && !/[\s()|]/.test(s[j])) j++; const w = s.slice(i, j); i = j; return w; };
+      const readQuoted = () => { const j = s.indexOf('"', i + 1); const v = s.slice(i + 1, j < 0 ? s.length : j); i = j < 0 ? s.length : j + 1; return v; };
+      while (i < s.length) {
+        const c = s[i];
+        if (/\s/.test(c)) { i++; continue; }
+        if (c === '(' || c === ')' || c === '|') { out.push({ t: c }); i++; continue; }
+        let neg = false;
+        if (c === '-' && i + 1 < s.length && !/[\s()|]/.test(s[i + 1])) { neg = true; i++; }
+        if (s[i] === '"') { out.push({ t: 'word', neg, v: readQuoted(), quoted: true }); continue; }
+        const fq = s.slice(i).match(/^([A-Za-z]+)(!=|<=|>=|=|:|<|>)"/); // field="a quoted value with spaces"
+        if (fq && (FIELDS[fq[1].toLowerCase()] || /^(is|has)$/i.test(fq[1]))) { i += fq[0].length - 1; const n = fq[1].toLowerCase(); out.push({ t: 'field', neg, f: FIELDS[n] || n, op: fq[2], v: readQuoted() }); continue; }
+        const w = readWord();
+        if (!neg && /^(AND|OR|NOT)$/.test(w)) { out.push({ t: w }); continue; }
+        const m = w.match(/^([A-Za-z]+)(!=|<=|>=|=|:|<|>)(.*)$/);
+        const name = m && m[1].toLowerCase();
+        if (m && (FIELDS[name] || name === 'is' || name === 'has')) {
+          let v = m[3]; if (!v && s[i] === '"') v = readQuoted();
+          out.push({ t: 'field', neg, f: FIELDS[name] || name, op: m[2], v });
+        } else out.push({ t: 'word', neg, v: w });
+      }
+      return out;
+    }
+    // Tokens → tree: OR of ANDs; NOT binds tighter; words next to each other are AND.
+    function parse(s) {
+      const tk = lex(s); let p = 0;
+      const peek = () => tk[p], take = () => tk[p++];
+      const fail = m => { throw new Error(m); };
+      function term(x) {
+        if (x.t === 'word') return { w: x.v.toLowerCase() };
+        const { f, op, v } = x, val = v.toLowerCase();
+        if (f === 'is' || f === 'has') {
+          if (op !== ':' && op !== '=') fail(`use ${f}:${(f === 'is' ? IS : HAS)[0]}`);
+          if (!(f === 'is' ? IS : HAS).includes(val)) fail(`${f}:${v || '…'} isn't known. Try ${(f === 'is' ? IS : HAS).map(k => `${f}:${k}`).join(', ')}`);
+          return { flag: f, k: val };
+        }
+        if (/[<>]/.test(op)) {
+          if (!DUR.has(f)) fail(`< and > work with sla, age and updated (e.g. sla<4h)`);
+          const m = val.match(/^(\d+(?:\.\d+)?)([mhdw])$/); if (!m) fail(`${f}${op}${v || '…'}: give a time like 30m, 4h, 7d or 2w`);
+          return { f, op, n: Number(m[1]) * UNIT[m[2]] };
+        }
+        if (DUR.has(f)) fail(`${f} takes < or >, like ${f === 'sla' ? 'sla<4h' : f === 'age' ? 'age>7d' : 'updated<1d'}`);
+        if (!v) fail(`${f}${op} needs a value, like ${f}${op}${f === 'status' ? 'Open' : f === 'site' ? 'IAD03' : '…'}`);
+        const re = new RegExp((op === ':' ? '' : '^') + val.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + (op === ':' ? '' : '$'));
+        return { f, op, re };
+      }
+      function unary() {
+        const x = peek(); if (!x) fail('the filter ends too early');
+        if (x.t === 'NOT') { take(); return { not: unary() }; }
+        if (x.t === '(') { take(); const e = or(); if (take()?.t !== ')') fail('a ( has no matching )'); return e; }
+        if (x.t === ')') fail('there is a ) without a (');
+        if (x.t === '|' || x.t === 'OR' || x.t === 'AND') fail(`${x.t} needs something on both sides`);
+        take(); const n = term(x); return x.neg ? { not: n } : n;
+      }
+      function and() { const a = [unary()]; while (peek() && !['|', 'OR', ')'].includes(peek().t)) { if (peek().t === 'AND') take(); a.push(unary()); } return a.length === 1 ? a[0] : { and: a }; }
+      function or() { const a = [and()]; while (peek() && (peek().t === '|' || peek().t === 'OR')) { take(); a.push(and()); } return a.length === 1 ? a[0] : { or: a }; }
+      if (!tk.length) return null;
+      const e = or(); if (p < tk.length) fail('there is a ) without a (');
+      return e;
+    }
+    const unknownField = s => { const m = [...s.matchAll(/(?:^|\s)-?([a-z]{3,}):/gi)].map(x => x[1].toLowerCase()).find(n => !FIELDS[n] && n !== 'is' && n !== 'has' && !/^https?$/.test(n)); return m ? `“${m}:” isn't a field, so it's searched as text. Fields: site, status, assignee, host, part, priority, key, src, from, type, project` : ''; };
+    function compile() { error = ''; warn = ''; try { ast = parse(q); warn = unknownField(q); } catch (e) { ast = null; error = e.message; } }
+    compile();
+
+    // An item: { text: [...anything to search], f: { field: value | [values] }, is: {flag: bool}, has: {flag: bool}, d: {sla, age, updated (ms)} }
+    const vals = v => [].concat(v ?? []).flat(3).filter(x => x != null && x !== '').map(x => String(x).toLowerCase());
+    function evalNode(n, it) {
+      if (n.or) return n.or.some(x => evalNode(x, it));
+      if (n.and) return n.and.every(x => evalNode(x, it));
+      if (n.not) return !evalNode(n.not, it);
+      if (n.w != null) return it._t.includes(n.w);
+      if (n.flag) return !!(n.flag === 'is' ? it.is : it.has)?.[n.k];
+      if (n.n != null) { const v = it.d?.[n.f]; if (v == null || Number.isNaN(v)) return false; return n.op === '<' ? v < n.n : n.op === '<=' ? v <= n.n : n.op === '>' ? v > n.n : v >= n.n; }
+      if (!it.f) return n.op === '!=' ? !n.re.test(it._t) : n.re.test(it._t) || (n.op === '=' && it._t.includes(n.re.source.replace(/^\^|\$$/g, '')));  // plain rows: search the text
+      const vs = vals(it.f[n.f]);
+      if (n.op === '!=') return !vs.some(v => n.re.test(v));
+      return vs.some(v => n.re.test(v));
+    }
+    const on = () => !!ast;
+    function test(it) {
+      if (!ast) return true;
+      if (it._t == null) it._t = vals(it.text).join(' ') + ' ' + vals(Object.values(it.f || {})).join(' ');
+      return evalNode(ast, it);
+    }
+    const match = (...parts) => test({ text: parts });
+
+    /* ---- the box: input, ✕, ?, ★ and a small panel for suggestions, errors, examples and saved filters ---- */
+    const box = $('#fbox'), input = $('#fInput'), clear = $('#fClear'), help = $('#fHelp'), star = $('#fStar');
+    const pop = Object.assign(document.createElement('div'), { id: 'fPop', className: 'fpop', hidden: true }); document.body.appendChild(pop);
+    const SAVED = 'lambdaos-filters';
+    const saved = () => { try { return JSON.parse(localStorage.getItem(SAVED)) || []; } catch { return []; } };
+    const setSaved = a => { try { localStorage.setItem(SAVED, JSON.stringify(a.slice(0, 12))); } catch { /* per-viewer convenience */ } };
+    // Simple first, then fields, time and flags. Each one is clickable.
+    const EXAMPLES = [
+      ['gpu iad03', 'Both words'], ['gpu OR psu', 'Either word'],
+      ['gpu -bus', 'gpu, but not bus'], ['"fell off the bus"', 'This exact phrase'],
+      ['site:IAD03', 'Only site IAD03'], ['status!=Done', 'Status isn\'t Done'],
+      ['assignee:me', 'Assigned to me'], ['host:iad03-r06*', 'Hosts starting iad03-r06'],
+      ['sla<4h', 'SLA due within 4 hours'], ['age>7d', 'Opened over a week ago'],
+      ['is:mine is:breached', 'My tickets past SLA'], ['has:alert', 'Has a Grafana alert'],
+    ];
+    function values(field) {
+      const T = ALLT(), uniq = a => [...new Set(a.filter(Boolean))];
+      return {
+        site: () => D.SITES.map(s => s.id), status: () => uniq([...T.map(t => t.status), ...(D.DEPLOYMENTS || []).map(d => d.status)]).sort(),
+        assignee: () => ['me', ...uniq(T.map(t => t.assigneeName)).sort()], priority: () => uniq(T.map(t => t.priority)),
+        src: () => ['jira', 'netbox', 'slack', 'gmail', 'netsuite', 'atium', 'grafana', 'news'], part: () => uniq((D.PARTS || []).map(p => p.pn)),
+        host: () => uniq(T.map(t => t.device)), type: () => uniq((D.DEPLOYMENTS || []).flatMap(d => [d.deployType, d.projectType])),
+        project: () => uniq((D.PROJECTS || []).map(p => p.key)), key: () => [], from: () => [], channel: () => uniq((D.CHANNELS || []).map(c => c.name)),
+        is: () => IS, has: () => HAS,
+      }[field]?.() || [];
+    }
+    let sugg = [], hi = -1;
+    // The word being typed (up to the caret): suggest field values (site:IA… → IAD03) or field names (sta… → status:).
+    function suggestions() {
+      const pos = input.selectionStart ?? input.value.length, before = input.value.slice(0, pos), m = before.match(/(-?)([A-Za-z]*)(!=|=|:)?("?)([^\s()"]*)$/);
+      if (!m) return [];
+      const [, , name, op, , part] = m, f = FIELDS[name.toLowerCase()] || (['is', 'has'].includes(name.toLowerCase()) ? name.toLowerCase() : null);
+      if (op && f && !DUR.has(f)) return values(f).filter(v => String(v).toLowerCase().startsWith(part.toLowerCase())).slice(0, 8)
+        .map(v => ({ label: `${name}${op}${v}`, insert: `${name}${op}${/\s/.test(v) ? `"${v}"` : v} `, from: before.length - m[0].length + (m[1] ? 1 : 0) }));
+      if (!op && name.length >= 2) return [...Object.keys(FIELDS).filter(k => k === FIELDS[k] || k === 'is'), 'is', 'has'].filter((k, i, a) => a.indexOf(k) === i && k.startsWith(name.toLowerCase()) && k !== name.toLowerCase())
+        .slice(0, 6).map(k => ({ label: `${k}${DUR.has(k) ? '<' : ':'}`, insert: `${k}${DUR.has(k) ? '<' : ':'}`, from: before.length - m[0].length + (m[1] ? 1 : 0) }));
+      return [];
+    }
+    function paintPop(showHelp = false) {
+      if (document.activeElement !== input && !showHelp) { pop.hidden = true; return; }
+      sugg = document.activeElement === input ? suggestions() : []; if (hi >= sugg.length) hi = -1;
+      const sv = saved();
+      const parts = [];
+      if (error) parts.push(`<div class="fp-err">⚠ ${esc(error)}. Showing everything until it's fixed.</div>`);
+      else if (warn) parts.push(`<div class="fp-warn">${esc(warn)}</div>`);
+      if (sugg.length) parts.push(`<div class="fp-sugg">${sugg.map((s, i) => `<button type="button" class="${i === hi ? 'hi' : ''}" data-fs="${i}">${esc(s.label)}</button>`).join('')}</div><div class="fp-tip muted">Tab or ↓ Enter to pick</div>`);
+      if (showHelp || (!q && !sugg.length)) {
+        if (sv.length) parts.push(`<div class="fp-h">Saved</div><div class="fp-saved">${sv.map(x => `<span class="fp-chip"><button type="button" data-fq="${esc(x)}">${esc(x)}</button><button type="button" class="x" data-fdel="${esc(x)}" aria-label="Remove">✕</button></span>`).join('')}</div>`);
+        parts.push(`<div class="fp-h">Examples</div><div class="fp-ex">${EXAMPLES.map(([x, why]) => `<button type="button" data-fq="${esc(x)}"><code>${esc(x)}</code><span>${esc(why)}</span></button>`).join('')}</div>
+          <div class="fp-help muted"><b>Combine:</b> space = and · <code>OR</code> = either · <code>-</code> = not · <code>"…"</code> = exact · <code>( )</code> = group<br>
+          <b>Fields:</b> <code>:</code> contains · <code>=</code> exactly · <code>!=</code> not · <code>*</code> anything — site status assignee host part priority key src<br>
+          <b>Time:</b> <code>sla&lt;4h</code> <code>age&gt;7d</code> <code>updated&lt;1d</code> · <b>Flags:</b> <code>is:</code>${IS.join(' ')} · <code>has:</code>${HAS.join(' ')}</div>`);
+      }
+      pop.innerHTML = parts.join('');
+      pop.hidden = !parts.length;
+      if (!pop.hidden) { const r = box.getBoundingClientRect(), w = Math.min(460, innerWidth - 16); pop.style.width = w + 'px'; pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px'; pop.style.top = r.bottom + 6 + 'px'; }
+    }
+    function accept(i) {
+      const s = sugg[i]; if (!s) return false;
+      const pos = input.selectionStart ?? input.value.length;
+      input.value = input.value.slice(0, s.from) + s.insert + input.value.slice(pos);
+      const c = s.from + s.insert.length; input.setSelectionRange(c, c); hi = -1; set(input.value); return true;
+    }
+    // Views drawn elsewhere (Deployments, Health) and open cards: hide or fade rows after each draw. A row that names a
+    // ticket, deployment, site or host is matched with its fields; other rows by their text.
+    const ROWSETS = [['#deploys', '.drow', 'hide'], ['#health', 'tbody tr', 'hide'], ['#drawer', '.mini-ticket, .hrow, .aitem, .inv, .qitem, .volcard, .lk-list .mini-ticket', 'dim'], ['#siteCard', '.mini-ticket, .inv', 'dim']];
+    function rowItem(el) {
+      const SEL = '[data-ticket],[data-dep],[data-site]', o = el.matches(SEL) ? el : el.querySelector(SEL);
+      const d = o?.dataset || {}, text = [el.textContent, el.getAttribute('title')];
+      const t = d.ticket && D.ticketByKey(d.ticket); if (t) return { ...tItem(t), text: [...tItem(t).text, ...text] };
+      const dep = d.dep && D.deploymentByKey?.(d.dep); if (dep) return { ...depItem(dep), text: [...depItem(dep).text, ...text] };
+      const s = d.site && D.siteById(d.site); if (s) return { ...siteItem(s), text: [...siteItem(s).text, ...text] };
+      return { text };
+    }
+    function dom() {
+      for (const [sel, rows, how] of ROWSETS) {
+        const root = $(sel); if (!root) continue;
+        for (const el of root.querySelectorAll(rows)) el.classList.toggle(how === 'hide' ? 'f-hide' : 'f-out', !test(rowItem(el)));
+        if (sel === '#deploys') for (const g of root.querySelectorAll('.dgroup')) g.classList.toggle('f-hide', on() && !g.querySelector('.drow:not(.f-hide)'));
+      }
+    }
+    let tmr = 0; const domSoon = () => { clearTimeout(tmr); tmr = setTimeout(dom, 20); };
+    for (const sel of ['#deploys', '#health', '#drawer', '#siteCard']) { const el = $(sel); if (el) new MutationObserver(domSoon).observe(el, { childList: true, subtree: true }); }
+    function paint() {
+      box?.classList.toggle('on', on()); box?.classList.toggle('err', !!error);
+      if (box) box.title = error ? `⚠ ${error}` : 'Filter every list (⌘⇧F / Ctrl+Shift+F). ? for examples.';
+      if (clear) clear.hidden = !q; if (star) { star.hidden = !q || !!error; const s = saved().includes(q.trim()); star.textContent = s ? '★' : '☆'; star.title = s ? 'Saved: click to remove' : 'Save this filter'; }
+      if (input && input.value !== q) input.value = q;
+    }
+    let deb = 0;
+    function set(v) {
+      q = String(v || ''); compile(); paint(); paintPop();
+      try { sessionStorage.setItem('lambdaos-filter', q); } catch { /* ignore */ }
+      clearTimeout(deb); deb = setTimeout(() => {
+        renderQueue(); renderFeed(); renderSites();
+        if (activeView === 'deploys') Deploys.render(); else if (activeView === 'health') Health.render(); else if (activeView === 'trace') Trace.render();
+        dom();
+      }, 120);
+    }
+    input?.addEventListener('input', () => { hi = -1; set(input.value); });
+    input?.addEventListener('focus', () => paintPop());
+    input?.addEventListener('click', () => paintPop());
+    input?.addEventListener('blur', () => setTimeout(() => { if (!pop.contains(document.activeElement)) pop.hidden = true; }, 150));
+    input?.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' && sugg.length) { e.preventDefault(); hi = (hi + 1) % sugg.length; return paintPop(); }
+      if (e.key === 'ArrowUp' && sugg.length) { e.preventDefault(); hi = (hi - 1 + sugg.length) % sugg.length; return paintPop(); }
+      if ((e.key === 'Enter' && hi >= 0) || (e.key === 'Tab' && sugg.length && !e.shiftKey)) { e.preventDefault(); return accept(hi >= 0 ? hi : 0); }
+      if (e.key === 'Escape') { e.stopPropagation(); if (!pop.hidden && (sugg.length || !q)) { pop.hidden = true; return; } if (q) set(''); else input.blur(); }
+    });
+    pop.addEventListener('mousedown', e => e.preventDefault()); // keep focus in the box
+    pop.addEventListener('click', e => {
+      const b = e.target.closest('[data-fs],[data-fq],[data-fdel]'); if (!b) return;
+      if (b.dataset.fs) return accept(+b.dataset.fs);
+      if (b.dataset.fdel) { setSaved(saved().filter(x => x !== b.dataset.fdel)); paint(); return paintPop(true); }
+      set(b.dataset.fq); input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+    });
+    clear?.addEventListener('click', () => { set(''); input?.focus(); });
+    help?.addEventListener('mousedown', e => e.preventDefault());
+    help?.addEventListener('click', () => { input?.focus(); paintPop(true); });
+    star?.addEventListener('click', () => { const x = q.trim(); if (!x) return; const a = saved(); setSaved(a.includes(x) ? a.filter(y => y !== x) : [x, ...a]); paint(); toast(a.includes(x) ? 'Filter removed from Saved.' : 'Filter saved: it\'s under ? in the filter box.'); });
+    addEventListener('resize', () => { if (!pop.hidden) paintPop(); });
+    paint();
+    return { match, test, on, set, q: () => q, dom, focus: () => { input?.focus(); input?.select(); paintPop(); } };
+  })();
+  // What each kind of row can be filtered on (see Filter above).
+  const isDone = s => /^(done|closed|resolved|cancel+ed|complete[d]?)$/i.test(String(s || ''));
+  const tText = t => [t.key, t.priority, t.summary, t.site, D.siteById(t.site)?.name, t.device, t.status, t.assigneeName, t.part, t.part && partLabel(D.partById(t.part))];
+  const tItem = t => {
+    const now = Date.now(), y = yardOf(t.device);
+    return { text: tText(t), f: { key: t.key, site: [t.site, D.siteById(t.site)?.name], status: t.status, assignee: [t.assigneeName, t.assignee === 'me' ? 'me' : ''], host: t.device,
+      part: [t.part, t.part && partLabel(D.partById(t.part))], priority: t.priority, src: 'jira', project: String(t.key).split('-')[0] },
+      d: { sla: t.slaDue ? t.slaDue - now : null, age: t.created ? now - t.created : null, updated: t.updated ? now - t.updated : null },
+      is: { breached: !!(t.slaBreached || (t.slaDue && t.slaDue < now)), mine: t.assignee === 'me' || !!t.mine, unassigned: !t.assignee, open: !isDone(t.status), done: isDone(t.status),
+        locked: !!y?.lockedBy, prod: !!(y?.found && LambdaAlerts.inProduction(y)), tracked: false, late: !!(t.slaBreached || (t.slaDue && t.slaDue < now)) },
+      has: { alert: !!t.alerts?.length, part: !!t.part, host: !!t.device } };
+  };
+  const depText = d => [d.key, d.title, d.sites, d.site, d.status, d.assigneeName, d.deployType, d.projectType, d.gpuModel, d.project?.title, d.tags];
+  const depItem = d => {
+    const now = Date.now();
+    return { text: depText(d), f: { key: d.key, site: d.sites, status: d.status, assignee: [d.assigneeName, d.mine ? 'me' : ''], type: [d.deployType, d.projectType], project: [d.project?.key, d.project?.title], src: 'jira', part: d.gpuModel },
+      d: { age: d.start ? now - d.start : null, sla: d.end ? d.end - now : null }, is: { mine: !!d.mine, open: !isDone(d.status), done: isDone(d.status), tracked: !!D.isTracked?.(d.key), late: !!(d.overdue || (d.end && d.end < now && !isDone(d.status))) }, has: {} };
+  };
+  const siteItem = s => ({ text: [s.id, s.name, s.fullName, s.city, s.address], f: { site: [s.id, s.name], status: [s.status, s.health] }, is: {}, has: { alert: !!s.gf?.alerts?.length } });
+  const msgItem = (src, { from, channel, text, at }) => ({ text: [from, channel, text], f: { src, from, channel }, d: { age: at ? Date.now() - at : null, updated: at ? Date.now() - at : null }, is: {}, has: {} });
+  const noMatch = what => `<li class="muted small" style="padding:10px 14px">No ${what} match “${esc(Filter.q())}”. <button class="linkish" data-fclear>Clear filter</button></li>`;
+  document.addEventListener('click', e => { if (e.target.closest('[data-fclear]')) Filter.set(''); });
+
   /* ---------------- Queue: tickets · tracking · inbox ---------------- */
   let qMode = 'tickets';
   $('#qtabs').addEventListener('click', e => {
@@ -577,12 +838,12 @@ LambdaData.ready.then(D => {
       <div class="qsum">${esc(n.title)}</div>${n.summary ? `<div class="qmeta news-sum">${esc(n.summary)}</div>` : ''}</div>
     <span class="ftime" title="${esc(new Date(n.at).toLocaleString())}">${n.at ? rel(n.at) : ''}</span></li>`;
   function renderNews() {
-    const items = news?.items || [], seen = newsSeen();
-    $('#newsCount').textContent = items.filter(n => n.at > seen && n.at > Date.now() - 14 * 864e5).length || '';
+    const all = news?.items || [], seen = newsSeen(), items = all.filter(n => Filter.test({ text: [n.title, n.summary, n.tags], f: { src: 'news' }, d: { age: n.at ? Date.now() - n.at : null, updated: n.at ? Date.now() - n.at : null } }));
+    $('#newsCount').textContent = (Filter.on() ? items.length : all.filter(n => n.at > seen && n.at > Date.now() - 14 * 864e5).length) || '';
     if (qMode !== 'news') return;
-    $('#queueCount').textContent = items.length ? `${items.length} posts` : '';
+    $('#queueCount').textContent = all.length ? (Filter.on() ? `${items.length} of ${all.length} posts` : `${all.length} posts`) : '';
     const note = news && !news.ok ? `<li class="src-note small">${items.length ? `Couldn't check the blog just now (${esc(news.error)}); showing the posts from ${news.lastOk ? rel(news.lastOk) + ' ago' : 'earlier'}.` : `Couldn't read the Lambda blog (${esc(news.error)}). Lambda OS tries again in a couple of hours.`}</li>` : '';
-    $('#queue').innerHTML = note + (items.map(newsRow).join('') || (news ? '' : '<li class="src-note loading small">Loading the Lambda blog…</li>'))
+    $('#queue').innerHTML = note + (items.map(newsRow).join('') || (Filter.on() && all.length ? noMatch('posts') : news ? '' : '<li class="src-note loading small">Loading the Lambda blog…</li>'))
       + `<li class="vol-all"><button class="btn" data-href="${LambdaNews.PAGE}">All posts on the Lambda blog ↗</button></li>`;
   }
   async function loadNews(force) {
@@ -667,22 +928,23 @@ LambdaData.ready.then(D => {
   });
 
   function renderQueue() {
-    const tracked = D.tracked(), inbox = inboxItems();
+    const F = Filter.on(), trackedAll = D.tracked(), inboxAll = inboxItems();
+    const tracked = trackedAll.filter(d => Filter.test(depItem(d))), inbox = inboxAll.filter(m => Filter.test(msgItem(m.src === 'mail' ? 'gmail' : 'slack', { from: m.who, channel: m.where, text: m.text, at: m.at })));
     const fresh = (D.MAIL?.unread || 0) + (D.MENTIONS || []).filter(m => m.at > Date.now() - 864e5).length;
     $('#trackCount').textContent = tracked.length || '';
-    $('#ticketCount').textContent = mineSorted().length || '';
-    $('#inboxCount').textContent = fresh || '';
+    $('#ticketCount').textContent = mineSorted().filter(t => Filter.test(tItem(t))).length || '';
+    $('#inboxCount').textContent = (F ? inbox.length : fresh) || '';
     $('#queueNote').hidden = true;
     if (qMode === 'tracking') {
-      $('#queueCount').textContent = tracked.length ? `${tracked.length} deployments` : '';
-      $('#queue').innerHTML = tracked.map(depRow).join('') || '<li class="muted small" style="padding:10px 14px">Star ☆ a deployment (in the Deployments view, a drawer or search) to track it here. Deployments assigned to you or that you watch in Jira appear automatically.</li>';
+      $('#queueCount').textContent = trackedAll.length ? (F ? `${tracked.length} of ${trackedAll.length} deployments` : `${tracked.length} deployments`) : '';
+      $('#queue').innerHTML = tracked.map(depRow).join('') || (F && trackedAll.length ? noMatch('tracked deployments') : '') || '<li class="muted small" style="padding:10px 14px">Star ☆ a deployment (in the Deployments view, a drawer or search) to track it here. Deployments assigned to you or that you watch in Jira appear automatically.</li>';
       return;
     }
-    const vols = D.VOLUNTEER || [];
-    $('#volCount').textContent = vols.filter(v => v.at > Date.now() - 14 * 864e5).length || '';
+    const volsAll = D.VOLUNTEER || [], vols = volsAll.filter(v => { const it = msgItem('slack', { from: v.user, channel: v.channel, text: [v.text, D.siteById(v.site)?.name], at: v.askedAt }); it.f.site = v.site; return Filter.test(it); });
+    $('#volCount').textContent = (F ? vols.length : vols.filter(v => v.at > Date.now() - 14 * 864e5).length) || '';
     if (qMode === 'volunteer') {
       $('#queueCount').textContent = vols.length ? `${vols.length} site${vols.length > 1 ? 's' : ''} · 45 days` : '';
-      $('#queue').innerHTML = (vols.length ? '<li class="vol-all"><button class="btn" data-vol="">Open full view ↗</button></li>' : '') + vols.map(volRow).join('') || (sourceNote('slack', 'volunteer requests') ? '' : '<li class="muted small" style="padding:10px 14px">No requests for volunteers in Slack in the last 45 days.</li>');
+      $('#queue').innerHTML = (vols.length ? '<li class="vol-all"><button class="btn" data-vol="">Open full view ↗</button></li>' : '') + vols.map(volRow).join('') || (F && volsAll.length ? noMatch('volunteer requests') : '') || (sourceNote('slack', 'volunteer requests') ? '' : '<li class="muted small" style="padding:10px 14px">No requests for volunteers in Slack in the last 45 days.</li>');
       $('#queue').insertAdjacentHTML('afterbegin', sourceNote('slack', 'volunteer requests'));
       loadOnsite();
       return;
@@ -690,10 +952,10 @@ LambdaData.ready.then(D => {
     renderNews();
     if (qMode === 'news') return;
     if (qMode === 'inbox') {
-      $('#queueCount').textContent = D.MAIL ? `${D.MAIL.unread} unread mail` : '';
+      $('#queueCount').textContent = F ? `${inbox.length} of ${inboxAll.length}` : D.MAIL ? `${D.MAIL.unread} unread mail` : '';
       $('#queue').innerHTML = inbox.slice(0, 60).map(m => `<li class="qitem inbox" data-href="${esc(m.url)}">
         <div style="min-width:0"><div class="qkey"><span class="srctag src-${m.src}">${m.src === 'mail' ? 'Gmail' : 'Slack'}</span> ${esc(m.where)} · ${esc(m.who)}</div><div class="qsum">${esc(m.text)}</div></div><span class="ftime">${rel(m.at)}</span></li>`).join('')
-        || ((sourceNote('gmail', 'mail') || sourceNote('slack', 'mentions')) ? '' : '<li class="muted small" style="padding:10px 14px">Nothing new from Slack or Gmail.</li>');
+        || (F && inboxAll.length ? noMatch('messages') : '') || ((sourceNote('gmail', 'mail') || sourceNote('slack', 'mentions')) ? '' : '<li class="muted small" style="padding:10px 14px">Nothing new from Slack or Gmail.</li>');
       $('#queue').insertAdjacentHTML('afterbegin', sourceNote('gmail', 'mail') + sourceNote('slack', 'mentions'));
       return;
     }
@@ -702,10 +964,10 @@ LambdaData.ready.then(D => {
     const yi = D.YARD && yardUsable() ? LambdaAlerts.yardIssues(D) : null;
     const yProd = new Set((yi?.inProd || []).map(x => x.t.key)), yLock = new Set(mine.filter(t => yardOf(t.device)?.lockedBy).map(t => t.key));
     if (yFilter === 'prod' && !yProd.size || yFilter === 'locked' && !yLock.size) yFilter = '';
-    const mineF = yFilter === 'prod' ? mine.filter(t => yProd.has(t.key)) : yFilter === 'locked' ? mine.filter(t => yLock.has(t.key)) : mine;
-    const list = mine.length ? mineF.slice(0, 100) : [...D.TICKETS].sort(byUrgency).slice(0, 30);
+    const mineF = (yFilter === 'prod' ? mine.filter(t => yProd.has(t.key)) : yFilter === 'locked' ? mine.filter(t => yLock.has(t.key)) : mine).filter(t => Filter.test(tItem(t)));
+    const list = mine.length ? mineF.slice(0, 100) : [...D.TICKETS].sort(byUrgency).filter(t => Filter.test(tItem(t))).slice(0, 30);
     $('#qTicketsLabel').textContent = mine.length ? 'Tickets' : 'Urgent'; $('#qTicketsLabel').parentElement.title = mine.length ? 'My tickets: assigned to, reported or watched by you' : 'Most urgent tickets fleet-wide';
-    $('#queueCount').textContent = mine.length ? `${mine.length} open${aiRank() ? ' · ✨ AI order' : ''}` : 'fleet-wide';
+    $('#queueCount').textContent = mine.length ? `${F ? `${mineF.length} of ` : ''}${mine.length} open${aiRank() ? ' · ✨ AI order' : ''}` : 'fleet-wide';
     $('#queueCount').title = aiRank() ? 'Ordered by your AI provider (Settings → Data → Smart processing). Hover a ticket for the reason.' : '';
     $('#queueNote').hidden = !!mine.length || D.MODE !== 'live';
     $('#queue').innerHTML = list.map(t => {
@@ -715,7 +977,7 @@ LambdaData.ready.then(D => {
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
           <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device, t)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
-    }).join('') || (isLoading('jira') ? loadingLine('jira', 'your tickets') : '<li class="muted" style="padding:10px">No open tickets.</li>');
+    }).join('') || (F ? noMatch('tickets') : isLoading('jira') ? loadingLine('jira', 'your tickets') : '<li class="muted" style="padding:10px">No open tickets.</li>');
     if (mine.length && (yProd.size || yLock.size)) $('#queue').insertAdjacentHTML('afterbegin', `<li class="yard-filter" role="group" aria-label="Filter by Yard state"><span class="yard-tag">Yard</span>
       <button class="chip ${!yFilter ? 'on' : ''}" data-yf="" aria-pressed="${!yFilter}">All</button>
       ${yProd.size ? `<button class="chip ${yFilter === 'prod' ? 'on' : ''}" data-yf="prod" aria-pressed="${yFilter === 'prod'}" title="Your tickets whose host still runs a production app in Yard and isn't locked">⚠ In prod <b>${yProd.size}</b></button>` : ''}
@@ -732,14 +994,14 @@ LambdaData.ready.then(D => {
   const listSites = () => D.SITES.filter(s => D.SCOPE ? D.SCOPE.has(s.id) : s.openTickets || s.devices || s.kind === 'dc')
     .sort((a, b) => b.openTickets - a.openTickets || (b.devices || 0) - (a.devices || 0));
   function renderSites() {
-    const sites = listSites(), max = Math.max(1, ...sites.map(s => s.openTickets));
-    $('#siteCount').textContent = `${sites.length} · by open tickets`;
+    const all = listSites(), sites = all.filter(s => Filter.test(siteItem(s)) || (Filter.on() && ALLT().some(t => t.site === s.id && Filter.test(tItem(t))))), /* a site also shows when its tickets match */ max = Math.max(1, ...sites.map(s => s.openTickets));
+    $('#siteCount').textContent = Filter.on() ? `${sites.length} of ${all.length} · by open tickets` : `${sites.length} · by open tickets`;
     if (!sites.length && isLoading('netbox')) { $('#siteList').innerHTML = loadingLine('netbox', 'sites'); return; }
     $('#siteList').innerHTML = sites.map(s =>
       `<li class="srow ${Fleet.selected === s ? 'sel' : ''} ${s.health === 'idle' ? 'dim' : ''}" data-site="${esc(s.id)}" title="${esc(s.fullName || s.id)}: ${s.openTickets} open tickets, ${esc(siteStatusLabel(s))}${s.healthWhy ? ` (from ${esc(s.healthWhy)}: see the Health tab)` : ''}">
         <span class="code">${esc(s.id)}</span><span class="sname">${esc(s.name)}</span>
         <span style="display:flex;gap:6px;align-items:center"><span class="bar" style="flex:1"><i style="width:${(s.openTickets / max) * 100}%"></i></span><span class="n">${s.openTickets}</span></span>
-        ${healthBadge(s)}</li>`).join('');
+        ${healthBadge(s)}</li>`).join('') || (Filter.on() ? noMatch('sites') : '');
   }
 
   /* ---------------- Live feed ---------------- */
@@ -754,11 +1016,14 @@ LambdaData.ready.then(D => {
     feedOn[b.dataset.src] = !feedOn[b.dataset.src]; b.classList.toggle('on'); b.setAttribute('aria-pressed', feedOn[b.dataset.src]); renderFeed();
   });
   function renderFeed(newCount = 0) {
-    const shown = feed.filter(f => feedOn[f.src]).slice(0, 100);
+    const feedItem = f => { const t = f.src === 'jira' && D.ticketByKey(f.meta?.key || f.ref), age = f.at ? Date.now() - f.at : null;
+      const it = t ? tItem(t) : { text: [], f: { key: f.ref, site: f.meta?.site || f.ref }, is: {}, has: {} };
+      return { ...it, text: [f.text, SRC[f.src]?.[1], ...it.text], f: { ...it.f, src: f.src === 'mail' ? 'gmail' : f.src }, d: { ...(it.d || {}), age, updated: age } }; };
+    const shown = feed.filter(f => feedOn[f.src] && Filter.test(feedItem(f))).slice(0, 100);
     $('#feed').innerHTML = shown.map((f, i) =>
       `<li class="fitem ${i < newCount ? 'new' : ''}" data-feed="${fid(f)}" tabindex="0" role="button" title="Click for details">
         <div class="fmeta"><span class="srctag src-${f.src}">${SRC[f.src][1]}</span><span class="ftime">${rel(f.at)}</span></div><div class="ftext">${esc(f.text)}</div></li>`).join('')
-      || (isLoading('jira', 'netbox', 'slack', 'gmail') ? `<li class="src-note loading"><span class="spin-dot"></span>Loading updates…</li>` : '<li class="muted" style="padding:10px">Nothing yet.</li>');
+      || (Filter.on() && feed.length ? noMatch('updates') : '') || (isLoading('jira', 'netbox', 'slack', 'gmail') ? `<li class="src-note loading"><span class="spin-dot"></span>Loading updates…</li>` : '<li class="muted" style="padding:10px">Nothing yet.</li>');
   }
   // Clicking an event opens what it's about: the details, everything it links to, and a button to the source.
   let feedSeq = 0; const feedById = new Map();
@@ -1532,7 +1797,7 @@ LambdaData.ready.then(D => {
   // Hot nodes (breached tickets, deployments at risk, fresh Slack mentions) fire more often.
   const Brain = (() => {
     const cv = $('#graph'), ctx = cv.getContext('2d');
-    let w = 1, h = 1, dpr = 1, alpha = 1, hover = null, dragNode = null, pan = null, warmed = false, lastFrame = 0;
+    let w = 1, h = 1, dpr = 1, alpha = 1, hover = null, pinned = null, dragNode = null, pan = null, warmed = false, lastFrame = 0;
     // 2D or 3D. In 3D the same graph gets depth: it's laid out in 3D, slowly turns, and drag rotates it (Shift+drag pans).
     let mode3d = false, yaw = 0.6, pitch = -0.35, lastTouch = 0;
     try { mode3d = localStorage.getItem('lambdaos-brain3d') === '1'; } catch { /* per-viewer convenience */ }
@@ -1576,7 +1841,7 @@ LambdaData.ready.then(D => {
     let bscope = VS('graph');
     const inScope = id => vsHas(bscope)(id);
     const anyIn = arr => (arr || []).some(inScope);
-    const siteNode = id => { const s = inScope(id) && (D.ALL || D).siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
+    const siteNode = (id, any = false) => { const s = (any || inScope(id)) && (D.ALL || D).siteById(id); return s ? add('site:' + s.id, 'site', s.id, s, s.health === 'critical' ? 0.6 : s.health === 'warning' ? 0.3 : 0) : null; };
     const person = (id, name) => id ? add('person:' + id, 'person', id === 'me' ? 'You' : name, D.personById(id)) : null;
     const hot = h => h === 'critical' ? 1 : h === 'warning' ? 0.5 : 0;
 
@@ -1593,17 +1858,7 @@ LambdaData.ready.then(D => {
       for (const c of d.channels || []) link(n, add('chan:' + c.id, 'channel', '#' + c.name, c));
     }
     const urgent = S.TICKETS.filter(t => !narrow || inScope(t.site)).sort(byUrgency).slice(0, 180);
-    for (const t of urgent) {
-      const n = add('tk:' + t.key, 'ticket', t.key, t, slaStatus(t) === 'critical' ? 0.7 : slaStatus(t) === 'serious' ? 0.4 : 0);
-      const dev = D.deviceById(t.device), site = siteNode(t.site);
-      const dn = dev ? add('dev:' + dev.id, 'device', dev.id, dev) : null;
-      if (dn) { link(dn, site); link(n, dn); }
-      link(n, site);
-      const y = yardUsable() && yardOf(t.device);
-      if (y?.found && y.region) { const cn = add('cl:' + String(y.region).toLowerCase(), 'cluster', String(y.region).toUpperCase(), { id: String(y.region).toLowerCase(), site: t.site }); link(n, cn); link(cn, site); if (dn) link(dn, cn); }
-      if (t.assignee) link(n, person(t.assignee, D.personById(t.assignee).name));
-      if (t.part) { const p = D.partById(t.part); if (p) link(n, add('part:' + p.id, 'part', p.name !== p.pn ? p.name : p.pn, p)); }
-    }
+    for (const t of urgent) ticketNode(t);
     for (const c of D.CHANNELS || []) if (c.site && byId.has('site:' + c.site)) link(add('chan:' + c.id, 'channel', '#' + c.name, c), byId.get('site:' + c.site));
     for (const m of D.MENTIONS || []) { const n = byId.get('chan:' + m.channelId); if (n && m.at > Date.now() - 864e5) n.heat = Math.max(n.heat, 0.8); }
     const soon = Date.now() + 3 * 864e5;
@@ -1614,11 +1869,56 @@ LambdaData.ready.then(D => {
       link(n, e.deployment ? byId.get('dep:' + e.deployment) : siteNode(e.site));
     }
     }
+    // A ticket and what hangs off it (device, site, Yard cluster, assignee, part). any = also outside the site picker.
+    function ticketNode(t, any = false) {
+      const n = add('tk:' + t.key, 'ticket', t.key, t, slaStatus(t) === 'critical' ? 0.7 : slaStatus(t) === 'serious' ? 0.4 : 0);
+      const dev = D.deviceById(t.device), site = siteNode(t.site, any);
+      const dn = dev ? add('dev:' + dev.id, 'device', dev.id, dev) : null;
+      if (dn) { link(dn, site); link(n, dn); }
+      link(n, site);
+      const y = yardUsable() && yardOf(t.device);
+      if (y?.found && y.region) { const cn = add('cl:' + String(y.region).toLowerCase(), 'cluster', String(y.region).toUpperCase(), { id: String(y.region).toLowerCase(), site: t.site }); link(n, cn); link(cn, site); if (dn) link(dn, cn); }
+      if (t.assignee) link(n, person(t.assignee, D.personById(t.assignee).name));
+      if (t.part) { const p = D.partById(t.part); if (p) link(n, add('part:' + p.id, 'part', p.name !== p.pn ? p.name : p.pn, p)); }
+      return n;
+    }
     build();
+    // "Show in Second brain" from a card: make sure the item is in the graph (it may be outside the 180 most urgent
+    // tickets or the site picker), place anything new next to its neighbours, then pin it, so it and everything linked
+    // to it stay lit, and centre on it. Clicking empty space unpins.
+    function ensure(kind, r) {
+      const id = { ticket: 'tk:' + r.key, device: 'dev:' + r.id, deployment: 'dep:' + r.key, part: 'part:' + r.id, site: 'site:' + r.id, cluster: 'cl:' + r.id, project: 'proj:' + r.key, person: 'person:' + r.id }[kind];
+      if (!id || byId.has(id)) return byId.get(id);
+      const before = nodes.length;
+      if (kind === 'ticket') ticketNode(r, true);
+      else if (kind === 'device' || kind === 'part' || kind === 'person') {
+        for (const t of ALLT().filter(t => (kind === 'device' ? t.device : kind === 'part' ? t.part : t.assignee) === r.id).sort(byUrgency).slice(0, 40)) ticketNode(t, true);
+        if (kind === 'device' && !byId.has(id)) link(add(id, 'device', r.id, r), siteNode(r.site, true));
+        if (kind === 'part' && !byId.has(id)) add(id, 'part', r.name !== r.pn ? r.name : r.pn, r);
+        if (kind === 'person' && !byId.has(id)) person(r.id, r.name);
+      } else if (kind === 'deployment') {
+        const n = add(id, 'deployment', r.key, r, hot(r.health));
+        r.sites.forEach(c => link(n, siteNode(c, true))); link(n, person(r.assignee, r.assigneeName));
+        if (r.project) link(n, byId.get('proj:' + r.project.key));
+        for (const c of r.channels || []) link(n, add('chan:' + c.id, 'channel', '#' + c.name, c));
+      } else if (kind === 'site') siteNode(r.id, true);
+      else if (kind === 'cluster') { const n = add(id, 'cluster', String(r.id).toUpperCase(), r); if (r.site) link(n, siteNode(r.site, true)); }
+      else if (kind === 'project') add(id, 'project', r.title || r.key, r, hot(r.health));
+      for (const n of nodes.slice(before)) { const nb = [...n.nb].find(x => nodes.indexOf(x) < before); if (nb) { n.x = nb.x + (rnd() - 0.5) * 40; n.y = nb.y + (rnd() - 0.5) * 40; n.z = nb.z; } }
+      return byId.get(id);
+    }
+    function focusOn(kind, r) {
+      if (!warmed) { for (let i = 0; i < 320; i++) tick(); warmed = true; fit(); }
+      const n = ensure(kind, r); if (!n) return false;
+      alpha = Math.max(alpha, 0.25); for (let i = 0; i < 80; i++) tick();
+      pinned = n; n.fire = 1; for (let i = 0; i < 4; i++) spawn(n);
+      project(); view.k = Math.max(view.k, 1.6); view.x = -n.X * view.k; view.y = -n.Y * view.k;
+      return true;
+    }
 
     function resize() { const r = cv.getBoundingClientRect(); dpr = devicePixelRatio || 1; w = r.width || 1; h = r.height || 1; cv.width = w * dpr; cv.height = h * dpr; }
     new ResizeObserver(resize).observe(cv);
-    const visible = n => !hidden.has(n.type);
+    const visible = n => !hidden.has(n.type) || (pinned && (n === pinned || pinned.nb.has(n)));
 
     function tick() {
       const n = nodes.length;
@@ -1707,7 +2007,7 @@ LambdaData.ready.then(D => {
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
       ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * (w / 2 + view.x), dpr * (h / 2 + view.y));
-      const focus = hover, lit = n => !focus || n === focus || focus.nb.has(n);
+      const focus = hover || pinned, lit = n => !focus || n === focus || focus.nb.has(n);
 
       // dendrites
       ctx.lineCap = 'round';
@@ -1819,6 +2119,7 @@ LambdaData.ready.then(D => {
     cv.addEventListener('pointerup', () => {
       const p = pan; pan = null; dragNode = null;
       if (p && p.node && p.moved < 6) openEntity(p.node.type, p.node.ref);
+      else if (p && !p.node && p.moved < 6) pinned = null;
     });
     cv.addEventListener('pointerleave', () => { hover = null; hideTip(); });
     cv.addEventListener('dblclick', fit);
@@ -1829,12 +2130,12 @@ LambdaData.ready.then(D => {
     }, { passive: false });
 
     return {
-      draw, resize, fit, TYPES, nodeCount: () => nodes.filter(visible).length,
+      draw, resize, fit, focusOn, TYPES, nodeCount: () => nodes.filter(visible).length, pinned: () => pinned?.id || null,
       is3d: () => mode3d,
       set3d: on => { if (on === mode3d) return; mode3d = on; try { localStorage.setItem('lambdaos-brain3d', on ? '1' : '0'); } catch { /* ignore */ }
         alpha = Math.max(alpha, 0.5); for (let i = 0; i < 120; i++) tick(); fit(); },
       counts: () => Object.fromEntries(Object.keys(TYPES).map(k => [k, nodes.filter(n => n.type === k).length])),
-      scope: () => bscope, setScope: v => { if (v === bscope) return; bscope = v; setVS('graph', v); build(); alpha = 1; warmed = false; },
+      scope: () => bscope, setScope: v => { if (v === bscope) return; bscope = v; setVS('graph', v); pinned = null; build(); alpha = 1; warmed = false; },
       isHidden: k => hidden.has(k), toggle: k => { hidden.has(k) ? hidden.delete(k) : hidden.add(k); hover = null; return !hidden.has(k); },
     };
   })();
@@ -1984,6 +2285,474 @@ LambdaData.ready.then(D => {
   })();
 
   /* ---------------- Stage tabs, legends, globe controls ---------------- */
+  /* ---------------- Trace: one item's history on a timeline ----------------
+     Pick a ticket, host, serial, part or deployment (⏱ Trace on its card, the search box here, or T). Everything that
+     happened to it is drawn in lanes, one per app, on a time axis you can zoom (scroll) and drag:
+       Jira: the ticket's life (created → resolved), every status / assignee change and comment, and every other ticket
+             ever filed on the same host or serial (closed ones too);  Service desks: RMA, Shipping, Warehouse… requests
+             that mention it;  NetBox: when the device was added, changes to it and its parts, its journal;  Grafana:
+             alerts on it;  Yard: its state now;  Slack: messages about it;  Atium / NetSuite / Meetings for deployments.
+     The left column lists what's related (the device, chassis and nodes, other tickets, RMAs, parts…): tick one to add
+     its history to the same timeline, or click its name to trace it instead. The trail at the top steps back.
+     Read with your own sign-ins only when you open Trace; nothing is stored. */
+  const Trace = (() => {
+    const box = $('#trace');
+    const LANES = [
+      ['jira', 'Jira', 'var(--src-jira)'], ['desk', 'Service desks', '#d9a23a'], ['netbox', 'NetBox', 'var(--src-netbox)'], ['grafana', 'Grafana', '#f46800'],
+      ['yard', 'Yard', '#8bd17c'], ['slack', 'Slack', 'var(--src-slack)'], ['mail', 'Gmail', 'var(--src-mail)'], ['atium', 'Atium', 'var(--accent)'], ['netsuite', 'NetSuite', 'var(--src-netsuite)'], ['meet', 'Meetings', '#a7a6a0'],
+    ];
+    const LANE = Object.fromEntries(LANES.map(([k, l, c]) => [k, { label: l, color: c }]));
+    const DAY = 864e5, PRESETS = [['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]];
+    let subject = null, trail = [], ticked = new Set(), range = null, selected = null, auto = 'all', lastEvs = [];
+    const items = new Map(); // id → { kind, id, label, events: [], related: [], status: {lane: text}, loading }
+    const idOf = (kind, id) => `${kind}:${id}`;
+    try { const s = JSON.parse(sessionStorage.getItem('lambdaos-trace') || 'null'); if (s?.kind) subject = s; } catch { /* ignore */ }
+    const save = () => { try { sessionStorage.setItem('lambdaos-trace', JSON.stringify(subject)); } catch { /* ignore */ } };
+    const when = t => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', year: new Date(t).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined, hour: 'numeric', minute: '2-digit' });
+    const ago = t => { const r = rel(t); return r === 'now' ? 'just now' : t > Date.now() ? `in ${rel(2 * Date.now() - t)}` : `${r} ago`; };
+    const isKey = q => /^[A-Z][A-Z0-9]+-\d+$/i.test(q);
+
+    // What a search or a card points at.
+    function resolve(q) {
+      q = String(q || '').trim(); if (!q) return null;
+      const dep = D.deploymentByKey?.(q.toUpperCase()); if (dep) return { kind: 'deployment', id: dep.key, label: dep.title || dep.key };
+      if (isKey(q)) { const t = D.ticketByKey(q.toUpperCase()); return { kind: 'ticket', id: q.toUpperCase(), label: t?.summary || q.toUpperCase() }; }
+      const dev = D.deviceById(q) || D.deviceById(q.toLowerCase()); if (dev) return { kind: 'device', id: dev.id, label: dev.model };
+      const part = D.partById(q) || D.PARTS.find(p => p.pn.toLowerCase() === q.toLowerCase()); if (part) return { kind: 'part', id: part.id, label: partLabel(part) };
+      const host = /^[a-z]{3}\d\d[a-z0-9]*(-[a-z0-9]+){2,}$/i.test(q); return { kind: host ? 'device' : 'term', id: host ? q.toLowerCase() : q, label: host ? 'Host' : 'Search term' };
+    }
+    // inside = followed from within Trace (Related, a mark, the trail): adds to the trail. From anywhere else it's a new trace.
+    function open(kind, id, { keepTrail = false, inside = false } = {}) {
+      const r = kind === 'term' ? resolve(id) : { kind, id, label: '' };
+      if (!r) return;
+      if (!inside && !keepTrail) trail = [];
+      else if (inside && subject && idOf(subject.kind, subject.id) !== idOf(r.kind, r.id)) trail = [...trail.filter(x => idOf(x.kind, x.id) !== idOf(r.kind, r.id)), subject].slice(-6);
+      subject = { kind: r.kind, id: r.id }; ticked = new Set(); selected = null; range = null; auto = 'all'; save();
+      if (activeView !== 'trace') setView('trace'); else render();
+      load(subject);
+    }
+
+    /* ---- collecting events ---- */
+    const ev = (lane, at, o) => ({ lane, at, ...o });
+    function localEvents(it) {
+      const out = [], rel = [];
+      const ticket = it.kind === 'ticket' ? D.ticketByKey(it.id) : null;
+      const host = it.kind === 'device' ? it.id : ticket?.device || null, dev = host && D.deviceById(host);
+      const alerts = dev?.alerts || ticket?.alerts || [];
+      for (const a of alerts) out.push(ev('grafana', a.since || Date.now(), { title: `${a.name} firing`, text: `${a.severity || ''} · ${host}${a.rack ? ` · ${a.rack}` : ''}${a.u ? ` U${a.u}` : ''}`, tone: a.severity === 'critical' ? 'critical' : 'warning', end: Date.now(), open: true }));
+      const y = host && yardUsable() && yardOf(host);
+      if (y?.found) out.push(ev('yard', Date.now(), { title: `${y.state || 'state unknown'}${y.lockedBy ? ` · 🔒 ${meLock(y) ? 'you' : y.lockedBy}` : ' · not locked'}`, text: `${y.region ? String(y.region).toUpperCase() + ' · ' : ''}pool ${y.pool || '—'} · Yard shows the state now, not its history`, tone: LambdaAlerts.inProduction(y) ? 'warning' : 'good', url: yardUrl(host) }));
+      if (ticket) {
+        if (dev) rel.push({ kind: 'device', id: dev.id, label: dev.id, sub: `${dev.model} · ${dev.rack}${dev.u ? ' U' + dev.u : ''}` });
+        if (ticket.part) { const p = D.partById(ticket.part); if (p) rel.push({ kind: 'part', id: p.id, label: partLabel(p), sub: 'part it needs' }); }
+      }
+      if (host) for (const t of ALLT().filter(t => t.device === host && t.key !== it.id)) rel.push({ kind: 'ticket', id: t.key, label: t.key, sub: t.summary });
+      if (it.kind === 'part') for (const t of ALLT().filter(t => t.part === it.id).sort(byUrgency).slice(0, 20)) rel.push({ kind: 'ticket', id: t.key, label: t.key, sub: t.summary });
+      if (it.kind === 'deployment') {
+        const d = D.deploymentByKey(it.id);
+        if (d) {
+          if (d.start || d.end) out.push(ev('jira', d.start || d.end, { end: d.end || d.start, title: `Planned: ${fmtDate(d.start)} → ${fmtDate(d.end)}`, text: `${d.key} · ${d.title}`, tone: d.health, url: d.url, span: true }));
+          for (const e of d.events || []) out.push(ev('meet', e.at, { title: e.title, text: e.allDay ? 'all day' : '', url: e.link }));
+          for (const m of d.moves || []) if (m.at) out.push(ev('netsuite', m.at, { title: `${m.type} ${m.doc}`, text: [m.status, m.tracking && `tracking ${m.tracking}`].filter(Boolean).join(' · ') }));
+          for (const m of d.build?.milestones || []) { const at = Date.parse((m.done || m.scheduled || '') + ((m.done || m.scheduled || '').length === 10 ? 'T12:00:00' : '')); if (at) out.push(ev('atium', at, { title: m.name, text: m.status === 'completed' ? 'completed' : `planned${at < Date.now() ? ' · late' : ''}`, tone: m.status === 'completed' ? 'good' : at < Date.now() ? 'warning' : 'idle', hollow: m.status !== 'completed', url: d.build.url })); }
+          for (const w of d.workstreams || []) rel.push({ kind: 'ticket', id: w.key, label: w.key, sub: w.summary });
+        }
+      }
+      return { out, rel };
+    }
+    function jiraEvents(it, res) {
+      const out = [], rel = [];
+      for (const i of res.issues || []) {
+        const lane = /^(DC|PMO|CI)$/.test(i.project) ? 'jira' : 'desk', me = i.key === it.id;
+        out.push(ev(lane, i.created, { end: i.resolved || Date.now(), span: true, open: !i.resolved, title: `${i.key} · ${i.summary}`, text: `${i.projectName || i.project} · ${i.status}${i.resolved ? ` · resolved ${fmtDate(i.resolved)}` : ' · still open'}`,
+          tone: i.done ? 'idle' : 'warning', url: i.url, trace: me ? null : { kind: 'ticket', id: i.key }, label: i.key, main: me }));
+        for (const c of i.changes || []) out.push(ev(lane, c.at, { title: `${i.key}: ${c.field} → ${c.to || '—'}`, text: `${c.from ? `from ${c.from} · ` : ''}by ${c.who}`, url: i.url, tone: /status/i.test(c.field) && /done|closed|resolved/i.test(c.to) ? 'good' : 'idle', small: true }));
+        for (const c of i.comments || []) out.push(ev(lane, c.at, { title: `${i.key}: comment by ${c.who}`, text: c.text, url: i.url, small: true, comment: true }));
+        if (!me) rel.push({ kind: 'ticket', id: i.key, label: i.key, sub: `${i.summary} · ${i.status}`, desk: lane === 'desk', done: i.done });
+      }
+      return { out, rel };
+    }
+    function netboxEvents(it, res) {
+      const out = [], rel = [];
+      if (res.created) out.push(ev('netbox', res.created, { title: `Added to NetBox`, text: `${it.id}${res.serial ? ` · serial ${res.serial}` : ''}`, url: res.url, tone: 'good' }));
+      for (const c of res.changes || []) out.push(ev('netbox', c.at, { title: c.part ? `${c.part}: ${c.action}` : `Device ${c.action === 'update' ? 'changed' : c.action}`, text: `${c.text}${c.who ? ` · by ${String(c.who).split('@')[0]}` : ''}`, url: res.url, small: true, tone: c.person ? 'idle' : 'auto' }));
+      for (const j of res.journal || []) out.push(ev('netbox', j.at, { title: `Journal${j.kind ? ' · ' + j.kind : ''}`, text: `${j.text}${j.who ? ` · ${j.who}` : ''}`, url: res.url, comment: true }));
+      if (res.parent) rel.push({ kind: 'device', id: res.parent.name, label: res.parent.name, sub: 'chassis it sits in' });
+      for (const c of res.children || []) rel.push({ kind: 'device', id: c.name, label: c.name, sub: `installed in ${c.bay}` });
+      return { out, rel, modules: res.modules || [] };
+    }
+    const slackEvents = res => ({ out: (res.items || []).map(m => ev('slack', m.at, { title: `${m.channel === 'DM' ? 'DM' : '#' + m.channel} · ${m.user}`, text: m.text, url: m.link, comment: true })), rel: [] });
+
+    // Demo: a believable history so the preview shows the idea.
+    function demo(it) {
+      const now = Date.now(), d = n => now - n * DAY, h = n => now - n * 3600e3;
+      if (it.kind === 'term' || it.kind === 'part' || it.kind === 'deployment') return { out: [
+        ev('desk', d(9), { end: d(2), span: true, title: `SHP-3171 · Ship ${it.id} to site`, text: 'Shipping · Done', tone: 'idle', trace: { kind: 'ticket', id: 'SHP-3171' }, label: 'SHP-3171' }),
+        ev('jira', d(12), { end: now, span: true, open: true, title: `DC-33188 · mentions ${it.id}`, text: 'Data Center Operations · In Progress · still open', tone: 'warning', trace: { kind: 'ticket', id: 'DC-33188' }, label: 'DC-33188' }),
+        ev('slack', d(3), { title: '#dc-logistics · M. Ortiz', text: `${it.id} left the warehouse this morning`, comment: true }),
+      ], rel: [{ kind: 'ticket', id: 'SHP-3171', label: 'SHP-3171', sub: `Ship ${it.id} to site · Done`, desk: true, done: true }, { kind: 'ticket', id: 'DC-33188', label: 'DC-33188', sub: 'mentions it · In Progress' }] };
+      const t = it.kind === 'ticket' ? D.ticketByKey(it.id) : null, host = it.kind === 'device' ? it.id : t?.device || 'qro01-r101-u12';
+      const key = t?.key || 'DC-33100', n = Number(key.split('-')[1]) || 33100, created = t?.created || d(4);
+      const out = [
+        ev('netbox', d(240), { title: 'Added to NetBox', text: `${host} · serial LMB482913`, tone: 'good' }),
+        ev('netbox', d(61), { title: 'Module GPU 3: delete', text: 'serial · module_bay · by j.kim', small: true }),
+        ev('netbox', d(48), { title: 'Module GPU 3: create', text: 'serial: — → 1652022008417 · by j.kim', small: true }),
+        ev('netbox', h(30), { title: 'Journal · Info', text: 'Swapped GPU 3, sent old one to RMA · j.kim', comment: true }),
+        ev('netbox', h(5), { title: 'Device changed', text: 'status: Active → Failed · by s.patel', small: true }),
+        ev('jira', d(63), { end: d(47), span: true, title: `DC-${n - 412} · GPU fell off the bus`, text: 'Data Center Operations · Done · resolved ' + fmtDate(d(47)), tone: 'idle', trace: { kind: 'ticket', id: `DC-${n - 412}` }, label: `DC-${n - 412}` }),
+        ev('jira', d(19), { end: d(17), span: true, title: `DC-${n - 155} · Node fails burn-in`, text: 'Data Center Operations · Done', tone: 'idle', trace: { kind: 'ticket', id: `DC-${n - 155}` }, label: `DC-${n - 155}` }),
+        ev('jira', created, { end: now, span: true, open: true, main: true, title: `${key} · ${t?.summary || 'Node fails burn-in'}`, text: `Data Center Operations · ${t?.status || 'Open'} · still open`, tone: 'warning', label: key }),
+        ev('jira', created + 3600e3, { title: `${key}: status → In Progress`, text: 'by S. Patel', small: true }),
+        ev('jira', h(26), { title: `${key}: comment by J. Kim`, text: 'Reseated GPU 3, still failing DCGM diag level 3. Ordering a replacement.', comment: true, small: true }),
+        ev('jira', h(20), { title: `${key}: status → Waiting for Parts`, text: 'from In Progress · by J. Kim', small: true }),
+        ev('desk', d(60), { end: d(33), span: true, title: 'RMA-5918 · Return GPU 1652022008417 to vendor', text: 'RMA Request · Closed', tone: 'idle', trace: { kind: 'ticket', id: 'RMA-5918' }, label: 'RMA-5918' }),
+        ev('desk', h(19), { end: now, span: true, open: true, title: 'SHP-3198 · Ship replacement GPU to ' + (t?.site || 'QRO01'), text: 'Shipping · In Transit · still open', tone: 'warning', trace: { kind: 'ticket', id: 'SHP-3198' }, label: 'SHP-3198' }),
+        ev('slack', d(62), { title: '#dc-ops · S. Patel', text: `${host} dropped a GPU again, opening a ticket`, comment: true }),
+        ev('slack', h(3), { title: '#hw-validation · J. Kim', text: `${host} failed burn-in again, replacement is on SHP-3198`, comment: true }),
+      ];
+      return { out, rel: [
+        { kind: 'ticket', id: `DC-${n - 412}`, label: `DC-${n - 412}`, sub: 'GPU fell off the bus · Done', done: true },
+        { kind: 'ticket', id: `DC-${n - 155}`, label: `DC-${n - 155}`, sub: 'Node fails burn-in · Done', done: true },
+        { kind: 'ticket', id: 'RMA-5918', label: 'RMA-5918', sub: 'Return GPU to vendor · Closed', desk: true, done: true },
+        { kind: 'ticket', id: 'SHP-3198', label: 'SHP-3198', sub: 'Ship replacement GPU · In Transit', desk: true },
+        { kind: 'device', id: host.replace(/-u\d+$/, '-chassis'), label: host.replace(/-u\d+$/, '-chassis'), sub: 'chassis it sits in' },
+      ] };
+    }
+
+    // Everything Lambda OS already has loaded that mentions the item: the live feed, Slack mentions, unread mail,
+    // NetSuite movements (document, tracking and RMA numbers), Atium purchase orders, meetings and volunteer requests.
+    const termsOf = it => {
+      const t = it.kind === 'ticket' ? D.ticketByKey(it.id) : null, dev = D.deviceById(it.kind === 'device' ? it.id : t?.device || '');
+      const dep = it.kind === 'deployment' ? D.deploymentByKey(it.id) : null;
+      return [...new Set([it.id, t?.device, dev?.serial, dep?.key].filter(x => x && String(x).length >= 4).map(x => String(x).toLowerCase()))];
+    };
+    function loadedEvents(it) {
+      const terms = termsOf(it), res = terms.map(w => new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`, 'i')), has = s => { s = String(s || ''); return !!s && res.some(re => re.test(s)); };
+      const out = [], rel = [], LANE_OF = { jira: 'jira', netbox: 'netbox', slack: 'slack', mail: 'mail', netsuite: 'netsuite', atium: 'atium', grafana: 'grafana' };
+      for (const f of D.FEED || []) if (['grafana', 'atium'].includes(f.src) || (f.src === 'netbox' && !(D.MODE === 'live' && isExt))) if (LANE_OF[f.src] && has(f.text)) out.push(ev(LANE_OF[f.src], f.at, { title: f.text.slice(0, 120), text: 'from the live feed', url: f.url || f.meta?.url || '' }));
+      for (const m of D.MENTIONS || []) if (has(m.text)) out.push(ev('slack', m.at, { title: `${m.isDm ? 'DM' : '#' + m.channel} · ${m.user}`, text: m.text, url: m.link, comment: true }));
+      for (const e of D.MAIL?.entries || []) if (has(e.title) || has(e.summary)) out.push(ev('mail', e.at, { title: `${e.from}: ${e.title}`, text: e.summary, url: e.link, comment: true }));
+      for (const v of D.VOLUNTEER || []) if (has(v.text)) out.push(ev('slack', v.askedAt || v.at, { title: `#${v.channel || 'slack'} · volunteers`, text: v.text, url: v.link, comment: true }));
+      for (const e of D.EVENTS || []) if (has(e.title)) out.push(ev('meet', e.at, { title: e.title, url: e.link }));
+      for (const m of D.MOVES || []) if (has([m.doc, m.tracking, m.rma, m.deployment, m.from, m.to].join(' '))) {
+        out.push(ev('netsuite', m.at, { title: `${m.type} ${m.doc}`, text: [m.status, m.from && m.to && `${m.from} → ${m.to}`, m.tracking && `tracking ${m.tracking}`, m.rma && `RMA ${m.rma}`].filter(Boolean).join(' · '), tone: /received|delivered|closed/i.test(m.status) ? 'good' : 'idle' }));
+        if (m.tracking) rel.push({ kind: 'term', id: m.tracking, label: m.tracking, sub: `tracking · ${m.doc}` });
+        if (m.rma && !/^(no|none|n\/a|-+|false|0)$/i.test(String(m.rma).trim()) && String(m.rma).trim().length >= 3) rel.push(/^[A-Z]+-\d+$/i.test(m.rma) ? { kind: 'ticket', id: m.rma.toUpperCase(), label: m.rma, sub: `RMA on ${m.doc}`, desk: true } : { kind: 'term', id: m.rma, label: m.rma, sub: `RMA on ${m.doc}` });
+        if (!terms.includes(String(m.doc).toLowerCase())) rel.push({ kind: 'term', id: m.doc, label: m.doc, sub: `${m.type}${m.status ? ' · ' + m.status : ''}` });
+      }
+      for (const st of D.SITES) for (const p of st.atium?.posLive?.pos || st.atium?.pos || []) if (has([p.name, p.supplier, p.ref].join(' '))) {
+        const due = Date.parse(p.promise || p.expected || '') || 0, ps = LambdaAlerts.poState(p);
+        if (due) out.push(ev('atium', due, { title: `${p.name} · ${p.supplier || 'PO'}`, text: `${st.id} · ${ps.state}${p.assets ? ` · ${p.assetsIn}/${p.assets} assets` : ''}`, hollow: ps.open, tone: ps.state === 'late' ? 'warning' : ps.open ? 'idle' : 'good', url: st.atium.posUrl }));
+      }
+      return { out, rel };
+    }
+
+    async function load(it) {
+      const id = idOf(it.kind, it.id);
+      const old = items.get(id);
+      if (old && (!old.done || Date.now() - old.at < 5 * 60e3)) { render(); return; } // loading already, or fresh (5 min)
+      const rec = { ...it, events: [], related: [], status: {}, modules: [], at: Date.now() }; items.set(id, rec);
+      const addR = r => { for (const x of r || []) if (!rec.related.some(y => idOf(y.kind, y.id) === idOf(x.kind, x.id)) && idOf(x.kind, x.id) !== id) rec.related.push(x); };
+      const take = ({ out, rel, modules }) => { rec.events.push(...out.filter(e => e.at > 946684800000 && (!e.end || e.end >= e.at)).map(e => ({ ...e, item: id }))); /* no date (or before 2000): left out */ addR(rel); if (modules) rec.modules = modules; render(); };
+      const local = localEvents(rec); take(local); take(loadedEvents(rec));
+      const t = it.kind === 'ticket' ? D.ticketByKey(it.id) : null, dev = D.deviceById(it.kind === 'device' ? it.id : t?.device || '');
+      const host = it.kind === 'device' ? it.id : t?.device || '';
+      if (D.MODE !== 'live' || !isExt) { rec.status.note = D.MODE === 'live' ? 'History is read only inside the extension.' : ''; if (D.MODE !== 'live') { await new Promise(r => setTimeout(r, 200)); take(demo(rec)); } rec.done = true; render(); return; }
+      const plan = {
+        ticket: { keys: [it.id], terms: [host, dev?.serial], slack: [it.id, host], nb: dev?.url, host },
+        device: { keys: [], terms: [it.id, dev?.serial], slack: [it.id, dev?.serial], nb: dev?.url, host },
+        deployment: { keys: [it.id], terms: [], slack: [it.id] },
+        part: { keys: [], terms: [it.id], slack: [it.id] },
+        term: { keys: [], terms: [it.id], slack: [it.id] },
+      }[it.kind];
+      const step = async (lane, fn, conv, name) => {
+        rec.status[lane] = 'loading'; render();
+        try { const res = await fn(); rec.status[lane] = res.off ? `${name} is off` : res.none ? `not found in ${name}` : 'ok'; if (!res.off && !res.none) take(conv(res)); }
+        catch (e) { rec.status[lane] = /not signed in|sign_in/i.test(String(e.message || e)) ? `not signed in to ${name}` : `couldn't read ${name}`; }
+        render();
+      };
+      await Promise.all([
+        step('jira', () => LambdaLive.traceJira({ keys: plan.keys, terms: plan.terms }), r => jiraEvents(rec, r), 'Jira'),
+        plan.nb || plan.host ? step('netbox', () => LambdaLive.traceNetbox(plan.nb, plan.host), r => netboxEvents(rec, r), 'NetBox') : null,
+        plan.slack.filter(Boolean).length ? step('slack', () => LambdaLive.linkedSlack(plan.slack.filter(Boolean)), slackEvents, 'Slack') : null,
+      ]);
+      rec.done = true; render();
+    }
+
+    /* ---- drawing ---- */
+    const shown = () => [subject && idOf(subject.kind, subject.id), ...ticked].filter(Boolean).map(id => items.get(id)).filter(Boolean);
+    function allEvents() {
+      const seen = new Set(), out = [];
+      for (const it of shown()) for (const e of it.events) { const k = `${e.lane}|${e.at}|${e.title}`; if (!seen.has(k)) { seen.add(k); out.push(e); } }
+      return out;
+    }
+    function fitRange(evs, all = false) {
+      if (!evs.length) return { from: Date.now() - 30 * DAY, to: Date.now() + DAY };
+      if (!all) { const recent = evs.filter(e => (e.end || e.at) >= Date.now() - 120 * DAY); if (recent.length) evs = recent.map(e => e.at < Date.now() - 120 * DAY ? { ...e, at: Date.now() - 120 * DAY } : e); }
+      let a = Math.min(...evs.map(e => e.at)), b = Math.max(Date.now(), ...evs.map(e => e.end || e.at));
+      const pad = Math.max((b - a) * 0.06, 3600e3); return { from: a - pad, to: b + pad };
+    }
+    function ticks(from, to) {
+      const span = to - from, steps = [[3600e3, 'h'], [6 * 3600e3, 'h'], [DAY, 'd'], [2 * DAY, 'd'], [7 * DAY, 'd'], [14 * DAY, 'd'], [30 * DAY, 'm'], [91 * DAY, 'm'], [365 * DAY, 'y']];
+      const [step, u] = steps.find(([s]) => span / s <= 9) || steps[steps.length - 1];
+      const out = []; let t;
+      if (u === 'm' || u === 'y') { const d = new Date(from); d.setDate(1); d.setHours(0, 0, 0, 0); if (u === 'y') d.setMonth(0); t = d.getTime(); }
+      else { const d = new Date(from); d.setMinutes(0, 0, 0); if (u === 'd') d.setHours(0); t = d.getTime(); }
+      const months = u === 'y' ? 12 : Math.round(step / (30 * DAY));
+      while (t <= to && out.length < 40) {
+        if (t >= from) out.push({ t, label: u === 'h' ? new Date(t).toLocaleTimeString([], { hour: 'numeric' }) + (new Date(t).getHours() === 0 ? ' ' + fmtDate(t) : '') : u === 'y' ? new Date(t).getFullYear() : u === 'm' ? new Date(t).toLocaleDateString([], { month: 'short', year: '2-digit' }) : fmtDate(t) });
+        if (u === 'm' || u === 'y') { const d = new Date(t); d.setMonth(d.getMonth() + months); t = d.getTime(); } else t += step;
+      }
+      return out;
+    }
+    function laneHtml(lane, evs, x) {
+      const spans = evs.filter(e => e.span).sort((a, b) => a.at - b.at), pts = evs.filter(e => !e.span).sort((a, b) => a.at - b.at);
+      const rows = []; // greedy stacking so overlapping tickets don't hide each other
+      for (const s of spans) { const l = x(s.at), r = x(s.end || s.at); let i = rows.findIndex(end => end < l - 0.4); if (i < 0) { i = rows.length; rows.push(0); } rows[i] = Math.max(r, l + 1.5); s._row = i; }
+      const tone = e => (e.tone ? `t-${e.tone}` : '') + (Filter.test({ text: [e.title, e.text, e.label], f: { src: LANE[e.lane]?.label }, d: { age: Date.now() - e.at, updated: Date.now() - e.at }, is: {}, has: {} }) ? '' : ' f-out'), sel = e => selected && selected.at === e.at && selected.title === e.title ? 'sel' : '';
+      const key = e => `data-tev="${e._i}"`;
+      const pr = pts.length ? 1 : 0, H = pr * 20 + rows.length * 20 + 8;
+      return `<div class="tr-lane" style="height:${Math.max(H, 30)}px;--lc:${LANE[lane].color}">
+        <div class="tr-lname">${LANE[lane].label} <small>${evs.length}</small></div>
+        <div class="tr-track">
+          ${pts.map(e => { const p = x(e.at); return p < -1 || p > 101 ? '' : `<button type="button" class="tr-pt ${e.small ? 'small' : ''} ${e.comment ? 'cmt' : ''} ${e.hollow ? 'hollow' : ''} ${tone(e)} ${sel(e)}" style="left:${p}%;top:6px" ${key(e)} title="${esc(`${when(e.at)} · ${e.title}${e.text ? '\n' + e.text : ''}`)}"></button>`; }).join('')}
+          ${spans.map(e => { const l = Math.max(x(e.at), -2), r = Math.min(x(e.end || e.at), 102); if (r < 0 || l > 100) return ''; const w = Math.max(r - l, 0.6);
+            return `<button type="button" class="tr-span ${tone(e)} ${e.open ? 'open' : ''} ${e.main ? 'main' : ''} ${sel(e)}" style="left:${l}%;width:${w}%;top:${pr * 20 + 6 + e._row * 20}px" ${key(e)} title="${esc(`${when(e.at)} → ${e.open ? 'still open' : when(e.end)}\n${e.title}${e.text ? '\n' + e.text : ''}`)}">${w > 5 ? esc(e.label || e.title) : ''}</button>`; }).join('')}
+        </div></div>`;
+    }
+    function render() {
+      if (activeView !== 'trace') return;
+      if (!subject) { box.innerHTML = emptyHtml(); return; }
+      if (!items.has(idOf(subject.kind, subject.id))) return load(subject); // e.g. after a reload: read its history again
+      const sid = idOf(subject.kind, subject.id), rec = items.get(sid) || { events: [], related: [], status: {} }, evs = allEvents();
+      evs.forEach((e, i) => { e._i = i; }); lastEvs = evs;
+      if (auto || !range) range = fitRange(evs, auto === 'all');
+      const { from, to } = range, x = t => ((t - from) / (to - from)) * 100;
+      const lanes = LANES.map(([k]) => k).filter(k => evs.some(e => e.lane === k));
+      const loading = Object.entries(rec.status).filter(([, v]) => v === 'loading').map(([k]) => LANE[k]?.label || k);
+      const issues = Object.entries(rec.status).filter(([k, v]) => v && v !== 'ok' && v !== 'loading' && k !== 'note').map(([, v]) => v);
+      const title = (() => {
+        if (subject.kind === 'ticket') { const t = D.ticketByKey(subject.id); const j = rec.events.find(e => e.main); return { code: `${subject.id} · TICKET`, name: t?.summary || j?.title?.replace(/^\S+ · /, '') || subject.id }; }
+        if (subject.kind === 'device') { const d = D.deviceById(subject.id); return { code: 'DEVICE', name: subject.id, sub: d ? `${d.model} · ${d.site || ''} ${d.rack}${d.u ? ' U' + d.u : ''}` : '' }; }
+        if (subject.kind === 'deployment') { const d = D.deploymentByKey(subject.id); return { code: `${subject.id} · DEPLOYMENT`, name: d?.title || subject.id }; }
+        if (subject.kind === 'part') { const p = D.partById(subject.id); return { code: 'PART', name: p ? partLabel(p) : subject.id }; }
+        return { code: 'SEARCH', name: `“${subject.id}”` };
+      })();
+      const relList = rec.related.filter(x => { const t = x.kind === 'ticket' && D.ticketByKey(x.id); return Filter.test(t ? { ...tItem(t), text: [x.label, x.sub, ...tText(t)] } : { text: [x.label, x.sub] }); }).sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+      const crumbs = [...trail, subject].map((s, i, a) => i === a.length - 1 ? `<b>${esc(s.id)}</b>` : `<button type="button" class="linkish" data-tr-back="${i}">${esc(s.id)}</button>`).join(' <span class="muted">›</span> ');
+      const selHtml = selected ? `<div class="tr-detail tr-pop" role="dialog" style="--lc:${LANE[selected.lane].color}"><div class="qkey">${LANE[selected.lane].label} · ${when(selected.at)}${selected.span ? ` → ${selected.open ? 'still open' : when(selected.end)}` : ''} · ${ago(selected.at)}</div>
+          <b>${esc(selected.title)}</b>${selected.text ? `<p>${esc(selected.text)}</p>` : ''}
+          <div class="links">${selected.url ? `<button class="btn primary" data-url="${esc(selected.url)}" data-what="${esc(LANE[selected.lane].label)}">Open in ${esc(LANE[selected.lane].label === 'Service desks' ? 'Jira' : LANE[selected.lane].label)} ↗</button>` : ''}${selected.trace ? `<button class="btn" data-tr-open="${esc(selected.trace.kind)}:${esc(selected.trace.id)}">⏱ Trace ${esc(selected.trace.id)}</button>` : ''}${selected.trace && D.ticketByKey(selected.trace.id) ? `<button class="btn" data-ticket="${esc(selected.trace.id)}">Details</button>` : ''}<button class="btn ghost" data-tr-unsel>Close</button></div></div>` : '';
+      box.innerHTML = `
+        <div class="tr-head">
+          <div class="tr-trail">${trail.length ? crumbs : `<span class="muted">Trace</span> <span class="muted">›</span> <b>${esc(subject.id)}</b>`}</div>
+          <form class="tr-search" data-tr-form><input type="search" placeholder="Trace a ticket, host, serial or part…" aria-label="Trace a ticket, host, serial or part" spellcheck="false"></form>
+        </div>
+        <div class="tr-title"><div><div class="qkey">${esc(title.code)}</div><h3>${esc(title.name)}</h3>${title.sub ? `<span class="muted small">${esc(title.sub)}</span>` : ''}</div>
+          <div class="tr-range"><span class="seg">${PRESETS.map(([l, d]) => `<button class="chip" data-tr-range="${d}">${l}</button>`).join('')}<button class="chip ${auto === 'all' ? 'on' : ''}" data-tr-range="all" title="Its whole history (double-click the timeline)">All</button><button class="chip ${auto === true ? 'on' : ''}" data-tr-range="fit" title="The last few months of activity">Recent</button></span>
+            ${subject.kind === 'ticket' && D.ticketByKey(subject.id) ? `<button class="chip" data-ticket="${esc(subject.id)}">Details</button>` : subject.kind === 'device' && D.deviceById(subject.id) ? `<button class="chip" data-open="device:${esc(subject.id)}">Details</button>` : subject.kind === 'deployment' ? `<button class="chip" data-dep="${esc(subject.id)}">Details</button>` : ''}</div></div>
+        <div class="tr-body">
+          <aside class="tr-rel">
+            <div class="section-title"><span>Related</span><span>${relList.length}</span></div>
+            ${relList.length ? relList.slice(0, 40).map(r => { const id = idOf(r.kind, r.id), on = ticked.has(id), busy = on && items.get(id) && !items.get(id).done;
+              return `<div class="tr-ritem ${r.done ? 'done' : ''}"><input type="checkbox" data-tr-tick="${esc(id)}" ${on ? 'checked' : ''} aria-label="Add ${esc(r.label)} to the timeline" title="Add its history to this timeline">
+                <button type="button" class="tr-rname" data-tr-open="${esc(id)}" title="Trace ${esc(r.label)} instead"><span><span class="mono">${esc(r.label)}</span>${r.desk ? ' <small class="tr-desk">service desk</small>' : ''}</span><small>${esc(r.sub || '')}</small></button>${busy ? '<span class="muted small">…</span>' : ''}</div>`; }).join('')
+              : `<p class="muted small">${rec.done ? 'Nothing related found.' : 'Looking…'}</p>`}
+            ${rec.modules?.length ? `<div class="section-title"><span>Installed now · NetBox</span><span>${rec.modules.length}</span></div>${rec.modules.slice(0, 24).map(m => `<div class="tr-mod"><span class="mono">${esc(m.bay)}</span> ${esc(m.type)}${m.serial ? ` <small class="mono muted">${esc(m.serial)}</small>` : ''}</div>`).join('')}` : ''}
+            <p class="muted small tr-help">Tick to add its history here · click a name to trace it</p>
+          </aside>
+          <div class="tr-main">
+            <div class="tr-axis"><div class="tr-lname"></div><div class="tr-track">${ticks(from, to).filter(k => Math.abs(x(k.t) - x(Date.now())) > 7).map(k => `<span class="tr-tick" style="left:${x(k.t)}%">${esc(String(k.label))}</span>`).join('')}${Date.now() > from && Date.now() < to ? `<span class="tr-now" style="left:${x(Date.now())}%">now</span>` : ''}</div></div>
+            <div class="tr-lanes">${lanes.map(k => laneHtml(k, evs.filter(e => e.lane === k), x)).join('') || `<p class="muted tr-none">${loading.length ? 'Reading history…' : 'No history found for this yet.'}</p>`}
+              ${Date.now() > from && Date.now() < to ? `<div class="tr-nowline" style="left:calc(var(--tr-lw) + (100% - var(--tr-lw)) * ${x(Date.now()) / 100})"></div>` : ''}</div>
+            <div class="tr-status muted small">${loading.length ? `Reading ${loading.join(', ')}… ` : ''}${issues.length ? esc(issues.join(' · ')) + ' · ' : ''}${rec.status.note ? esc(rec.status.note) + ' · ' : ''}${evs.length} events · Ctrl/⌘ + scroll to zoom · drag to move · click a mark for details</div>
+            ${selHtml}
+          </div>
+        </div>`;
+      placePop();
+    }
+    // The details open as a pop-up right under the mark you clicked (and scroll into view on smaller screens).
+    let freshPick = false;
+    function placePop() {
+      const pop = box.querySelector('.tr-pop'), main = box.querySelector('.tr-main'), mark = box.querySelector('.tr-lanes .sel');
+      if (!pop || !main) return;
+      if (!mark) { pop.hidden = true; return; }
+      const m = main.getBoundingClientRect(), k = mark.getBoundingClientRect(), w = Math.min(420, m.width - 8);
+      pop.style.width = w + 'px';
+      const left = Math.max(0, Math.min(k.left + k.width / 2 - m.left - 40, m.width - w));
+      pop.style.left = left + 'px'; pop.style.setProperty('--ax', Math.max(10, Math.min(k.left + k.width / 2 - m.left - left - 5, w - 20)) + 'px');
+      pop.style.top = (k.bottom - m.top + 8) + 'px';
+      if (freshPick) { freshPick = false; pop.scrollIntoView({ block: 'nearest' }); }
+    }
+    function emptyHtml() {
+      const mine = ALLT().filter(t => t.mine || t.assignee === 'me').sort(byUrgency).slice(0, 6), urgent = ALLT().slice().sort(byUrgency).slice(0, 6);
+      const chips = list => list.map(t => `<button class="lk" data-tr-open="ticket:${esc(t.key)}"><i class="lk-dot st-${slaStatus(t)}"></i><span class="mono">${esc(t.key)}</span> ${esc(t.summary.slice(0, 36))}</button>`).join('');
+      return `<div class="tr-empty"><h3>⏱ Trace</h3><p class="muted">Everything that happened to a ticket, host, serial, part or deployment, on one timeline: Jira history and comments, every ticket ever filed on the same host, RMA and shipping requests, NetBox changes and journal, Grafana alerts, Slack messages.</p>
+        <form class="tr-search big" data-tr-form><input type="search" placeholder="Ticket key, hostname, serial or part number…" aria-label="Trace a ticket, host, serial or part" spellcheck="false" autofocus></form>
+        ${mine.length ? `<div class="section-title"><span>Your tickets</span></div><div class="lk-chips">${chips(mine)}</div>` : ''}
+        <div class="section-title"><span>Most urgent</span></div><div class="lk-chips">${chips(urgent)}</div>
+        <p class="muted small">Or right-click anything on the dashboard (a ticket, host, shipment, PO, feed item or selected text) and pick ⏱ Trace, or hover it and press T.</p></div>`;
+    }
+
+    /* ---- interaction ---- */
+    box.addEventListener('submit', e => { const f = e.target.closest('[data-tr-form]'); if (!f) return; e.preventDefault(); const q = f.querySelector('input').value.trim(); if (q) open('term', q); });
+    box.addEventListener('change', e => {
+      const c = e.target.closest('[data-tr-tick]'); if (!c) return;
+      const id = c.dataset.trTick, [kind, key] = id.split(/:(.+)/);
+      if (c.checked) { ticked.add(id); auto = auto || 'all'; load({ kind, id: key }); } else { ticked.delete(id); render(); }
+    });
+    box.addEventListener('click', e => {
+      const b = e.target.closest('[data-tr-open],[data-tr-back],[data-tr-range],[data-tev],[data-tr-unsel]');
+      if (!b) { if (selected && !dragMoved && e.target.closest('.tr-lanes') && !e.target.closest('.tr-pop')) { selected = null; render(); } return; }
+      if (b.dataset.trOpen) { const [k, id] = b.dataset.trOpen.split(/:(.+)/); return open(k, id, { inside: !!subject }); }
+      if (b.dataset.trBack !== undefined) { const i = +b.dataset.trBack, to = trail[i]; trail = trail.slice(0, i); subject = null; return open(to.kind, to.id, { keepTrail: true }); }
+      if (b.dataset.trRange) { if (b.dataset.trRange === 'fit') { auto = true; } else if (b.dataset.trRange === 'all') { auto = 'all'; } else { auto = false; const d = +b.dataset.trRange; range = { from: Date.now() - d * DAY, to: Date.now() + Math.max(DAY / 4, d * DAY * 0.04) }; } return render(); }
+      if (b.dataset.trUnsel !== undefined) { selected = null; return render(); }
+      if (b.dataset.tev !== undefined) { const e2 = lastEvs[+b.dataset.tev]; selected = selected === e2 ? null : e2; freshPick = !!selected; return render(); }
+    });
+    box.addEventListener('keydown', e => { if (e.key === 'Escape' && selected) { selected = null; e.stopPropagation(); render(); } });
+    box.addEventListener('dblclick', e => {
+      const s = e.target.closest('[data-tev]'); if (s) { const e2 = lastEvs[+s.dataset.tev]; if (e2?.trace) open(e2.trace.kind, e2.trace.id, { inside: true }); return; }
+      if (e.target.closest('.tr-lanes, .tr-axis')) { auto = 'all'; render(); }
+    });
+    // Zoom around the pointer with the wheel; drag the lanes to move in time.
+    const trackX = e => { const t = box.querySelector('.tr-lanes .tr-track') || box.querySelector('.tr-axis .tr-track'); const r = t.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+    let rq = 0; const renderSoon = () => { if (rq) return; rq = 1; const go = () => { if (rq) { rq = 0; render(); } }; requestAnimationFrame(go); setTimeout(go, 32); }; // one redraw per frame (the timer covers a tab that isn't painting)
+    // Plain scrolling scrolls the view; Ctrl/⌘ + scroll (or a trackpad pinch) zooms the time axis; sideways scrolling moves in time.
+    box.addEventListener('wheel', e => {
+      if (!e.target.closest('.tr-lanes, .tr-axis') || !range) return;
+      const span0 = range.to - range.from;
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault(); auto = false;
+        const f = trackX(e), at = range.from + f * span0, k = Math.exp(e.deltaY * 0.004);
+        const span = Math.min(30 * 365 * DAY, Math.max(1800e3, span0 * k));
+        range = { from: at - f * span, to: at + (1 - f) * span }; return renderSoon();
+      }
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault(); auto = false;
+        const w = box.querySelector('.tr-lanes .tr-track')?.getBoundingClientRect().width || 1, dt = (e.deltaX / w) * span0;
+        range = { from: range.from + dt, to: range.to + dt }; return renderSoon();
+      }
+    }, { passive: false });
+    let drag = null, dragMoved = false;
+    box.addEventListener('pointerdown', e => { if (!e.target.closest('.tr-lanes') || e.target.closest('button') || !range) return; drag = { x: e.clientX, from: range.from, to: range.to, w: box.querySelector('.tr-lanes .tr-track')?.getBoundingClientRect().width || 1 }; box.classList.add('dragging'); dragMoved = false; });
+    addEventListener('pointermove', e => { if (!drag) return; if (Math.abs(e.clientX - drag.x) < 4) return; dragMoved = true; auto = false; const dt = ((e.clientX - drag.x) / drag.w) * (drag.to - drag.from); range = { from: drag.from - dt, to: drag.to - dt }; renderSoon(); });
+    addEventListener('pointerup', () => { if (drag) { drag = null; box.classList.remove('dragging'); } });
+    document.addEventListener('click', e => { const b = e.target.closest('[data-trace]'); if (!b) return; e.stopPropagation(); const [k, id] = b.dataset.trace.split(/:(.+)/); Drawer.close(); open(k, id); }, true);
+
+    /* ---- trace anything you can see ----
+       Right-click any row, card, chip, feed item, shipment, PO or selected text (or hover it and press T): the menu lists
+       what's in it that can be traced (ticket and request keys, hostnames, part numbers, NetSuite documents, tracking
+       numbers…). Shift+right-click keeps the browser's own menu. */
+    const PATTERNS = [
+      [/\b[A-Z][A-Z0-9]{1,9}-\d{2,7}\b/g, 'ticket'],                        // DC-33100, RMA-5817, SHP-3198, PMO-12
+      [/\b[a-z]{3}\d{2}[a-z0-9]*(?:-[a-z0-9]+){2,}\b/gi, 'device'],        // iad03-r061-u18, atl01-cl02-ccpu-003, cmh01dh1-p08c169-u04-gpu0483
+      [/\b(?:TO|PO|SO|IF|IR|VRMA|RMA)\d{3,}\b/g, 'term'],                      // NetSuite / Atium documents
+      [/\b1Z[0-9A-Z]{16}\b|\b\d{12,22}\b/g, 'term'],                         // tracking numbers, long serials
+    ];
+    const ROW = '.mini-ticket, .qitem, .feed-item, .lk, .inv, li, tr, .tr-ritem, .nb-row, .alert-item, .brief-item, .vol-in-card li';
+    let PIDX = null; const partIndex = () => PIDX ||= new Map((D.PARTS || []).filter(p => p.pn && p.pn.length >= 4).map(p => [p.pn.toLowerCase(), p]));
+    function candidates(target) {
+      const out = [], add = (kind, id, label, why) => { if (!id) return; const k = idOf(kind, String(id).toLowerCase()); if (!out.some(o => idOf(o.kind, String(o.id).toLowerCase()) === k)) out.push({ kind, id: String(id), label: label || String(id), why }); };
+      const gs = getSelection?.(), sel = gs?.rangeCount && target.contains?.(gs.anchorNode) ? String(gs).trim() : ''; // only a selection inside what you clicked
+      const op = target.closest?.('[data-ticket],[data-open],[data-dep],[data-part],[data-tr-open],[data-trace],[data-tterm]');
+      if (op) {
+        const d = op.dataset;
+        if (d.ticket) add('ticket', d.ticket, d.ticket, 'ticket');
+        if (d.dep) add('deployment', d.dep, d.dep, 'deployment');
+        if (d.tterm) add('term', d.tterm, d.tterm, 'NetSuite item');
+        if (d.part) { const p = D.partById(d.part); add('part', d.part, p ? partLabel(p) : d.part, 'part'); }
+        const [k, v] = String(d.open || d.trOpen || d.trace || '').split(/:(.+)/);
+        if (v && ['ticket', 'device', 'part', 'deployment', 'term'].includes(k)) add(k, v, k === 'part' ? partLabel(D.partById(v)) || v : v, k);
+      }
+      const row = target.closest?.(ROW) || op || target;
+      const text = [sel, row?.getAttribute?.('title') || '', (row?.innerText || '').slice(0, 600)].join(' ');
+      for (const [re, kind] of PATTERNS) for (const m of text.matchAll(re)) {
+        const v = m[0];
+        if (kind === 'ticket' && D.deploymentByKey?.(v)) add('deployment', v, v, 'deployment');
+        else if (kind === 'ticket') add('ticket', v.toUpperCase(), v.toUpperCase(), /^(RMA|VRMA)-/i.test(v) ? 'RMA' : /^(SHP|WHS)-/i.test(v) ? 'shipping' : 'ticket');
+        else if (kind === 'device') add('device', v.toLowerCase(), v.toLowerCase(), 'host');
+        else add('term', v, v, /^(TO|PO|SO|IF|IR)/.test(v) ? 'document' : /^\d|^1Z/.test(v) ? 'tracking / serial' : 'RMA');
+      }
+      const PI = partIndex(); for (const w of new Set(text.toLowerCase().match(/[a-z0-9][a-z0-9._/-]{3,}/g) || [])) { const p = PI.get(w); if (p) add('part', p.id, partLabel(p), 'part'); }
+      if (sel && sel.length <= 80 && !out.some(o => o.id.toLowerCase() === sel.toLowerCase())) add('term', sel, `“${sel}”`, 'selected text');
+      return out.slice(0, 7);
+    }
+    const menu = Object.assign(document.createElement('div'), { id: 'traceMenu', className: 'trace-menu', hidden: true });
+    menu.setAttribute('role', 'menu'); document.body.appendChild(menu);
+    const closeMenu = () => { menu.hidden = true; };
+    document.addEventListener('contextmenu', e => {
+      if (e.shiftKey || e.target.closest('input, textarea, select, [contenteditable], #traceMenu')) return;
+      const c = candidates(e.target); if (!c.length) return;
+      e.preventDefault(); showMenu(c, e.clientX, e.clientY);
+    });
+    function showMenu(c, X, Y) {
+      menu.innerHTML = `<div class="tm-head">⏱ Trace</div>${c.map(x => `<button type="button" role="menuitem" data-tm="${esc(x.kind)}:${esc(x.id)}"><span class="mono">${esc(x.label)}</span><small>${esc(x.why)}</small></button>`).join('')}<div class="tm-foot">Shift+right-click for the browser menu</div>`;
+      menu.hidden = false;
+      const w = menu.offsetWidth, h = menu.offsetHeight;
+      menu.style.left = Math.max(8, Math.min(X, innerWidth - w - 8)) + 'px'; menu.style.top = Math.max(8, Math.min(Y, innerHeight - h - 8)) + 'px';
+      menu.querySelector('button')?.focus();
+    }
+    const closeCards = () => { Drawer.close(); if (!$('#siteCard').hidden) SiteCard.close(); closePalette?.(); const ap = $('#alertPop'); if (ap) ap.hidden = true; const br = $('#brief'); if (br && !br.hidden && typeof closeBrief === 'function') closeBrief(); };
+    menu.addEventListener('click', e => { const b = e.target.closest('[data-tm]'); if (!b) return; const [k, id] = b.dataset.tm.split(/:(.+)/); closeMenu(); closeCards(); open(k, id); });
+
+    /* Every card that pops up (details, site card, alerts, daily brief) gets a ⏱ Trace button in its header and a small
+       ⏱ on each row that holds something traceable (each ticket, host, part, shipment, PO…), so every instance in a card
+       can be traced on its own. One thing in it: straight to Trace; several: a short menu to pick. */
+    const CARDS = ['#drawer', '#siteCard', '#alertPop', '#brief .brief'];
+    const ROWS = '.hrow, .mini-ticket, .aitem, .inv, tr, li, .qitem, .tr-mod';
+    const btnHtml = (c, cls) => `<button type="button" class="${cls}" data-tr-row title="${esc(c.length === 1 ? `Trace ${c[0].label}` : `Trace: ${c.map(x => x.label).join(', ')}`)}" aria-label="Trace">⏱${cls === 'tr-hbtn' ? ' Trace' : ''}</button>`;
+    function decorate(card) {
+      if (!card || card.hidden) return;
+      const head = card.querySelector(':scope > .qkey, .card-head .code');
+      if (head && !card.querySelector('.tr-hbtn')) {
+        const h3 = card.querySelector(':scope > h3, .card-head h3'), probe = document.createElement('div');
+        probe.textContent = `${head.textContent} ${h3?.textContent || ''}`;
+        const c = candidates(probe).filter(x => x.why !== 'selected text');
+        if (c.length) (h3 || head).insertAdjacentHTML('beforeend', ' ' + btnHtml(c, 'tr-hbtn'));
+      }
+      for (const row of card.querySelectorAll(ROWS)) {
+        if (row.dataset.trScan || row.querySelector('.tr-btn') || row.closest('.linked .lk-chips, .links, .tr-detail, thead') || row.querySelector('th') || row.querySelector(ROWS)) continue;
+        row.dataset.trScan = '1'; // checked once; rows that change are new elements
+        // A host row (alert and Health host lists): the ⏱ sits next to the host name and traces that host.
+        if (row.matches('.hrow')) {
+          const top = row.querySelector('.hrow-top'), name = top?.firstElementChild, probe = document.createElement('div'); if (!name) continue;
+          probe.textContent = name.textContent; const c = candidates(probe).filter(x => x.kind === 'device');
+          if (c.length) name.insertAdjacentHTML('afterend', `<button type="button" class="tr-btn" data-tr-row data-tr-pick="device:${esc(c[0].id)}" title="Trace ${esc(c[0].id)}" aria-label="Trace ${esc(c[0].id)}">⏱</button>`);
+          continue;
+        }
+        if (!candidates(row).filter(x => x.why !== 'selected text').length) continue;
+        const grid = row.tagName === 'TR' || /grid/.test(getComputedStyle(row).display);
+        (grid ? row.lastElementChild || row : row).insertAdjacentHTML('beforeend', btnHtml([0, 0], 'tr-btn'));
+      }
+    }
+    let pending = false;
+    const sweep = () => { if (pending) return; pending = true; setTimeout(() => { pending = false; CARDS.forEach(sel => { try { decorate(document.querySelector(sel)); } catch (e) { console.warn('trace buttons', e); } }); }, 30); };
+    for (const sel of ['#drawer', '#siteCard', '#alertPop', '#brief']) { const el = document.querySelector(sel); if (el) new MutationObserver(sweep).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] }); }
+    document.addEventListener('click', e => {
+      const b = e.target.closest('[data-tr-row]'); if (!b) return;
+      e.stopPropagation(); e.preventDefault();
+      if (b.dataset.trPick) { const [k, id] = b.dataset.trPick.split(/:(.+)/); closeCards(); return open(k, id); }
+      const src = b.classList.contains('tr-hbtn') ? (() => { const card = b.closest(CARDS.join(',')), d = document.createElement('div'); d.textContent = `${card.querySelector(':scope > .qkey, .card-head .code')?.textContent || ''} ${b.parentElement.textContent}`; return d; })() : b.closest(ROWS);
+      const c = candidates(src).filter(x => x.why !== 'selected text'); if (!c.length) return;
+      if (c.length === 1) { closeCards(); return open(c[0].kind, c[0].id); }
+      const r = b.getBoundingClientRect(); showMenu(c, r.left, r.bottom + 4);
+    }, true);
+    document.addEventListener('pointerdown', e => { if (!menu.hidden && !e.target.closest('#traceMenu')) closeMenu(); }, true);
+    addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { closeMenu(); e.stopPropagation(); } }, true);
+    addEventListener('blur', closeMenu); addEventListener('scroll', closeMenu, true);
+    let hovered = null;
+    document.addEventListener('mouseover', e => { hovered = e.target; });
+    // T while hovering something traceable traces it; otherwise T just opens the view.
+    function traceHovered() {
+      const c = hovered?.isConnected && !hovered.closest('#trace') ? candidates(hovered) : [];
+      if (c.length) { Drawer.close(); open(c[0].kind, c[0].id); return true; }
+      return false;
+    }
+
+    return { render, open, focus: () => box.querySelector('.tr-search input')?.focus(), subject: () => subject, candidates, traceHovered, decorate };
+  })();
+
   let activeView = 'globe';
   const shapeSvg = (shape, c) => ({ circle: `<circle cx="5" cy="5" r="4" fill="${c}"/>`, square: `<rect x="1.5" y="1.5" width="7" height="7" fill="${c}"/>`,
     diamond: `<path d="M5 0L10 5L5 10L0 5Z" fill="${c}"/>`, triangle: `<path d="M5 0.5L9.5 9H0.5Z" fill="${c}"/>`, hex: `<path d="M5 0.5L9 2.75V7.25L5 9.5L1 7.25V2.75Z" fill="${c}"/>` }[shape]);
@@ -2012,6 +2781,7 @@ LambdaData.ready.then(D => {
         + `<span class="seg" title="View">${[['2d', '2D'], ['3d', '3D']].map(([k, l]) => `<button class="chip ${(k === '3d') === Brain.is3d() ? 'on' : ''}" data-brain="${k}" aria-pressed="${(k === '3d') === Brain.is3d()}">${l}</button>`).join('')}</span>`;
     },
     health: () => '<span class="muted">Leaks · breakers · PDUs · power shelves · hardware · heat · network · monitoring gaps</span>',
+    trace: () => '<span class="muted">One item\'s history: Jira · service desks · NetBox · Grafana · Yard · Slack · Atium · NetSuite</span>',
     deploys: () => [['good', 'On track'], ['warning', 'At risk'], ['critical', 'Off track / overdue'], ['idle', 'Not started']].map(([s, l]) =>
       `<span><svg viewBox="0 0 10 10"><rect x="0" y="2" width="10" height="6" rx="2" fill="${s === 'idle' ? C.accent : C[s]}"/></svg>${l}</span>`).join('')
       + `<span><svg viewBox="0 0 10 10"><line x1="5" y1="0" x2="5" y2="10" stroke="${C.accent}" stroke-width="2"/></svg>Today</span>`,
@@ -2041,6 +2811,7 @@ LambdaData.ready.then(D => {
       ? `${Fleet.placedCount} sites · drag to ${Fleet.mode() === 'globe' ? 'rotate' : 'pan'} · scroll to zoom · double-click to fit · click a site${unplaced ? ` · ${unplaced} without coordinates are in the list` : ''}`
       : activeView === 'graph' ? `${Brain.nodeCount()} neurons · hover to fire and trace links · ${Brain.is3d() ? 'drag to turn · Shift+drag to pan' : 'drag to pan'} · scroll to zoom · click to open`
       : activeView === 'health' ? 'Worst sites first · click a number for hosts, racks and U positions · H opens this view'
+      : activeView === 'trace' ? 'Ctrl/⌘ + scroll (or pinch) to zoom · drag to move in time · double-click to reset · T opens this view'
       : `${(D.DEPLOYMENTS || []).length} deployments · ☆ to track · click a row for workstreams, meetings, Slack and shipments`;
   }
   // Bigger view: the middle panel takes the whole screen (side columns and the number strip hide). Button, E key, Esc.
@@ -2049,7 +2820,7 @@ LambdaData.ready.then(D => {
     const b = $('#stageExpand'); b.textContent = on ? '⤡' : '⤢'; b.setAttribute('aria-pressed', on);
     b.title = on ? 'Back to the normal layout (E or Esc)' : 'Bigger view: hide the side columns (E). Esc to go back.';
     try { sessionStorage.setItem('lambdaos-stagemax', on ? '1' : '0'); } catch { /* ignore */ }
-    requestAnimationFrame(() => { if (activeView === 'globe') { Fleet.resize(); } else if (activeView === 'graph') { Brain.resize(); Brain.fit(); } else if (activeView === 'health') Health.render(); else Deploys.render(); });
+    requestAnimationFrame(() => { if (activeView === 'globe') { Fleet.resize(); } else if (activeView === 'graph') { Brain.resize(); Brain.fit(); } else if (activeView === 'health') Health.render(); else if (activeView === 'trace') Trace.render(); else Deploys.render(); });
   }
   $('#stageExpand').addEventListener('click', () => setStageMax(!document.body.classList.contains('stage-max')));
 
@@ -2064,12 +2835,12 @@ LambdaData.ready.then(D => {
     attrib.hidden = v !== 'globe' || !P; attrib.textContent = P ? P.attr : '';
     $('#stageLegend').innerHTML = LEGENDS[v]();
     hint(); hideTip();
-    if (v === 'globe') Fleet.resize(); else if (v === 'graph') Brain.resize(); else if (v === 'health') Health.render(); else Deploys.render();
+    if (v === 'globe') Fleet.resize(); else if (v === 'graph') Brain.resize(); else if (v === 'health') Health.render(); else if (v === 'trace') { Trace.render(); if (!Trace.subject()) Trace.focus(); } else Deploys.render();
   }
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
   let startView = 'globe';
   try { startView = sessionStorage.getItem('lambdaos-view') || 'globe'; } catch { /* ignore */ }
-  setView(['globe', 'graph', 'deploys', 'health'].includes(startView) ? startView : 'globe');
+  setView(['globe', 'graph', 'deploys', 'health', 'trace'].includes(startView) ? startView : 'globe');
   Health.render(); // badge on the Health tab
   try { if (sessionStorage.getItem('lambdaos-stagemax') === '1') setStageMax(true); } catch { /* ignore */ }
   (function frame(now) { if (activeView === 'globe') Fleet.draw(now); else if (activeView === 'graph') Brain.draw(now); requestAnimationFrame(frame); })(performance.now());
@@ -2179,7 +2950,7 @@ LambdaData.ready.then(D => {
       $('#siteCard').innerHTML = `
         <div class="card-head"><div><div class="code">${esc(s.id)} · ${esc({ dc: 'Data center', pop: 'POP', prem: 'On-prem', other: 'Site' }[s.kind])}</div><h3>${esc(s.name)}</h3>${idleChip}</div>
           <button class="x" data-close aria-label="Close">✕</button></div>
-        <div class="links card-actions">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${s.atium ? btn('Atium', s.atium.url) : ''}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>
+        <div class="links card-actions">${s.lat != null ? `<button class="btn primary" data-exact="${esc(s.id)}">◎ Exact location</button>` : ''}<button class="btn" data-lk-brain="site:${esc(s.id)}" title="Open the Second brain on this site, with everything linked to it lit up">🧠 Second brain</button>${btn('Open in NetBox', s.url)}${btn(`All ${tickets.length} in Jira`, s.jiraUrl)}${s.atium ? btn('Atium', s.atium.url) : ''}${(s.channels || []).slice(0, 3).map(c => btn('#' + c.name, c.url)).join('')}</div>
         ${s.city || s.address ? `<p class="muted small">${esc(s.address || s.city)}</p>` : ''}
         ${s.coordNote ? `<p class="note small">⚠ ${esc(s.coordNote)}</p>` : ''}
         <div class="stats">
@@ -2195,7 +2966,7 @@ LambdaData.ready.then(D => {
         ${inv.length ? `<div class="section-title"><span>Spares on hand</span><span>bar tick = alert level</span></div>${invRows}
           ${inv.length > 14 ? `<p class="muted small">+${inv.length - 14} more part numbers</p>` : ''}` : ''}
         ${s.material?.length ? `<div class="section-title"><span>Material on hand · NetSuite</span><span>${s.material.length} items</span></div>
-          ${s.material.slice(0, 8).map(m => `<div class="inv ns" title="${esc(m.name)} (${esc(m.item)}): ${m.qty} on hand"><span class="inv-name">${esc(m.name || m.item)} <small class="muted mono">${esc(m.item)}</small></span><span class="inv-num">${m.qty.toLocaleString()}</span></div>`).join('')}` : ''}
+          ${s.material.slice(0, 8).map(m => `<div class="inv ns" data-tterm="${esc(m.item)}" title="${esc(m.name)} (${esc(m.item)}): ${m.qty} on hand"><span class="inv-name">${esc(m.name || m.item)} <small class="muted mono">${esc(m.item)}</small></span><span class="inv-num">${m.qty.toLocaleString()}</span></div>`).join('')}` : ''}
         ${s.moves?.length ? `<div class="section-title"><span>Material movements · NetSuite</span><span>${s.moves.length}</span></div>
           ${s.moves.slice(0, 5).map(m => `<div class="mini-ticket" ${m.deploymentKey ? `data-dep="${m.deploymentKey}"` : ''}><span class="qkey">${esc(m.doc)}</span><span class="qsum">${esc(m.type)}${m.deployment ? ' · ' + esc(m.deployment) : ''}</span><span class="small muted">${esc(m.status || m.date)}</span></div>`).join('')}` : ''}
         <div class="section-title"><span>Open tickets</span><span>${tickets.length}</span></div>
@@ -2208,9 +2979,186 @@ LambdaData.ready.then(D => {
   };
   renderSites();
 
+  /* ---------------- Linked: everything an item is connected to ----------------
+     At the bottom of a ticket, device, deployment, part or cluster card:
+       1. what Lambda OS already knows (instant): its device, rack, site, cluster, people, part, deployments, Slack
+          channels and the other tickets on the same host or rack, every one clickable;
+       2. what the apps say when you open it (a second or two, with your own sign-ins): Jira links, parent and
+          sub-tasks, any issue in any project or service desk (RMA, Shipping, Warehouse…) that mentions it, Slack
+          messages, and the device's NetBox journal and changes. Cached for 5 minutes. */
+  const Linked = (() => {
+    const cache = new Map(), TTL = 5 * 60e3;
+    const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+    const chip = (attr, html, title = '') => `<button type="button" class="lk" ${attr} title="${esc(title)}">${html}</button>`;
+    const tChip = t => chip(`data-ticket="${esc(t.key)}"`, `<i class="lk-dot st-${slaStatus(t)}"></i><span class="mono">${esc(t.key)}</span> ${esc(cut(t.summary, 34))}`, `${t.key}: ${t.summary} · ${t.status}`);
+    const siteChip = id => { const s = D.siteById(id); return s ? chip(`data-open="site:${esc(s.id)}"`, `<span class="mono">${esc(s.id)}</span> ${esc(cut(s.name, 18))}`, `${s.id} · ${s.name}`) : ''; };
+    const devChip = d => d ? chip(`data-open="device:${esc(d.id)}"`, `<span class="mono">${esc(d.id)}</span>`, `${d.model} · ${d.rack}${d.u ? ' U' + d.u : ''}`) : '';
+    const personChip = id => { if (!id) return ''; const p = D.personById(id); return chip(`data-open="person:${esc(id)}"`, esc(id === 'me' ? 'You' : p.name), `${ALLT().filter(t => t.assignee === id).length} open tickets`); };
+    const partChip = id => { const p = id && D.partById(id); return p ? chip(`data-open="part:${esc(p.id)}"`, esc(cut(partLabel(p), 32)), partLabel(p)) : ''; };
+    const depChip = d => chip(`data-dep="${esc(d.key)}"`, `<i class="lk-dot st-${d.health}"></i>${esc(cut(d.title || d.key, 30))}`, `${d.key} · ${d.title}`);
+    const clusterChip = (id, site) => id ? chip(`data-open="cluster:${esc(String(id).toLowerCase())}"`, `<span class="mono">${esc(String(id).toUpperCase())}</span>`, `Yard cluster${site ? ' at ' + site : ''}`) : '';
+    const chanChip = c => chip(`data-url="${esc(c.url)}" data-what="Slack"`, `#${esc(c.name)}`, c.topic || c.purpose || `#${c.name}`);
+    const uniq = (arr, k) => { const seen = new Set(); return arr.filter(x => x && !seen.has(k(x)) && seen.add(k(x))); };
+    const openT = t => !/^(done|closed|resolved)$/i.test(t.status || '');
+    const rackOf = d => d && d.rack && d.rack !== '—' ? d.rack : null;
+    const sameRack = (site, rack, notDevice) => rack ? ALLT().filter(t => t.site === site && t.device !== notDevice && rackOf(D.deviceById(t.device)) === rack).sort(byUrgency) : [];
+    const depsAt = site => site ? (D.DEPLOYMENTS || []).filter(d => d.sites.includes(site)).sort((a, b) => (a.end || 9e15) - (b.end || 9e15)) : [];
+    const chansAt = site => site ? (D.CHANNELS || []).filter(c => c.site === site) : [];
+    const cluster = host => { const y = yardUsable() && yardOf(host); return y?.found && y.region ? y.region : null; };
+    const MAX = 8;
+    const group = (label, chips, more = 0) => { chips = chips.filter(Boolean); return chips.length ? { label, html: chips.slice(0, MAX).join('') + (chips.length > MAX || more ? `<span class="muted small lk-more">+${chips.length - MAX + more} more</span>` : ''), n: chips.length + more } : null; };
+
+    // 1. What Lambda OS already knows.
+    function local(kind, r) {
+      if (kind === 'ticket') {
+        const dev = D.deviceById(r.device), rack = rackOf(dev);
+        return [
+          group('Device', [devChip(dev)]),
+          group('Site', [siteChip(r.site)]),
+          group('Yard cluster', [clusterChip(cluster(r.device), r.site)]),
+          group('Part', [partChip(r.part)]),
+          group('People', [personChip(r.assignee)]),
+          group('Same device', ALLT().filter(t => t.device && t.device === r.device && t.key !== r.key).sort(byUrgency).map(tChip)),
+          group(rack ? `Same rack · ${rack}` : 'Same rack', sameRack(r.site, rack, r.device).filter(t => t.key !== r.key).map(tChip)),
+          group('Same part, same site', r.part ? ALLT().filter(t => t.part === r.part && t.site === r.site && t.key !== r.key && t.device !== r.device).sort(byUrgency).map(tChip) : []),
+          group(`Deployments at ${r.site || 'this site'}`, depsAt(r.site).map(depChip)),
+          group('Slack channels', chansAt(r.site).map(chanChip)),
+        ].filter(Boolean);
+      }
+      if (kind === 'device') {
+        const ts = ALLT().filter(t => t.device === r.id), rack = rackOf(r);
+        return [
+          group('Site', [siteChip(r.site)]),
+          group('Yard cluster', [clusterChip(cluster(r.id), r.site)]),
+          group('Parts its tickets need', uniq(ts.map(t => t.part), x => x).map(partChip)),
+          group('People on it', uniq(ts.map(t => t.assignee), x => x).map(personChip)),
+          group(rack ? `Other tickets in rack ${rack}` : 'Other tickets in the rack', sameRack(r.site, rack, r.id).map(tChip)),
+          group(`Deployments at ${r.site || 'this site'}`, depsAt(r.site).map(depChip)),
+          group('Slack channels', chansAt(r.site).map(chanChip)),
+        ].filter(Boolean);
+      }
+      if (kind === 'deployment') {
+        const sib = r.project ? (D.DEPLOYMENTS || []).filter(d => d.project?.key === r.project.key && d.key !== r.key) : [];
+        const ev = (D.EVENTS || []).filter(e => e.deployment === r.key).sort((a, b) => a.at - b.at);
+        const ts = ALLT().filter(t => r.sites.includes(t.site) && openT(t)).sort(byUrgency);
+        return [
+          group('Project', r.project ? [chip(`data-proj="${esc(r.project.key)}"`, esc(cut(r.project.title, 34)), r.project.key)] : []),
+          group('Sites', r.sites.map(siteChip)),
+          group('People', [personChip(r.assignee)]),
+          group('Slack channels', uniq([...(r.channels || []), ...r.sites.flatMap(chansAt)], c => c.id).map(chanChip)),
+          group('Meetings', ev.map(e => chip(`data-href="${esc(e.link)}"`, `${new Date(e.at).toLocaleDateString([], { month: 'short', day: 'numeric' })} · ${esc(cut(e.title, 28))}`, e.title))),
+          group('Same project', sib.map(depChip)),
+          group(`Open tickets at ${r.sites.join(', ') || 'its sites'}`, ts.slice(0, MAX).map(tChip), Math.max(0, ts.length - MAX)),
+        ].filter(Boolean);
+      }
+      if (kind === 'part') {
+        const ts = ALLT().filter(t => t.part === r.id);
+        const low = D.SITES.filter(s => s.inventory.some(i => i.part === r.id && invStatus(i) !== 'good'));
+        return [
+          group('Devices waiting for it', uniq(ts.map(t => D.deviceById(t.device)), d => d.id).map(devChip)),
+          group('Sites low on it', low.map(s => siteChip(s.id))),
+          group('People', uniq(ts.map(t => t.assignee), x => x).map(personChip)),
+        ].filter(Boolean);
+      }
+      if (kind === 'cluster') {
+        const id = String(r.id || r).toLowerCase(), hosts = Object.entries(D.YARD?.hosts || {}).filter(([, y]) => y?.found && String(y.region).toLowerCase() === id).map(([h]) => h);
+        const ts = ALLT().filter(t => hosts.includes(String(t.device || '').toLowerCase()));
+        const sites = uniq(ts.map(t => t.site), x => x);
+        return [
+          group('Sites', sites.map(siteChip)),
+          group('People', uniq(ts.map(t => t.assignee), x => x).map(personChip)),
+          group('Parts needed', uniq(ts.map(t => t.part), x => x).map(partChip)),
+          group('Deployments', uniq(sites.flatMap(depsAt), d => d.key).map(depChip)),
+        ].filter(Boolean);
+      }
+      return [];
+    }
+
+    // 2. What the apps say. terms = what to search for in Jira text and Slack.
+    function lookupPlan(kind, r) {
+      if (kind === 'ticket') { const dev = D.deviceById(r.device); return { key: r.key, terms: [r.device, dev?.serial].filter(Boolean), slack: [r.key, r.device].filter(Boolean), nb: dev?.url, host: r.device, mail: r.key }; }
+      if (kind === 'device') return { terms: [r.id, r.serial].filter(Boolean), slack: [r.id, r.serial].filter(Boolean), nb: r.url, host: r.id, mail: r.id };
+      if (kind === 'deployment') return { key: r.key, terms: [], slack: [r.key], mail: r.key };
+      if (kind === 'part') return { terms: [r.pn], slack: [r.pn], mail: r.pn };
+      return null;
+    }
+    const idOf = (kind, r) => `${kind}:${r.key || r.id || r}`;
+    function section(kind, r) {
+      const groups = local(kind, r), plan = lookupPlan(kind, r), id = idOf(kind, r);
+      const live = plan && D.MODE === 'live' && isExt, demo = plan && D.MODE !== 'live';
+      const slot = (k, name) => `<div class="lk-app" id="lk-${k}"><span class="lk-label">${name}</span><span class="muted small lk-wait">searching…</span></div>`;
+      return `<div class="linked" data-lk="${esc(id)}">
+        <div class="section-title"><span>Linked</span><span class="lk-acts">${['ticket', 'device', 'deployment', 'part'].includes(kind) ? `<button type="button" class="linkish small lk-brain" data-trace="${esc(id)}" title="Everything that happened to it, on a timeline (T)">⏱ Trace</button>` : ''}<button type="button" class="linkish small lk-brain" data-lk-brain="${esc(id)}" title="Open the Second brain on this item, with everything linked to it lit up">🧠 Show in Second brain</button></span></div>
+        ${groups.length ? groups.map(g => `<div class="lk-row"><span class="lk-label">${esc(g.label)}</span><span class="lk-chips">${g.html}</span></div>`).join('') : '<p class="muted small">Nothing else loaded links to it.</p>'}
+        ${live || demo ? `<div class="section-title lk-sub"><span>Also mentioned in</span><span class="lk-status"></span></div>
+          ${slot('jira', 'Jira &amp; service desks')}${plan.slack?.length ? slot('slack', 'Slack') : ''}${plan.nb || plan.host || (demo && kind !== 'deployment' && kind !== 'part') ? slot('nb', 'NetBox history') : ''}
+          <p class="muted small lk-foot">${plan.mail ? `<a class="linkish" data-url="https://mail.google.com/mail/u/0/#search/${esc(encodeURIComponent(`"${plan.mail}"`))}" data-what="Gmail">Search Gmail for “${esc(plan.mail)}” ↗</a> · ` : ''}checked with your own sign-ins when you open this</p>` : ''}
+      </div>`;
+    }
+    const still = id => document.querySelector('#drawer:not([hidden]) .linked')?.dataset.lk === id;
+    const put = (id, k, html) => { if (!still(id)) return; const el = document.getElementById('lk-' + k); if (el) el.innerHTML = el.querySelector('.lk-label').outerHTML + html; };
+    const none = what => `<span class="muted small">${what}</span>`;
+    const failed = (e, name) => none(/not signed in|sign_in/i.test(String(e?.message || e)) ? `not signed in to ${name}` : `couldn't check ${name}`);
+    function jiraHtml(res, plan) {
+      const items = (res.items || []).filter(i => i.key !== plan.key);
+      if (!items.length) return none('nothing else mentions it');
+      const byProj = new Map(); for (const i of items) { const k = i.key.split('-')[0]; byProj.set(k, [...(byProj.get(k) || []), i]); }
+      return `<div class="lk-list">${[...byProj.entries()].map(([p, list]) => list.slice(0, 6).map(i => {
+        const known = D.ticketByKey?.(i.key);
+        return `<div class="mini-ticket ${i.done ? 'lk-done' : ''}" ${known ? `data-ticket="${esc(i.key)}"` : `data-href="${esc(i.url)}"`} title="${esc(`${i.key}: ${i.summary}`)}"><span class="qkey">${esc(i.key)}</span><span class="qsum">${esc(i.summary)}</span><span class="small muted">${esc(i.rel && i.rel !== 'mentions it' ? i.rel + ' · ' : '')}${esc(i.status)}</span></div>`;
+      }).join('') + (list.length > 6 ? `<p class="muted small">+${list.length - 6} more in ${esc(p)}</p>` : '')).join('')}</div>`;
+    }
+    const slackHtml = res => res.items?.length ? `<div class="lk-list">${res.items.slice(0, 6).map(m => `<div class="mini-ticket" data-href="${esc(m.link)}" title="${esc(m.text)}"><span class="qkey">${esc(m.channel === 'DM' ? 'DM' : '#' + m.channel)}</span><span class="qsum">${esc(m.user ? m.user + ': ' : '')}${esc(m.text)}</span><span class="small muted">${rel(m.at)}</span></div>`).join('')}</div>` : none('no messages mention it');
+    const nbHtml = res => res.items?.length ? `<div class="lk-list">${res.items.slice(0, 6).map(c => `<div class="mini-ticket" ${res.url ? `data-href="${esc(res.url)}"` : ''}><span class="qkey">${c.kind === 'journal' ? '📝' : '✎'} ${rel(c.at)}</span><span class="qsum">${esc(c.text)}</span><span class="small muted">${esc(String(c.who).split('@')[0])}</span></div>`).join('')}</div>` : none('no journal entries or changes by people');
+
+    // Demo: believable answers from the demo data, so the preview and the screenshots show the idea.
+    function demoAnswers(kind, r, plan) {
+      const host = plan.terms[0] || r.key || r.pn || 'item', ago = h => Date.now() - h * 3600e3;
+      return {
+        jira: { items: [
+          kind === 'ticket' && { key: 'DC-' + (Number(String(r.key).split('-')[1]) - 412), summary: `Previous failure on ${r.device || host}`, status: 'Done', done: true, rel: 'relates to', url: '' },
+          { key: 'RMA-5' + String(host.length * 137).slice(-3), summary: `Return ${plan.terms[1] || host} to vendor`, status: 'Pending DC Return', rel: 'mentions it', url: '' },
+          { key: 'SHP-31' + String(host.length * 7).slice(-2), summary: `Ship replacement for ${host}`, status: 'In Transit', rel: 'mentions it', url: '' },
+        ].filter(Boolean) },
+        slack: { items: [{ at: ago(3), channel: 'dc-ops', user: 'S. Patel', text: `Looking at ${host} now, reseated the card`, link: '' }, { at: ago(27), channel: 'hw-validation', user: 'J. Kim', text: `${host} failed burn-in again`, link: '' }] },
+        nb: { items: [{ at: ago(5), who: 's.patel@lambdal.com', text: 'updated: status', kind: 'change' }, { at: ago(30), who: 'j.kim@lambdal.com', text: 'Swapped GPU 3, sent old one to RMA', kind: 'journal' }] },
+      };
+    }
+    async function fill(kind, r) {
+      const plan = lookupPlan(kind, r), id = idOf(kind, r);
+      if (!plan || !document.querySelector('.linked .lk-sub')) return;
+      const hit = cache.get(id), fresh = hit && Date.now() - hit.at < TTL;
+      const store = (k, v) => { const c = cache.get(id) || { at: Date.now() }; c[k] = v; cache.set(id, c); };
+      const run = async (k, fn, render, name) => {
+        if (!document.getElementById('lk-' + k)) return;
+        if (fresh && hit[k]) return put(id, k, hit[k].off ? none(`${name} is off`) : render(hit[k], plan));
+        try { const res = await fn(); store(k, res); put(id, k, res.off ? none(`${name} is off`) : render(res, plan)); }
+        catch (e) { put(id, k, failed(e, name)); }
+      };
+      if (D.MODE !== 'live') { const a = demoAnswers(kind, r, plan); await new Promise(res => setTimeout(res, 250)); put(id, 'jira', jiraHtml(a.jira, plan)); put(id, 'slack', slackHtml(a.slack)); put(id, 'nb', nbHtml(a.nb)); return; }
+      await Promise.all([
+        run('jira', () => LambdaLive.linkedJira({ key: plan.key, terms: plan.terms }), jiraHtml, 'Jira'),
+        run('slack', () => LambdaLive.linkedSlack(plan.slack), slackHtml, 'Slack'),
+        run('nb', () => LambdaLive.linkedNetbox(plan.nb, plan.host), r => r.none ? none('not found in NetBox') : nbHtml(r), 'NetBox'),
+      ]);
+    }
+    function brain(id) {
+      const [kind, key] = id.split(/:(.+)/);
+      const r = { ticket: D.ticketByKey, device: D.deviceById, deployment: D.deploymentByKey, part: D.partById, site: D.siteById, project: D.projectByKey, person: D.personById, cluster: c => ({ id: c }) }[kind]?.(key);
+      if (!r) return;
+      if (kind === 'cluster') { const t = ALLT().find(t => String(yardOf(t.device)?.region || '').toLowerCase() === key); if (t) r.site = t.site; }
+      Drawer.close(); SiteCard.close?.();
+      setView('graph');
+      requestAnimationFrame(() => { Brain.resize(); if (!Brain.focusOn(kind, r)) toast('Not in the Second brain.'); });
+    }
+    document.addEventListener('click', e => { const b = e.target.closest('[data-lk-brain]'); if (b) { e.stopPropagation(); brain(b.dataset.lkBrain); } });
+    return { section, fill, local, brain };
+  })();
+
   /* ---------------- Drawer ---------------- */
   const Drawer = {
-    open(html, cls = '') { cardOpened(Drawer, $('#drawer')); volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; },
+    // lk = [kind, item]: adds the Linked section (see above) and starts its lookup.
+    open(html, cls = '', lk = null) { cardOpened(Drawer, $('#drawer')); volOpen = cls === 'wide' && volOpen; $('#drawer').className = `drawer ${cls}`; $('#drawer').innerHTML = `<button class="x" data-close-drawer aria-label="Close" style="float:right">✕</button>${html}${lk ? Linked.section(...lk) : ''}`; $('#drawer').hidden = false; $('#drawer').scrollTop = 0; if (lk) Linked.fill(...lk); },
     close() { $('#drawer').hidden = true; volOpen = false; },
   };
   /* Cards close the way they open: clicking the same row or button again closes the card, and clicking anywhere
@@ -2256,7 +3204,7 @@ LambdaData.ready.then(D => {
       ${d.events.length ? `<div class="section-title"><span>Meetings</span><span>${d.events.length}</span></div>${d.events.slice(0, 6).map(e => `<div class="mini-ticket" data-href="${esc(e.link)}"><span class="qkey">${new Date(e.at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span><span class="qsum">${esc(e.title)}</span><span class="small muted">${e.allDay ? 'all day' : new Date(e.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div>`).join('')}` : ''}
       ${d.moves.length ? `<div class="section-title"><span>Material movements · NetSuite</span><span>${d.moves.length}</span></div>
         <div class="answer" style="margin:0"><table><tr><th>Date</th><th>Doc</th><th>Type</th><th>Status</th><th>Tracking</th></tr>${d.moves.slice(0, 15).map(m => `<tr><td>${esc(m.date)}</td><td class="mono">${esc(m.doc)}</td><td>${esc(m.type)}</td><td>${esc(m.status)}</td><td class="mono">${esc(m.tracking)}</td></tr>`).join('')}</table></div>` : ''}
-      <div class="links">${btn('Open in Jira', d.url, true)}${d.channels.map(c => btn('#' + c.name, c.url)).join('')}${d.slackUrl ? btn('Slack channel', d.slackUrl) : ''}</div>`);
+      <div class="links">${btn('Open in Jira', d.url, true)}${d.channels.map(c => btn('#' + c.name, c.url)).join('')}${d.slackUrl ? btn('Slack channel', d.slackUrl) : ''}</div>`, '', ['deployment', d]);
   }
   function openProject(p) {
     return Drawer.open(`<div class="qkey">${p.key} · PROJECT</div><h3>${esc(p.title)}</h3>${statusChip(p.health, depStatus(p))}
@@ -2299,7 +3247,7 @@ LambdaData.ready.then(D => {
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
         ${yardBlock(t.device, t)}
         ${alertsBlock(t.alerts)}
-        <div class="links">${btn('Open in Jira', t.url, true)}${isExt && t.url ? `<button class="btn" data-rackside="${esc(t.key)}" data-rurl="${esc(t.url)}" title="Open the ticket in Jira with the Lambda Rackside side panel">Open in Rackside</button>` : ''}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in Jira', t.url, true)}${isExt && t.url ? `<button class="btn" data-rackside="${esc(t.key)}" data-rurl="${esc(t.url)}" title="Open the ticket in Jira with the Lambda Rackside side panel">Open in Rackside</button>` : ''}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`, '', ['ticket', t]);
     }
     if (type === 'cluster') {
       const id = String(ref.id || ref).toLowerCase(), hs = Object.entries(D.YARD?.hosts || {}).filter(([, y]) => y?.found && String(y.region).toLowerCase() === id);
@@ -2309,7 +3257,7 @@ LambdaData.ready.then(D => {
         <div class="section-title"><span>Open tickets on this cluster</span><span>${ts.length}</span></div>${ts.slice(0, 40).map(ticketRow).join('') || '<p class="muted">None.</p>'}
         <div class="section-title"><span>Locked hosts</span><span>${hs.filter(([, y]) => y.lockedBy).length}</span></div>
         ${hs.filter(([, y]) => y.lockedBy).slice(0, 30).map(([h, y]) => `<div class="mini-ticket" ${D.deviceById(h) ? `data-open="device:${esc(D.deviceById(h).id)}"` : ''}><span class="qkey mono">${esc(h)}</span><span class="qsum">${esc(y.state || '')}</span><span class="small muted">🔒 ${meLock(y) ? 'you' : esc(y.lockedBy)}</span></div>`).join('') || '<p class="muted">None.</p>'}
-        <div class="links">${D.YARD?.base ? btn('Open in Yard', `${D.YARD.base}/search?q=${encodeURIComponent(id)}`, true) : ''}</div>`);
+        <div class="links">${D.YARD?.base ? btn('Open in Yard', `${D.YARD.base}/search?q=${encodeURIComponent(id)}`, true) : ''}</div>`, '', ['cluster', { id }]);
     }
     if (type === 'device') {
       const d = ref, ts = ALLT().filter(t => t.device === d.id).sort(byUrgency);
@@ -2319,7 +3267,7 @@ LambdaData.ready.then(D => {
         ${yardBlock(d.id)}
         ${alertsBlock(d.alerts)}
         <div class="section-title"><span>Open tickets</span><span>${ts.length}</span></div>${ts.map(ticketRow).join('') || '<p class="muted">None.</p>'}
-        <div class="links">${btn('Open in NetBox', d.url, true)}${yardUrl(d.id) ? btn('Open in Yard', yardUrl(d.id)) : ''}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`);
+        <div class="links">${btn('Open in NetBox', d.url, true)}${yardUrl(d.id) ? btn('Open in Yard', yardUrl(d.id)) : ''}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`, '', ['device', d]);
     }
     if (type === 'part') {
       const p = ref, rows = D.SITES.map(s => ({ s, i: s.inventory.find(x => x.part === p.id) })).filter(r => r.i).sort((a, b) => b.i.stock - a.i.stock);
@@ -2328,7 +3276,7 @@ LambdaData.ready.then(D => {
         <p class="muted">${p.mfr ? esc(p.mfr) + ' · ' : ''}${rows.reduce((a, r) => a + r.i.stock, 0)} on hand fleet-wide · ${waiting.length} open tickets need it</p>
         ${rows.length ? `<div class="answer" style="margin:12px 0 0"><table><tr><th>Site</th><th class="num">On hand</th><th class="num">Alert at</th><th class="num">Receiving</th><th></th></tr>
         ${rows.map(({ s, i }) => `<tr><td><a class="linkish" data-open="site:${esc(s.id)}">${esc(s.id)}</a></td><td class="num">${i.stock}</td><td class="num">${i.alert || '—'}</td><td class="num">${i.receiving || ''}</td><td>${invStatus(i) === 'good' ? '' : statusChip(invStatus(i), INV_LABEL[invStatus(i)])}</td></tr>`).join('')}</table></div>` : '<p class="muted">Not stocked anywhere in NetBox.</p>'}
-        <div class="section-title"><span>Tickets needing this part</span><span>${waiting.length}</span></div>${waiting.slice(0, 30).map(ticketRow).join('') || '<p class="muted">None.</p>'}`);
+        <div class="section-title"><span>Tickets needing this part</span><span>${waiting.length}</span></div>${waiting.slice(0, 30).map(ticketRow).join('') || '<p class="muted">None.</p>'}`, '', ['part', p]);
     }
     if (type === 'person') {
       const p = ref, ts = ALLT().filter(t => t.assignee === p.id).sort(byUrgency);
@@ -2428,6 +3376,7 @@ LambdaData.ready.then(D => {
         { group: 'Quick', icon: '◷', color: XC.event, title: 'What’s on my calendar?', sub: 'Next meetings, linked to deployments', run: () => ask('my meetings') },
         { group: 'Quick', icon: '◇', color: C['c-part'], title: 'Waiting on parts we already have', sub: 'Part is on hand at the ticket’s site', run: () => ask('waiting parts on site') },
         { group: 'Quick', icon: '◎', color: C['c-site'], title: 'Open the second brain', sub: 'Everything linked, as neurons', run: () => { closePalette(); setView('graph'); } },
+        { group: 'Quick', icon: '⏱', color: C.accent, title: 'Trace a ticket, host, serial or part', sub: 'Its whole history on a timeline (T)', run: () => { closePalette(); setView('trace'); Trace.focus(); } },
         ...apps().filter(a => /DC queue|Sites|Material on hand|Open Slack|Inbox|Settings/.test(a[1])).map(goRow),
       ];
     } else {
@@ -2931,12 +3880,13 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
   /* ---------------- Keyboard ---------------- */
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); closePalette(); AIPanel.toggle(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); Filter.focus(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); pal.hidden ? openPalette() : closePalette(); return; }
     if (e.key === 'Escape') { if (AIPanel.isOpen() && document.activeElement?.id !== 'aipText' && pal.hidden) AIPanel.close(); else if (!alertPop.hidden) alertPop.hidden = true; else if (!briefBox.hidden) closeBrief(); else if (!pal.hidden) closePalette(); else if (!$('#drawer').hidden) Drawer.close(); else if (!$('#siteCard').hidden) SiteCard.close(); else if (document.body.classList.contains('stage-max')) setStageMax(false); return; }
     if (e.key === '/' && pal.hidden && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openPalette(); }
     // Single-key shortcuts work anywhere except while typing (they used to need focus on the page itself).
     if (pal.hidden && !e.metaKey && !e.ctrlKey && !e.altKey && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
-      if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys'); if (e.key === 'h') setView('health');
+      if (e.key === 'g' || e.key === 'b') setView('graph'); if (e.key === 'f') setView('globe'); if (e.key === 'd') setView('deploys'); if (e.key === 'h') setView('health'); if (e.key === 't' && !Trace.traceHovered()) setView('trace');
       if (e.key === 'e') setStageMax(!document.body.classList.contains('stage-max'));
     }
   });

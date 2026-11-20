@@ -24,6 +24,9 @@
       <span>Search sites, devices, tickets, deployments… or ask</span>
       <kbd id="cmdKbd">⌘K</kbd>
     </button>
+    <label class="fbox" id="fbox" title="Filter every list (⌘⇧F / Ctrl+Shift+F). ? for examples.">
+      <span class="fbox-icon" aria-hidden="true">▽</span><input id="fInput" type="search" placeholder="Filter" spellcheck="false" autocomplete="off" aria-label="Filter every list by a keyword"><button type="button" id="fStar" hidden aria-label="Save this filter">☆</button><button type="button" id="fClear" hidden aria-label="Clear the filter">✕</button><button type="button" id="fHelp" aria-label="Filter help and examples" title="How to filter, with examples">?</button>
+    </label>
     </div>
     <div class="top-right">
       <button class="updbtn" id="updBtn" hidden title="A new version of Lambda OS is available">⬆ Update</button>
@@ -79,6 +82,7 @@
           <button role="tab" class="tab" data-view="graph" aria-selected="false">Second brain</button>
           <button role="tab" class="tab" data-view="deploys" aria-selected="false">Deployments</button>
           <button role="tab" class="tab" data-view="health" aria-selected="false" title="Every site's health checks from Grafana (H)">Health <b id="healthBadge" class="tab-badge" hidden></b></button>
+          <button role="tab" class="tab" data-view="trace" aria-selected="false" title="One item's history on a timeline: tickets, hosts, serials, parts, shipments (T). Right-click anything on the dashboard to trace it.">Trace</button>
         </div>
         <button class="stage-expand" id="stageExpand" type="button" title="Bigger view: hide the side columns (E). Esc to go back." aria-pressed="false">⤢</button>
         <div class="stage-legend" id="stageLegend"></div>
@@ -90,6 +94,7 @@
         <canvas id="graph" class="view brain" aria-label="Second brain: sites, deployments, projects, tickets, people, parts, Slack channels and meetings, linked like neurons"></canvas>
         <div id="deploys" class="view dview" role="region" aria-label="Deployments timeline"></div>
         <div id="health" class="view dview hview" role="region" aria-label="Site health"></div>
+        <div id="trace" class="view dview tview" role="region" aria-label="Trace: one item's history"></div>
         <div class="tooltip" id="tooltip" hidden></div>
         <aside class="site-card" id="siteCard" hidden></aside>
         <div class="map-attrib" id="mapAttrib" hidden></div>
