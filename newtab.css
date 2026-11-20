@@ -1065,3 +1065,28 @@ td .tr-btn, .inv .tr-btn { margin-left: 4px; vertical-align: middle; }
 .fp-ex button span { color: var(--muted); font-size: 10.5px; }
 .fp-help { font-size: 11px; line-height: 1.7; padding: 8px; border-top: 1px solid var(--line); margin-top: 6px; }
 #fStar[hidden], #fClear[hidden] { display: none; } /* all: unset would otherwise override [hidden] */
+
+/* Maintenance windows (Jira MAINT) */
+.mchip { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 0 6px; border-radius: 99px; font: 600 10px var(--mono);
+  color: #c792ea; border: 1px solid rgba(199,146,234,.45); white-space: nowrap; vertical-align: middle; }
+.mchip.now { background: rgba(199,146,234,.16); }
+.mchip.emerg { color: var(--critical); border-color: rgba(208,59,59,.55); background: rgba(208,59,59,.12); }
+.mchip:hover { background: rgba(199,146,234,.24); }
+.mbadge { margin-left: 4px; font-size: 11px; cursor: help; }
+.mrow .qkey { color: #c792ea; }
+.mstar { width: 22px; display: inline-grid; place-items: center; font-size: 12px; }
+.dbar.mbar { background: var(--c); opacity: .85; min-width: 6px; border-radius: 4px; }
+
+/* 🛠 Maintenance button (top bar) */
+.maintbtn b:empty { display: none; }
+.maintbtn b { margin-left: 2px; padding: 0 5px; border-radius: 99px; background: rgba(199,146,234,.22); color: #e3c5f5; font-size: 10px; }
+.maintbtn.now { border-color: rgba(199,146,234,.7); color: #e3c5f5; }
+.maintbtn.emerg { border-color: var(--critical); color: #fff; background: rgba(208,59,59,.22); }
+.maintbtn.emerg b { background: var(--critical); color: #fff; }
+.m-yours { color: var(--warning); font-size: 10.5px; font-weight: 600; margin-left: 4px; }
+@media (max-width: 1440px) { .maintbtn .mb-txt { display: none; } }
+.mrow2 { align-items: flex-start; }
+.mrow2 .qsum { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mrow2 .m-title { white-space: normal; line-height: 1.35; }
+.mrow2 .m-meta { font-size: 11px; color: var(--muted); }
+.mrow2 .m-meta .status { font-size: 10.5px; }

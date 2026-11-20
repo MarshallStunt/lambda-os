@@ -116,6 +116,27 @@ const LambdaAlerts = (() => {
     for (const s of D.SITES) if (th(s) !== 'idle') next.sites[s.id] = th(s);
     if (!first && cfg.siteCritical) for (const s of D.SITES.filter(s => (!SC || SC.has(s.id)) && th(s) === 'critical' && prev.sites?.[s.id] && prev.sites[s.id] !== 'critical')) notes.push({
       id: `site:${s.id}`, urgent: true, url: s.url || '', title: `${s.id} turned critical`, message: `${s.name} · ${s.breached} SLA breached · ${s.openTickets} open tickets` });
+    // Maintenance (Jira MAINT) at your sites: an emergency request, or a window that opens within the hour; and one of
+    // your tickets' hosts going into a window (so nobody starts hands-on work on a host that's about to be power cycled).
+    { const ms = SC || yourSites(D), mOn = !first && cfg.maint !== false && !!prev?.maint, M = 60e3;
+      next.maint = {};
+      for (const m of (D.MAINT || []).filter(m => m.state !== 'done' && m.sites.some(c => ms.has(c)))) {
+        const stage = m.emergency && m.state !== 'late' ? 'emergency' : m.state === 'now' ? 'now' : m.start && m.start > now && m.start - now <= 60 * M ? 'soon' : '';
+        if (!stage) continue;
+        next.maint[m.key] = stage;
+        if (mOn && prev.maint[m.key] !== stage && !(stage === 'now' && prev.maint[m.key] === 'soon')) notes.push({
+          id: `maint:${m.key}:${stage}`, urgent: stage === 'emergency', url: m.url,
+          title: stage === 'emergency' ? `Emergency maintenance · ${m.sites.join(', ')}` : stage === 'soon' ? `Maintenance in ${Math.max(1, Math.round((m.start - now) / M))} min · ${m.sites.join(', ')}` : `Maintenance started · ${m.sites.join(', ')}`,
+          message: [m.key, m.type, m.summary.replace(/^EMERGENCY:\s*/i, '')].filter(Boolean).join(' · ') });
+      }
+      for (const t of D.TICKETS.filter(t => (t.mine || t.assignee === 'me') && t.device)) for (const m of (D.maintForHost ? D.maintForHost(t.device) : [])) {
+        if (!(m.state === 'now' || (m.start && m.start > now && m.start - now <= 4 * 60 * M))) continue;
+        const k = `${t.key}>${m.key}`; next.maint[k] = 1;
+        if (mOn && !prev.maint[k]) notes.push({ id: `maint:${k}`, urgent: m.state === 'now', url: t.url,
+          title: `${t.device} ${m.state === 'now' ? 'is in maintenance now' : `goes into maintenance in ${Math.max(1, Math.round((m.start - now) / (60 * M)))} h`} · ${t.key}`,
+          message: [m.key, m.type, 'check before hands-on work', t.summary].filter(Boolean).join(' · ') });
+      }
+    }
     // Atium: a build milestone goes late, a hand-off is within 7 days, a purchase order at your sites goes past due.
     const sites = SC || yourSites(D), builds = myBuilds(D, sites), atOn = !first && cfg.atium !== false;
     next.builds = {}; next.handoff = []; next.po = {}; next.poSites = [];

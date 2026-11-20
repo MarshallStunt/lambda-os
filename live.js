@@ -36,7 +36,7 @@ const LambdaLive = (() => {
     // Appearance: theme 'system' | 'light' | 'dark'; accent; density; text size; glow; motion
     look: { theme: 'system', accent: 'cyan', density: 'comfortable', text: 'normal', glow: 'on', motion: 'full' },
     // Desktop alerts (checked after every background refresh) and the daily brief.
-    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true, siteHealth: true, yard: true,
+    alerts: { enabled: true, slaHours: 4, myTickets: true, assigned: true, tracked: true, parts: true, mentions: false, siteCritical: false, sources: true, atium: true, grafana: true, siteHealth: true, yard: true, maint: true,
       quietFrom: '', quietTo: '', badge: true },
     brief: { enabled: true, time: '08:30', days: 'weekdays', autoOpen: true, ai: false },
     // Smart processing: 'local' (rules only) or 'ai' (your AI provider settles what the rules can't, when it's available).
@@ -320,6 +320,31 @@ const LambdaLive = (() => {
     for (let i = 0; i < days.length; i += 6) await Promise.all(days.slice(i, i + 6).map(async d => { counts[d] = await count(d); }));
     return { at: Date.now(), counts, statuses: names };
   }
+  /* Maintenance windows: Jira's MAINT project ("Maintenance Requests"). Each request has a type (Power Cycle, Firmware,
+     Retirement…), a region or cluster (us-sanjose-1, staging-sjc02-cl01), the hosts (Entity LRNs: cloud host ids, sometimes
+     hostnames), an urgency and a window (Not Before → Not After, plus a deadline). Fields are found by name, so a renamed
+     or moved field doesn't break it; no MAINT access just means no windows. */
+  const adfPlain = n => !n ? '' : typeof n === 'string' ? n : (n.text || '') + (n.content || []).map(adfPlain).join(n.type === 'paragraph' || n.type === 'listItem' ? '\n' : ' ');
+  async function maintenance(get, base) {
+    const fields = await get('/rest/api/3/field');
+    const id = (name, prefer) => { const fs = fields.filter(f => f.name === name); return (fs.find(f => !prefer || prefer(f)) || fs[0])?.id; };
+    const F = { type: id('Maintenance Type'), nb: id('Not Before'), na: id('Not After'), dl: id('Not Before Deadline'), eff: id('Not Before (Effective)'), lrns: id('Entity LRNs'),
+      urg: id('Urgency', f => f.schema?.type === 'option'), region: id('Region', f => f.schema?.type === 'string'), scope: id('Scope') };
+    const want = ['summary', 'status', 'created', 'updated', 'resolutiondate', 'description', ...Object.values(F).filter(Boolean)].join(',');
+    const jql = 'project = MAINT AND status != Canceled AND (statusCategory != Done OR resolved >= -14d) ORDER BY created DESC';
+    const r = await get(`/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=200&fields=${want}`);
+    const val = v => v == null ? '' : typeof v === 'object' ? (v.value || v.name || adfPlain(v)) : String(v);
+    const when = v => (v ? Date.parse(v) : 0) || 0;
+    return (r.issues || []).filter(i => !/^\s*\[test/i.test(i.fields.summary || '')).map(i => {
+      const f = i.fields, hostsText = adfPlain(f[F.lrns]), desc = adfPlain(f.description);
+      return { key: i.key, url: `${base}/browse/${i.key}`, summary: f.summary || '', status: f.status?.name || '', done: f.status?.statusCategory?.key === 'done',
+        type: val(f[F.type]), region: val(f[F.region]).trim(), scope: val(f[F.scope]), urgency: val(f[F.urg]),
+        from: when(f[F.eff]) || when(f[F.nb]), to: when(f[F.na]), deadline: when(f[F.dl]), created: when(f.created), updated: when(f.updated), resolved: when(f.resolutiondate),
+        lrns: [...new Set(hostsText.match(/lrn:[\w:-]+/g) || [])],
+        hostnames: [...new Set(`${hostsText} ${desc} ${f.summary}`.match(/\b[a-z]{3}\d{2}[a-z0-9]*(?:-[a-z0-9]+){2,}\b/gi) || [])].map(h => h.toLowerCase()),
+        description: desc.replace(/\s+/g, ' ').trim().slice(0, 600) };
+    });
+  }
   async function jira(s, progress) {
     const base = trim(s.jiraUrl);
     const get = p => getJson(base + p, { login: base, name: 'Jira' });
@@ -331,12 +356,13 @@ const LambdaLive = (() => {
     let prevJ = null; try { ({ snapshot: { jira: prevJ } = {} } = await chrome.storage.local.get('snapshot')); } catch { /* first run */ }
     const startedAt = Date.now();
     const closedJql = `(${stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '')}) AND resolved >= -31d`;
-    const [issues, mineIssues, port, closed, epicsClosed] = await Promise.all([
+    const [issues, mineIssues, port, closed, epicsClosed, maint] = await Promise.all([
       search(get, s.fleetJql, s.maxTickets, want, progress),
       search(get, s.mineJql, 500, 'summary').catch(() => []),
       portfolio(get, F, s, base, progress).then(v => ({ v }), e => ({ e })),
       closedTickets(get, closedJql, F.sla || [], F).catch(() => null),
       closedEpics(get, s).catch(() => null),
+      maintenance(get, base).catch(() => null),
     ]);
     const mine = new Set(mineIssues.map(i => i.key));
     return {
@@ -346,6 +372,7 @@ const LambdaLive = (() => {
       // A history read that fails keeps the last good one (the next refresh tries again) instead of wiping the charts.
       closed30: closed || prevJ?.closed30 || null, closed30At: closed ? startedAt : prevJ?.closed30At || null, closed30Full: closed ? closed.fullAt || null : prevJ?.closed30Full || null,
       closedEpics: epicsClosed || prevJ?.closedEpics || null,
+      maint: maint || prevJ?.maint || [],
       fieldMiss: F.miss, fieldsByAI: F.aiUsed,
       waitHist: await waitingHistory(base, s, issues).catch(() => prevJ?.waitHist || null),
       workHist: await workHistory(get, s, F).catch(() => prevJ?.workHist || null),

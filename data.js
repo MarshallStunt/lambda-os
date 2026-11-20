@@ -241,7 +241,7 @@
     // Yard Central: host state / pool / lock / Starbase by hostname (lower case), read-only.
     D.YARD = { base: snap.yard?.base || 'https://yard-central.aws.lambdalabs.cloud', hosts: snap.yard?.hosts || {}, live: !!snap.yard };
     D.RAW = { closed30: jr?.closed30 || null, closedEpics: jr?.closedEpics || null, workHist: jr?.workHist || null, codeOf };
-    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, codeOf, meId });
+    return addWork(D, { portfolio: jr?.portfolio || [], slack: snap.slack, gmail: snap.gmail, calendar: snap.calendar, netsuite: snap.netsuite, atium: snap.atium, grafana: snap.grafana, smart: snap.smart, closedEpics: jr?.closedEpics || null, maint: jr?.maint || [], codeOf, meId });
   }
 
   /* ---------------- Projects, deployments, Slack, mail, calendar, NetSuite ---------------- */
@@ -529,9 +529,28 @@
         { key: 'gpus', num: gpus, trend: depTrend && depTrend.map(x => ({ day: x.day, v: x.g })), label: 'GPUs in deployments', value: kfmt(gpus), sub: next ? `next due: ${next.site || next.key} · ${new Date(next.end).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '' });
     }
 
+    // Maintenance windows (Jira MAINT). A request is placed at a site by the site code in its region or cluster
+    // (staging-sjc02-cl01 → SJC02) or by the city in a cloud region name (us-sanjose-1 → San Jose), and on a host when it
+    // names hostnames (its host list is usually cloud host ids, which Lambda OS can't turn into hostnames).
+    // state: now (window open, or an emergency with no window yet) · upcoming · late (window over, request still open) · done.
+    const squash = v => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
+    const MAINT = (x.maint || []).map(m => {
+      let sites = codesIn(`${m.region} ${m.summary}`);
+      const city = !sites.length && (String(m.region).match(/^[a-z]{2}-([a-z]+)-\d+$/i) || [])[1];
+      if (city) sites = D.SITES.filter(s => [s.city, s.name].some(n => n && (squash(n).includes(squash(city)) || squash(city).includes(squash(n))))).map(s => s.id);
+      const emergency = /emerg/i.test(m.urgency || '') || /^\s*emergency/i.test(m.summary || '');
+      const start = m.from || 0, end = m.to || (m.deadline > start ? m.deadline : 0) || (start ? start + 4 * 3600e3 : 0);
+      const state = m.done ? 'done' : (start && start <= now && now <= end) || (!start && emergency) ? 'now' : start > now ? 'upcoming' : end && end < now ? 'late' : 'upcoming';
+      return { ...m, sites, site: sites[0] || null, hosts: m.hostnames || [], start, end, emergency, state };
+    }).sort((a, b) => ({ now: 0, upcoming: 1, late: 2, done: 3 }[a.state] - { now: 0, upcoming: 1, late: 2, done: 3 }[b.state]) || (a.start || a.created) - (b.start || b.created));
+    const MAINT_HOST = new Map();
+    for (const m of MAINT) if (m.state !== 'done') for (const h of m.hosts) MAINT_HOST.set(h, [...(MAINT_HOST.get(h) || []), m]);
+    for (const s of D.SITES) s.maint = MAINT.filter(m => m.state !== 'done' && m.sites.includes(s.id));
+
     const DI = new Map(DEPLOYMENTS.map(d => [d.key, d]));
     return Object.assign(D, {
-      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER, GRAFANA, HEALTH,
+      DEPLOYMENTS, PROJECTS, CHANNELS, MENTIONS, MAIL, EVENTS, MOVES, BUILDS, VOLUNTEER, GRAFANA, HEALTH, MAINT,
+      maintForHost: h => h ? MAINT_HOST.get(String(h).toLowerCase()) || [] : [], maintByKey: k => MAINT.find(m => m.key === k),
       SMART: x.smart ? { on: !!x.smart.on, live: !!x.smart.live, label: x.smart.label || '', why: x.smart.why || '', at: x.smart.at || 0, calls: x.smart.calls || 0 } : null,
       AI_PRIORITY: SM?.prio?.order?.length ? SM.prio : null,
       deploymentByKey: k => DI.get(k), projectByKey: k => PIDX.get(k), channelById: id => CHANNELS.find(c => c.id === id),
@@ -706,7 +725,15 @@
     // Demo Yard answers for the first devices, so the drawers show what Yard adds.
     D.YARD = { base: 'https://yard-central.aws.lambdalabs.cloud', live: true, hosts: Object.fromEntries(D.DEVICES.slice(0, 40).map((d, i) => [d.id.toLowerCase(),
       { found: true, region: (d.site || '').toLowerCase() + '-cl01', status: 'active', state: ['app_starbase', 'dc-ops', 'app_managed_k8s', 'maintenance'][i % 4], pool: ['ga', 'maintenance', 'ga', 'reclaim'][i % 4], lockedBy: i % 4 === 1 ? 'J. Chen' : i === 6 ? 'you' : null, starbase: i % 4 === 0 ? 'yes' : null, at: Date.now() }])) };
-    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, grafana: gfMock, smart, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
+    // Demo maintenance windows (Jira MAINT), one of each kind.
+    const devAt = (site, n) => D.DEVICES.filter(d => d.site === site).slice(0, n).map(d => d.id);
+    const HR = 3600e3, maintMock = [
+      { key: 'MAINT-21', summary: 'Firmware upgrade — 3 hosts, iad03-cl01', type: 'Firmware Upgrade', region: 'iad03-cl01', urgency: 'Normal', status: 'Ready for Work', from: now + 3 * HR, to: now + 7 * HR, created: now - 30 * HR, hostnames: devAt('IAD03', 3), lrns: [], description: 'Lambda will upgrade BMC and GPU firmware on these hosts. Each host is power cycled once; expected downtime under 30 minutes per host.' },
+      { key: 'MAINT-20', summary: 'EMERGENCY: immediate power cycle — 1 host, us-sanjose-1', type: 'Power Cycle', region: 'us-sanjose-1', urgency: 'Emergency', status: 'To Do', from: 0, to: 0, created: now - 0.7 * HR, hostnames: devAt('SJC01', 1), lrns: ['lrn:cloud:host:1ad309e2-4e71-4e26-8320-6147c0b995e2'], description: 'Immediate power cycle to clear a critical hardware fault. Instances on the host are unavailable for up to 20 minutes.' },
+      { key: 'MAINT-19', summary: 'Power cycle — 4 hosts, ord01-cl01', type: 'Power Cycle', region: 'ord01-cl01', urgency: 'High', status: 'In Progress', from: now - 1 * HR, to: now + 2 * HR, created: now - 50 * HR, hostnames: devAt('ORD01', 4), lrns: [], description: 'Rolling power cycle after a PDU firmware update.' },
+      { key: 'MAINT-18', summary: 'Host retirement — 2 hosts, dal02-cl04', type: 'Retirement', region: 'dal02-cl04', urgency: 'Critical with Deadline', status: 'To Do', from: now + 48 * HR, to: 0, deadline: now + 96 * HR, created: now - 70 * HR, hostnames: devAt('DAL02', 2), lrns: [], description: 'Drain and retire two hosts before the deadline.' },
+    ].map(m => ({ url: '', scope: '', updated: m.created, resolved: 0, done: false, ...m }));
+    return addWork(D, { portfolio, slack: slackMock, gmail: gmailMock, calendar: calMock, netsuite: nsMock, atium: atMock, grafana: gfMock, smart, maint: maintMock, codeOf: c => (D.siteById(String(c).toUpperCase().slice(0, 5)) || D.siteById(String(c)) || {}).id || null, meId: 'me' });
   }
 
   function finish(D) {
@@ -826,6 +853,7 @@
       DEVICES: D.DEVICES.filter(d => inS(d.site)),
       MOVES: (D.MOVES || []).filter(m => inS(m.site)),
       BUILDS: (D.BUILDS || []).filter(b => inS(b.site)),
+      MAINT: (D.MAINT || []).filter(m => !m.sites.length || anyS(m.sites)),
       tracked: () => D.tracked().filter(d => anyS(d.sites) || D.isTracked(d.key)),
     });
   }

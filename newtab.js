@@ -557,6 +557,69 @@ LambdaData.ready.then(D => {
   }
   renderAgenda(); setInterval(renderAgenda, 60000);
 
+  /* ---------------- Maintenance windows (Jira MAINT) ---------------- */
+  const hm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const dayHm = t => `${new Date(t).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${hm(t)}`;
+  const relIn2 = t => { const m = Math.round((t - Date.now()) / 60e3); return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+  const maintWhen = m => m.state === 'now' ? (m.start ? `now · until ${m.end - Date.now() < 864e5 ? hm(m.end) : dayHm(m.end)}` : 'as soon as possible (emergency)')
+    : m.state === 'upcoming' ? (m.start ? `in ${relIn2(m.start)} · ${dayHm(m.start)}${m.to ? ` → ${new Date(m.end).toDateString() === new Date(m.start).toDateString() ? hm(m.end) : dayHm(m.end)}` : ''}` : 'not scheduled yet')
+    : m.state === 'late' ? `window ended ${rel(m.end)} ago · still open` : 'done';
+  const maintTone = m => m.emergency && m.state !== 'done' ? 'critical' : m.state === 'now' ? 'warning' : m.state === 'late' ? 'serious' : 'idle';
+  const maintSoon = m => m && (m.state === 'now' || (m.state === 'upcoming' && m.start && m.start - Date.now() < 864e5)); // now or within 24 h
+  const maintChip = (h, short) => { const ms = (D.maintForHost?.(h) || []).filter(maintSoon); if (!ms.length) return '';
+    const m = ms[0]; return `<button type="button" class="mchip ${m.state === 'now' ? 'now' : ''} ${m.emergency ? 'emerg' : ''}" data-maint="${esc(m.key)}" title="${esc(`${m.key}: ${m.summary} · ${maintWhen(m)}`)}">🛠 ${short ? (m.state === 'now' ? 'maint now' : `maint ${relIn2(m.start)}`) : `${esc(m.type || 'Maintenance')} ${m.state === 'now' ? 'now' : 'in ' + relIn2(m.start)}`}</button>`; };
+  const maintRow = m => `<div class="mini-ticket mrow" data-maint="${esc(m.key)}" title="${esc(m.summary)}"><span class="qkey">${esc(m.key)}</span><span class="qsum">${m.emergency ? '<b class="st-critical">EMERGENCY</b> · ' : ''}${esc(m.type || 'Maintenance')} · ${esc(m.summary.replace(/^EMERGENCY:\s*/i, ''))}</span>${statusChip(maintTone(m), maintWhen(m))}</div>`;
+  const maintBlock = (list, title = 'Maintenance · Jira MAINT') => list.length ? `<div class="section-title"><span>🛠 ${title}</span><span>${list.length}</span></div>${list.map(maintRow).join('')}` : '';
+  function openMaint(m) {
+    const hostLinks = m.hosts.map(h => D.deviceById(h) ? `<a data-open="device:${esc(D.deviceById(h).id)}" class="mono">${esc(h)}</a>` : `<span class="mono">${esc(h)}</span>`);
+    const onHosts = ALLT().filter(t => t.device && m.hosts.includes(String(t.device).toLowerCase()));
+    return Drawer.open(`<div class="qkey">${esc(m.key)} · MAINTENANCE${m.emergency ? ' · <span class="st-critical">EMERGENCY</span>' : ''}</div><h3>${esc(m.summary)}</h3>
+      ${statusChip(maintTone(m), maintWhen(m))}
+      <dl class="kv"><dt>Type</dt><dd>${esc(m.type || '—')}</dd><dt>Urgency</dt><dd>${esc(m.urgency || '—')}</dd><dt>Status</dt><dd>${esc(m.status)}</dd>
+        <dt>Window</dt><dd>${m.start ? `${dayHm(m.start)} → ${m.to ? dayHm(m.end) : 'no end set'}` : 'not scheduled yet'}</dd>
+        ${m.deadline ? `<dt>Deadline</dt><dd>${dayHm(m.deadline)}</dd>` : ''}
+        <dt>Region</dt><dd class="mono">${esc(m.region || '—')}</dd>
+        <dt>Sites</dt><dd>${m.sites.map(c => `<a data-open="site:${esc(c)}">${esc(c)}</a>`).join(', ') || '<span class="muted">not matched to a site</span>'}</dd>
+        <dt>Hosts</dt><dd>${hostLinks.join(', ') || (m.lrns.length ? `${m.lrns.length} cloud host${m.lrns.length > 1 ? 's' : ''} <span class="muted small">(cloud ids only)</span>` : '—')}</dd></dl>
+      ${m.lrns.length && !m.hosts.length ? `<details class="small"><summary class="muted">Cloud host ids</summary><p class="mono small">${m.lrns.map(esc).join('<br>')}</p></details>` : ''}
+      ${m.description ? `<p class="muted small" style="margin-top:10px">${esc(m.description)}</p>` : ''}
+      ${onHosts.length ? `<div class="section-title"><span>Open tickets on these hosts</span><span>${onHosts.length}</span></div>${onHosts.map(ticketRow).join('')}` : ''}
+      <div class="links">${btn('Open in Jira', m.url, true)}<button class="btn" data-trace="ticket:${esc(m.key)}">⏱ Trace</button></div>`);
+  }
+  /* The 🛠 button in the top bar: how many windows are open or coming up (red when there's an emergency, highlighted
+     when one is happening now), and a list of all of them, grouped by when. */
+  const maintAll = () => ((D.ALL || D).MAINT || []).filter(m => m.state !== 'done');
+  function paintMaintBtn() {
+    const b = $('#maintBtn'); if (!b) return;
+    const all = maintAll(), em = all.filter(m => m.emergency && m.state !== 'late'), now = all.filter(m => m.state === 'now'), soon = all.filter(maintSoon);
+    $('#maintCount').textContent = soon.length || (all.length ? '' : '');
+    b.classList.toggle('emerg', !!em.length); b.classList.toggle('now', !em.length && !!now.length);
+    b.title = all.length ? `Maintenance windows (Jira MAINT): ${[em.length && `${em.length} emergency`, now.length && `${now.length} now`, soon.length - now.length > 0 && `${soon.length - now.length} within 24 h`, `${all.length} open in all`].filter(Boolean).join(' · ')}`
+      : 'Maintenance windows (Jira MAINT): none open';
+  }
+  function openMaintList() {
+    const all = maintAll(), mine = new Set((D.ALL || D).yourSites ? (D.ALL || D).yourSites() : []);
+    const day = 864e5, at = m => m.start || m.created || 0;
+    const groups = [
+      ['🚨 Emergency', all.filter(m => m.emergency && m.state !== 'late')],
+      ['Happening now', all.filter(m => m.state === 'now' && !m.emergency)],
+      ['Next 24 hours', all.filter(m => m.state === 'upcoming' && !m.emergency && m.start && m.start - Date.now() <= day)],
+      ['Later', all.filter(m => m.state === 'upcoming' && !m.emergency && (!m.start || m.start - Date.now() > day))],
+      ['Window over, request still open', all.filter(m => m.state === 'late')],
+    ].filter(([, l]) => l.length);
+    const row = m => `<div class="mini-ticket mrow mrow2" data-maint="${esc(m.key)}" title="${esc(m.summary)}"><span class="qkey">${esc(m.key)}</span>
+      <span class="qsum"><span class="m-title">${m.emergency ? '<b class="st-critical">EMERGENCY</b> · ' : ''}${esc(m.summary.replace(/^EMERGENCY:\s*/i, ''))}</span>
+      <span class="m-meta">${statusChip(maintTone(m), maintWhen(m))}${m.sites.length ? ` · <b>${esc(m.sites.join(', '))}</b>` : ''}${m.type ? ` · ${esc(m.type)}` : ''}${m.sites.some(c => mine.has(c)) ? ' <b class="m-yours" title="At one of your sites">★ yours</b>' : ''}</span></span></div>`;
+    Drawer.open(`<div class="qkey">MAINTENANCE · JIRA MAINT</div><h3>Maintenance windows</h3>
+      <p class="muted small">${all.length ? `${all.length} open request${all.length > 1 ? 's' : ''} from Jira's Maintenance Requests (MAINT) project, soonest first. Click one for its window, hosts and the tickets on them.` : 'No open maintenance requests in Jira MAINT right now.'}</p>
+      ${groups.map(([t, l]) => `<div class="section-title"><span>${t}</span><span>${l.length}</span></div>${l.sort((a, b) => at(a) - at(b)).map(row).join('')}`).join('')}
+      <div class="links">${btn('All in Jira', `${(D.ALL || D).RAW?.jiraBase || (D.MAINT?.[0]?.url || '').replace(/\/browse\/.*$/, '') || 'https://lambda-inc.atlassian.net'}/jira/software/c/projects/MAINT/issues`, true)}<button class="btn" data-view-go="deploys">See them on the Deployments timeline</button></div>`);
+  }
+  $('#maintBtn')?.setAttribute('data-maint-list', ''); // a second click closes the list (card toggle, see OPENER)
+  $('#maintBtn')?.addEventListener('click', () => openMaintList());
+  document.addEventListener('click', e => { const b = e.target.closest('[data-view-go]'); if (b) { Drawer.close(); setView(b.dataset.viewGo); } });
+  paintMaintBtn(); setInterval(paintMaintBtn, 60e3);
+  document.addEventListener('click', e => { const b = e.target.closest('[data-maint]'); if (!b) return; e.stopPropagation(); const m = D.maintByKey?.(b.dataset.maint); if (m) openMaint(m); });
   /* ---------------- Filter: one query for every list ----------------
      The box in the top bar (⌘⇧F / Ctrl+Shift+F) narrows the left column (each tab's count becomes the number of matches),
      the live feed, the sites list, the Deployments and Health views; rows in an open card that don't match fade, and
@@ -578,7 +641,7 @@ LambdaData.ready.then(D => {
       part: 'part', pn: 'part', priority: 'priority', prio: 'priority', key: 'key', id: 'key', src: 'src', source: 'src', from: 'from', channel: 'channel',
       type: 'type', project: 'project', sla: 'sla', age: 'age', updated: 'updated' };
     const DUR = new Set(['sla', 'age', 'updated']);
-    const IS = ['breached', 'mine', 'unassigned', 'open', 'done', 'locked', 'prod', 'tracked', 'late'], HAS = ['alert', 'part', 'host'];
+    const IS = ['breached', 'mine', 'unassigned', 'open', 'done', 'locked', 'prod', 'tracked', 'late', 'maint'], HAS = ['alert', 'part', 'host', 'maint'];
     const UNIT = { m: 60e3, h: 3600e3, d: 864e5, w: 7 * 864e5 };
     let q = '', ast = null, error = '', warn = '';
     try { q = sessionStorage.getItem('lambdaos-filter') || ''; } catch { /* ignore */ }
@@ -685,6 +748,7 @@ LambdaData.ready.then(D => {
       ['assignee:me', 'Assigned to me'], ['host:iad03-r06*', 'Hosts starting iad03-r06'],
       ['sla<4h', 'SLA due within 4 hours'], ['age>7d', 'Opened over a week ago'],
       ['is:mine is:breached', 'My tickets past SLA'], ['has:alert', 'Has a Grafana alert'],
+      ['is:maint', 'Maintenance now or within 24 h'], ['type:"Power Cycle"', 'Sites with a power-cycle window'],
     ];
     function values(field) {
       const T = ALLT(), uniq = a => [...new Set(a.filter(Boolean))];
@@ -804,8 +868,8 @@ LambdaData.ready.then(D => {
       part: [t.part, t.part && partLabel(D.partById(t.part))], priority: t.priority, src: 'jira', project: String(t.key).split('-')[0] },
       d: { sla: t.slaDue ? t.slaDue - now : null, age: t.created ? now - t.created : null, updated: t.updated ? now - t.updated : null },
       is: { breached: !!(t.slaBreached || (t.slaDue && t.slaDue < now)), mine: t.assignee === 'me' || !!t.mine, unassigned: !t.assignee, open: !isDone(t.status), done: isDone(t.status),
-        locked: !!y?.lockedBy, prod: !!(y?.found && LambdaAlerts.inProduction(y)), tracked: false, late: !!(t.slaBreached || (t.slaDue && t.slaDue < now)) },
-      has: { alert: !!t.alerts?.length, part: !!t.part, host: !!t.device } };
+        locked: !!y?.lockedBy, prod: !!(y?.found && LambdaAlerts.inProduction(y)), tracked: false, late: !!(t.slaBreached || (t.slaDue && t.slaDue < now)), maint: (D.maintForHost?.(t.device) || []).some(maintSoon) },
+      has: { alert: !!t.alerts?.length, part: !!t.part, host: !!t.device, maint: !!(D.maintForHost?.(t.device) || []).length } };
   };
   const depText = d => [d.key, d.title, d.sites, d.site, d.status, d.assigneeName, d.deployType, d.projectType, d.gpuModel, d.project?.title, d.tags];
   const depItem = d => {
@@ -813,7 +877,7 @@ LambdaData.ready.then(D => {
     return { text: depText(d), f: { key: d.key, site: d.sites, status: d.status, assignee: [d.assigneeName, d.mine ? 'me' : ''], type: [d.deployType, d.projectType], project: [d.project?.key, d.project?.title], src: 'jira', part: d.gpuModel },
       d: { age: d.start ? now - d.start : null, sla: d.end ? d.end - now : null }, is: { mine: !!d.mine, open: !isDone(d.status), done: isDone(d.status), tracked: !!D.isTracked?.(d.key), late: !!(d.overdue || (d.end && d.end < now && !isDone(d.status))) }, has: {} };
   };
-  const siteItem = s => ({ text: [s.id, s.name, s.fullName, s.city, s.address], f: { site: [s.id, s.name], status: [s.status, s.health] }, is: {}, has: { alert: !!s.gf?.alerts?.length } });
+  const siteItem = s => ({ text: [s.id, s.name, s.fullName, s.city, s.address, (s.maint || []).map(m => [m.key, m.type, m.summary])], f: { site: [s.id, s.name], status: [s.status, s.health], type: (s.maint || []).map(m => m.type) }, is: { maint: (s.maint || []).some(maintSoon) }, has: { alert: !!s.gf?.alerts?.length, maint: !!(s.maint || []).length } });
   const msgItem = (src, { from, channel, text, at }) => ({ text: [from, channel, text], f: { src, from, channel }, d: { age: at ? Date.now() - at : null, updated: at ? Date.now() - at : null }, is: {}, has: {} });
   const noMatch = what => `<li class="muted small" style="padding:10px 14px">No ${what} match “${esc(Filter.q())}”. <button class="linkish" data-fclear>Clear filter</button></li>`;
   document.addEventListener('click', e => { if (e.target.closest('[data-fclear]')) Filter.set(''); });
@@ -975,7 +1039,7 @@ LambdaData.ready.then(D => {
       return `<li class="qitem" data-ticket="${t.key}">
         <span class="qbar" style="background:${C[st]}"></span>
         <div style="min-width:0"><div class="qkey">${t.key} · ${esc(t.priority)}${t.alerts?.length ? ` <span class="alert-dot ${t.alerts.some(a => a.crit) ? 'crit' : ''}" title="Grafana alert${t.alerts.length > 1 ? 's' : ''} firing on ${esc(t.device)} right now: ${esc(t.alerts.slice(0, 4).map(a => a.name).join(', '))}${t.alerts.length > 4 ? '…' : ''}">⚠ ${t.alerts.length} alert${t.alerts.length > 1 ? 's' : ''}</span>` : ''}</div><div class="qsum">${esc(t.summary)}</div>
-          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device, t)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
+          <div class="qmeta">${esc([t.site, t.device, t.status, !t.mine ? t.assigneeName : ''].filter(Boolean).join(' · '))}${yardChip(t.device, t)}${maintChip(t.device)}</div>${D.AI_PRIORITY?.reasons?.[t.key] && mine.length ? `<div class="qmeta ai-why">✨ ${esc(D.AI_PRIORITY.reasons[t.key])}</div>` : ''}</div>
         <div class="sla st-${st}">${STATUS[st].glyph} ${slaText(t)}<small>SLA</small></div></li>`;
     }).join('') || (F ? noMatch('tickets') : isLoading('jira') ? loadingLine('jira', 'your tickets') : '<li class="muted" style="padding:10px">No open tickets.</li>');
     if (mine.length && (yProd.size || yLock.size)) $('#queue').insertAdjacentHTML('afterbegin', `<li class="yard-filter" role="group" aria-label="Filter by Yard state"><span class="yard-tag">Yard</span>
@@ -999,7 +1063,7 @@ LambdaData.ready.then(D => {
     if (!sites.length && isLoading('netbox')) { $('#siteList').innerHTML = loadingLine('netbox', 'sites'); return; }
     $('#siteList').innerHTML = sites.map(s =>
       `<li class="srow ${Fleet.selected === s ? 'sel' : ''} ${s.health === 'idle' ? 'dim' : ''}" data-site="${esc(s.id)}" title="${esc(s.fullName || s.id)}: ${s.openTickets} open tickets, ${esc(siteStatusLabel(s))}${s.healthWhy ? ` (from ${esc(s.healthWhy)}: see the Health tab)` : ''}">
-        <span class="code">${esc(s.id)}</span><span class="sname">${esc(s.name)}</span>
+        <span class="code">${esc(s.id)}</span><span class="sname">${esc(s.name)}${(s.maint || []).some(maintSoon) ? `<span class="mbadge" title="${esc((s.maint || []).filter(maintSoon).map(m => `${m.key}: ${m.summary} · ${maintWhen(m)}`).join('\n'))}">🛠</span>` : ''}</span>
         <span style="display:flex;gap:6px;align-items:center"><span class="bar" style="flex:1"><i style="width:${(s.openTickets / max) * 100}%"></i></span><span class="n">${s.openTickets}</span></span>
         ${healthBadge(s)}</li>`).join('') || (Filter.on() ? noMatch('sites') : '');
   }
@@ -2241,6 +2305,7 @@ LambdaData.ready.then(D => {
       const months = []; const m = new Date(from); m.setDate(1); m.setHours(0, 0, 0, 0);
       while (m.getTime() < to) { if (m.getTime() >= from) months.push(m.getTime()); m.setMonth(m.getMonth() + 1); }
       const everyN = Math.ceil(months.length / 10);
+      const maints = filter === 'all' && tag === 'all' ? (vsData(dscope).MAINT || D.MAINT || []).filter(m => m.state !== 'done' && (vsEff(dscope) === 'all' || !m.sites.length || m.sites.some(vsHas(dscope)))) : [];
       const groups = new Map();
       for (const d of list.sort((a, b) => (a.end || Infinity) - (b.end || Infinity))) {
         const g = d.source === 'CI' ? 'CI' : d.project?.key || '—';
@@ -2262,6 +2327,12 @@ LambdaData.ready.then(D => {
         <div class="dgrid">
           <div class="dhead"><span></span><div class="dtrack">${months.map((t, i) => i % everyN ? '' : `<span class="dmonth" style="left:${X(t)}%">${new Date(t).toLocaleDateString([], { month: 'short', ...(new Date(t).getMonth() === 0 ? { year: '2-digit' } : {}) })}</span>`).join('')}
             <span class="dtoday" style="left:${X(now)}%"><em>today</em></span></div></div>
+          ${maints.length ? `<div class="dgroup"><span>🛠 Maintenance windows · Jira MAINT</span><small class="muted">${maints.length}</small></div>` + maints.map(m => {
+            const st = m.start || Date.now(), en = Math.max(m.end || st + 3600e3, st + 3600e3);
+            return `<div class="drow" data-maint="${esc(m.key)}"><div class="dinfo"><span class="mstar">🛠</span><div style="min-width:0"><div class="dtitle">${m.emergency ? '<b class="st-critical">EMERGENCY</b> · ' : ''}${esc(m.summary.replace(/^EMERGENCY:\s*/i, ''))}</div>
+              <div class="dmeta">${statusChip(maintTone(m), maintWhen(m))} · <span class="mono">${esc(m.key)}</span>${m.sites.map(c => ` · <b>${esc(c)}</b>`).join('')}</div></div></div>
+              <div class="dtrack">${months.map(t => `<span class="dgridline" style="left:${X(t)}%"></span>`).join('')}<span class="dtoday" style="left:${X(now)}%"></span>
+                <span class="dbar mbar" style="left:${X(st)}%;width:${Math.max(0.8, X(en) - X(st))}%;--c:${C[maintTone(m)] || C.accent}" title="${esc(`${m.key}: ${maintWhen(m)}`)}"></span></div></div>`; }).join('') : ''}
           ${[...groups].map(([g, ds]) => {
             const p = D.projectByKey(g);
             const head = g === 'CI' ? 'Cluster Intake' : p ? `${p.key} · ${p.title}` : 'No parent project';
@@ -2299,7 +2370,7 @@ LambdaData.ready.then(D => {
     const box = $('#trace');
     const LANES = [
       ['jira', 'Jira', 'var(--src-jira)'], ['desk', 'Service desks', '#d9a23a'], ['netbox', 'NetBox', 'var(--src-netbox)'], ['grafana', 'Grafana', '#f46800'],
-      ['yard', 'Yard', '#8bd17c'], ['slack', 'Slack', 'var(--src-slack)'], ['mail', 'Gmail', 'var(--src-mail)'], ['atium', 'Atium', 'var(--accent)'], ['netsuite', 'NetSuite', 'var(--src-netsuite)'], ['meet', 'Meetings', '#a7a6a0'],
+      ['yard', 'Yard', '#8bd17c'], ['slack', 'Slack', 'var(--src-slack)'], ['mail', 'Gmail', 'var(--src-mail)'], ['maint', 'Maintenance', '#c792ea'], ['atium', 'Atium', 'var(--accent)'], ['netsuite', 'NetSuite', 'var(--src-netsuite)'], ['meet', 'Meetings', '#a7a6a0'],
     ];
     const LANE = Object.fromEntries(LANES.map(([k, l, c]) => [k, { label: l, color: c }]));
     const DAY = 864e5, PRESETS = [['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]];
@@ -2340,6 +2411,14 @@ LambdaData.ready.then(D => {
       const host = it.kind === 'device' ? it.id : ticket?.device || null, dev = host && D.deviceById(host);
       const alerts = dev?.alerts || ticket?.alerts || [];
       for (const a of alerts) out.push(ev('grafana', a.since || Date.now(), { title: `${a.name} firing`, text: `${a.severity || ''} · ${host}${a.rack ? ` · ${a.rack}` : ''}${a.u ? ` U${a.u}` : ''}`, tone: a.severity === 'critical' ? 'critical' : 'warning', end: Date.now(), open: true }));
+      // Maintenance windows on this host (or this MAINT request itself): the window as a span, the deadline as a mark.
+      const mws = [...(host ? D.maintForHost?.(host) || [] : []), ...(D.maintByKey?.(it.id) ? [D.maintByKey(it.id)] : [])];
+      for (const m of new Set(mws)) {
+        if (m.start) out.push(ev('maint', m.start, { end: m.end, span: true, open: m.state === 'now', title: `${m.key} · ${m.type || 'Maintenance'} window`, text: `${m.summary} · ${maintWhen(m)}`, tone: maintTone(m), url: m.url, label: m.key, trace: m.key === it.id ? null : { kind: 'ticket', id: m.key } }));
+        else out.push(ev('maint', m.created || Date.now(), { title: `${m.key} · ${m.emergency ? 'EMERGENCY ' : ''}${m.type || 'Maintenance'} requested`, text: `${m.summary} · ${maintWhen(m)}`, tone: maintTone(m), url: m.url }));
+        if (m.deadline) out.push(ev('maint', m.deadline, { title: `${m.key} deadline`, text: m.summary, tone: 'warning', url: m.url }));
+        if (m.key !== it.id) rel.push({ kind: 'ticket', id: m.key, label: m.key, sub: `${m.type || 'Maintenance'} · ${maintWhen(m)}` });
+      }
       const y = host && yardUsable() && yardOf(host);
       if (y?.found) out.push(ev('yard', Date.now(), { title: `${y.state || 'state unknown'}${y.lockedBy ? ` · 🔒 ${meLock(y) ? 'you' : y.lockedBy}` : ' · not locked'}`, text: `${y.region ? String(y.region).toUpperCase() + ' · ' : ''}pool ${y.pool || '—'} · Yard shows the state now, not its history`, tone: LambdaAlerts.inProduction(y) ? 'warning' : 'good', url: yardUrl(host) }));
       if (ticket) {
@@ -2363,7 +2442,7 @@ LambdaData.ready.then(D => {
     function jiraEvents(it, res) {
       const out = [], rel = [];
       for (const i of res.issues || []) {
-        const lane = /^(DC|PMO|CI)$/.test(i.project) ? 'jira' : 'desk', me = i.key === it.id;
+        const lane = /^(DC|PMO|CI)$/.test(i.project) ? 'jira' : i.project === 'MAINT' ? 'maint' : 'desk', me = i.key === it.id;
         out.push(ev(lane, i.created, { end: i.resolved || Date.now(), span: true, open: !i.resolved, title: `${i.key} · ${i.summary}`, text: `${i.projectName || i.project} · ${i.status}${i.resolved ? ` · resolved ${fmtDate(i.resolved)}` : ' · still open'}`,
           tone: i.done ? 'idle' : 'warning', url: i.url, trace: me ? null : { kind: 'ticket', id: i.key }, label: i.key, main: me }));
         for (const c of i.changes || []) out.push(ev(lane, c.at, { title: `${i.key}: ${c.field} → ${c.to || '—'}`, text: `${c.from ? `from ${c.from} · ` : ''}by ${c.who}`, url: i.url, tone: /status/i.test(c.field) && /done|closed|resolved/i.test(c.to) ? 'good' : 'idle', small: true }));
@@ -2956,6 +3035,7 @@ LambdaData.ready.then(D => {
         <div class="stats">
           <div class="stat"><b>${kfmt(s.racks)}</b><span>Racks</span></div><div class="stat"><b>${kfmt(s.devices)}</b><span>Devices</span></div>
           <div class="stat"><b>${s.openTickets}</b><span>Open tickets</span></div><div class="stat"><b>${s.breached || 0}</b><span>SLA breached</span></div></div>
+        ${maintBlock(s.maint || [])}
         ${healthBlock(s)}
         ${yardSiteBlock(s)}
         ${s.deployments?.length ? `<div class="section-title"><span>Deployments here</span><span>${s.deployments.length}</span></div>${s.deployments.map(d => `<div class="mini-ticket" data-dep="${d.key}"><span class="qkey">${d.key}</span><span class="qsum">${esc(d.title)}</span>${statusChip(d.health, `${pct(d.progress)} · ${fmtDate(d.end)}`)}</div>`).join('')}` : ''}
@@ -3165,7 +3245,7 @@ LambdaData.ready.then(D => {
      outside it closes it too (clicking another row just switches the card). Popups inside other popups, the search,
      the brief, Ask AI and the tour keep it open; so does a drag (rotating the globe, panning the brain). */
   let clickKey = null, downAt = null;
-  const OPENER = '[data-ticket],[data-dep],[data-site],[data-part],[data-proj],[data-open],[data-ref],[data-vol],[data-feed],[data-hcell]';
+  const OPENER = '[data-ticket],[data-dep],[data-site],[data-part],[data-proj],[data-open],[data-ref],[data-vol],[data-feed],[data-hcell],[data-maint],[data-maint-list]';
   const keyOf = t => { const el = t.closest(OPENER); return el ? Object.entries(el.dataset).map(([k, v]) => `${k}=${v}`).join('|') : null; };
   const KEEP_OPEN = '#palette,#brief,#aiPanel,#alertPop,#sitePop,.tour,.toast,#needBar,.palette-backdrop,.brief-backdrop';
   function cardOpened(card, box) { if (clickKey != null || box.hidden) card.key = clickKey; card.openedAt = Date.now(); }
@@ -3181,7 +3261,7 @@ LambdaData.ready.then(D => {
       card.close();
     }
   }, true);
-  const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}${yardChip(t.device, t)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
+  const ticketRow = t => `<div class="mini-ticket" data-ticket="${t.key}"><span class="qkey">${t.key}</span><span class="qsum">${esc(t.summary)}${yardChip(t.device, t)}${maintChip(t.device, true)}</span>${statusChip(slaStatus(t), slaText(t))}</div>`;
   function openDeployment(d) {
     const days = d.end ? Math.round((d.end - Date.now()) / 864e5) : null;
     const wsRows = d.workstreams.map(w => `<tr data-href="${esc(w.url)}" class="clickrow"><td class="mono">${esc(w.key)}</td><td>${esc(w.summary)}</td><td>${esc(w.status)}</td>
@@ -3246,6 +3326,7 @@ LambdaData.ready.then(D => {
           ${part ? `<dt>Part</dt><dd><a data-open="part:${esc(part.id)}">${esc(partLabel(part))}</a>${stockHere ? ` · <b>${stockHere.stock} on hand at ${esc(site.id)}</b>` : site ? ` · none on hand at ${esc(site.id)}` : ''}</dd>` : ''}
           <dt>Created</dt><dd>${new Date(t.created).toLocaleString()}</dd><dt>Updated</dt><dd>${rel(t.updated)} ago</dd></dl>
         ${yardBlock(t.device, t)}
+        ${maintBlock((D.maintForHost?.(t.device) || []), 'Maintenance on this host')}
         ${alertsBlock(t.alerts)}
         <div class="links">${btn('Open in Jira', t.url, true)}${isExt && t.url ? `<button class="btn" data-rackside="${esc(t.key)}" data-rurl="${esc(t.url)}" title="Open the ticket in Jira with the Lambda Rackside side panel">Open in Rackside</button>` : ''}${dev ? btn('Device in NetBox', dev.url) : ''}${t.device && yardUrl(t.device) ? btn('Open in Yard', yardUrl(t.device)) : ''}${t.alerts?.length && site?.gf ? btn('Site health in Grafana', site.gf.url) : ''}</div>`, '', ['ticket', t]);
     }
@@ -3265,6 +3346,7 @@ LambdaData.ready.then(D => {
         <dl class="kv"><dt>Model</dt><dd>${esc(d.model)}</dd>${d.serial ? `<dt>Serial</dt><dd class="mono">${esc(d.serial)}</dd>` : ''}
           <dt>Site</dt><dd>${d.site ? `<a data-open="site:${esc(d.site)}">${esc(d.site)}</a>` : '—'}</dd><dt>Rack / U</dt><dd>${esc(d.rack)}${d.u ? ` · U${d.u}` : ''}</dd></dl>
         ${yardBlock(d.id)}
+        ${maintBlock((D.maintForHost?.(d.id) || []), 'Maintenance on this host')}
         ${alertsBlock(d.alerts)}
         <div class="section-title"><span>Open tickets</span><span>${ts.length}</span></div>${ts.map(ticketRow).join('') || '<p class="muted">None.</p>'}
         <div class="links">${btn('Open in NetBox', d.url, true)}${yardUrl(d.id) ? btn('Open in Yard', yardUrl(d.id)) : ''}${d.alerts?.length && D.siteById(d.site)?.gf ? btn('Site health in Grafana', D.siteById(d.site).gf.url) : ''}</div>`, '', ['device', d]);
@@ -3353,6 +3435,8 @@ LambdaData.ready.then(D => {
     push('Projects', (A.PROJECTS || []).map(x => ({ sc: score(x.key, x.title, x.summary), icon: '⬡', color: XC.project, title: `${x.key} · ${x.title}`, sub: `${x.deployments.length} deployments · ${x.status}`, run: () => { closePalette(); openEntity('project', x); } })), 3);
     push('Tickets', A.TICKETS.map(x => ({ sc: score(x.key, x.summary, x.device), icon: 'T', color: C['c-ticket'], title: `${x.key} · ${x.summary}`, sub: `${x.site || '?'} · ${x.status} · ${x.assigneeName}`, run: () => { closePalette(); openEntity('ticket', x); } })), 5);
     push('Devices', A.DEVICES.map(x => ({ sc: score(x.id, x.serial, x.model), icon: 'D', color: C['c-device'], title: x.id, sub: `${x.model} · ${x.site || '?'} ${x.rack}${x.u ? ` U${x.u}` : ''}${(y => y?.found && y.state ? ` · Yard: ${y.lockedBy ? '🔒 ' : ''}${y.state}${y.pool ? ` / ${y.pool}` : ''}${y.lockedBy ? ` (${meLock(y) ? 'you' : y.lockedBy})` : ''}` : '')(yardUsable() && yardOf(x.id))}`, run: () => { closePalette(); openEntity('device', x); } })));
+    push('Maintenance', [{ sc: score('maintenance windows maint mw', 'jira maint'), icon: '🛠', color: '#c792ea', title: 'All maintenance windows', sub: `${maintAll().length} open in Jira MAINT`, run: () => { closePalette(); openMaintList(); } },
+      ...maintAll().map(m => ({ sc: score(m.key, m.summary, m.type, m.region, m.sites.join(' '), m.hosts.join(' ')), icon: '🛠', color: '#c792ea', title: `${m.key} · ${m.summary}`, sub: maintWhen(m), run: () => { closePalette(); openMaint(m); } }))]);
     push('Parts', D.PARTS.map(x => ({ sc: score(x.pn, x.name, x.mfr), icon: 'P', color: C['c-part'], title: partLabel(x), sub: 'Stock by site', run: () => { closePalette(); openEntity('part', x); } })));
     push('People', D.PEOPLE.map(x => ({ sc: score(x.name, x.handle), icon: '@', color: C['c-person'], title: x.name, sub: 'Assigned tickets', run: () => { closePalette(); openEntity('person', x); } })));
     push('Slack', (D.CHANNELS || []).map(c => ({ sc: score(c.name, c.topic, c.purpose), icon: '#', color: XC.channel, title: '#' + c.name, sub: `${c.members} members${c.site ? ' · ' + c.site : ''}`, run: () => { closePalette(); openUrl(c.url, 'Slack'); } })), 3);
@@ -3377,6 +3461,7 @@ LambdaData.ready.then(D => {
         { group: 'Quick', icon: '◇', color: C['c-part'], title: 'Waiting on parts we already have', sub: 'Part is on hand at the ticket’s site', run: () => ask('waiting parts on site') },
         { group: 'Quick', icon: '◎', color: C['c-site'], title: 'Open the second brain', sub: 'Everything linked, as neurons', run: () => { closePalette(); setView('graph'); } },
         { group: 'Quick', icon: '⏱', color: C.accent, title: 'Trace a ticket, host, serial or part', sub: 'Its whole history on a timeline (T)', run: () => { closePalette(); setView('trace'); Trace.focus(); } },
+        { group: 'Quick', icon: '🛠', color: '#c792ea', title: 'Maintenance windows', sub: `${maintAll().length} open in Jira MAINT · now, next 24 h, later`, run: () => { closePalette(); openMaintList(); } },
         ...apps().filter(a => /DC queue|Sites|Material on hand|Open Slack|Inbox|Settings/.test(a[1])).map(goRow),
       ];
     } else {
