@@ -3467,7 +3467,7 @@ LambdaData.ready.then(D => {
     } else {
       const st = aiState(), qt = q.replace(/^\?\s*/, '');
       const askRows = st.ok
-        ? [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask ${st.label}: “${qt}”`, sub: `${st.model} · grounded in your loaded data${SET?.privacy?.mode === 'redact' ? ' · private values masked' : ''}`, run: () => askAI(q) },
+        ? [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask ${st.web === 'auto' ? 'AI' : st.label}: “${qt}”`, sub: `${st.model} · grounded in your loaded data${SET?.privacy?.mode === 'redact' ? ' · private values masked' : ''}`, run: () => askAI(q) },
            { group: 'Ask', icon: '⌁', color: C.accent, title: `Quick answer: “${qt}”`, sub: 'Instant, from local data only (nothing leaves your browser)', run: () => ask(q) }]
         : [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask: “${qt}”`, sub: `Answered from local data · ${st.why}`, run: () => ask(q) },
            { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) }];
@@ -3708,7 +3708,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const st = aiState();
       msgs.innerHTML = `<div class="aip-hello"><div class="brand-mark">λ</div><h3>Ask about anything on this dashboard</h3>
         <p class="muted small">Sites, tickets, deployments, spares, shipments, meetings. Answers link straight to what they mention.</p>
-        ${st.ok ? `<p class="muted small">Answers come from ${esc(st.label.replace(' in your browser', ''))}, signed in as you in this browser (no API key). Change it in <a class="linkish" data-aip-setup>Settings → AI</a>.</p>` : `<p class="note small">${esc(st.why)}</p>`}
+        ${st.ok ? `<p class="muted small">Answers come from ${st.web === 'auto' ? 'whichever of Claude, ChatGPT or Gemini you’re signed in to' : esc(st.label.replace(' in your browser', ''))} in this browser, as you (no API key). Change it in <a class="linkish" data-aip-setup>Settings → AI</a>.</p>` : `<p class="note small">${esc(st.why)}</p>`}
         <div class="aip-suggest">${SUGGEST.map(s => `<button class="chip" data-aip-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
     }
     function open(prefill) {
@@ -3730,7 +3730,8 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       ta.value = '';
       if (!opt.again) bubble('user', esc(q));
       const base = aiState(), aiCfg = { ...(SET?.ai || {}), ...(opt.web ? { web: opt.web } : {}) };
-      const st = base.ok ? LambdaAI.configured(aiCfg) : base, NAME = st.ok ? LambdaAI.WEB_NAMES[st.web] : '';
+      const st = base.ok ? LambdaAI.configured(aiCfg) : base;
+      let used = st.web, NAME = st.ok ? (LambdaAI.WEB_NAMES[st.web] || 'your AI chat') : ''; // Automatic: set once the chat is picked
       if (!st.ok) { // no provider: answer from local data
         const a = answerFor(q);
         const t = a.table && a.table.rows.length ? `<table><tr>${a.table.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr>${a.table.rows.slice(0, 12).map(r => `<tr>${r.map(c => `<td>${linkify(esc(c))}</td>`).join('')}</tr>`).join('')}</table>` : '';
@@ -3747,6 +3748,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       let raw = '', t0 = performance.now(), failed = false;
       try {
         for await (const c of LambdaAI.stream(aiCfg, { system: AI_SYSTEM, user: userMsg, history, signal: ctrl.signal })) {
+          if (c.using) { used = c.using; NAME = LambdaAI.WEB_NAMES[used]; }
           if (c.wait !== undefined) { // the chat needs the person (sign in, a human check): say so, then carry on by itself
             el.querySelector('.aip-wait')?.remove();
             if (c.wait) { el.insertAdjacentHTML('afterbegin', `<div class="aip-wait"><p>⏳ ${esc(c.wait)}</p><button class="chip" data-aip-chat>Show ${esc(NAME)} again</button></div>`); meta.textContent = 'Waiting for you…'; }
@@ -3759,12 +3761,12 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
           if (c.note) meta.textContent = c.note;
         }
         text.innerHTML = md(R.restore(raw)) || '<p class="muted">(no answer)</p>';
-        meta.textContent = `${st.label} · ${((performance.now() - t0) / 1000).toFixed(1)}s${SET.privacy.mode === 'redact' ? ` · ${R.count()} private values masked` : ''}`;
+        meta.textContent = `${NAME} in your browser · ${((performance.now() - t0) / 1000).toFixed(1)}s${SET.privacy.mode === 'redact' ? ` · ${R.count()} private values masked` : ''}`;
       } catch (e) {
         if (ctrl.signal.aborted) { text.innerHTML = (raw ? md(R.restore(raw)) : '') + '<p class="muted small">Stopped.</p>'; meta.textContent = ''; }
         else {
           // Something went wrong in the chat: say what, and offer the ways out (look at it, try again, use another chat).
-          const others = Object.keys(LambdaAI.WEB_NAMES).filter(k => k !== st.web);
+          const others = Object.keys(LambdaAI.WEB_NAMES).filter(k => k !== used);
           text.innerHTML = `<p class="st-critical">${esc(e.message)}</p><div class="aip-tools aip-fix">
             <button class="chip" data-aip-retry>↻ Try again</button><button class="chip" data-aip-chat>Show ${esc(NAME)}</button>
             ${others.map(k => `<button class="chip" data-aip-other="${k}">Ask ${esc(LambdaAI.WEB_NAMES[k])} instead</button>`).join('')}</div>`;

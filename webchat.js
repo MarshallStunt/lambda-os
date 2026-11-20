@@ -202,7 +202,7 @@ const LambdaWebChat = (() => {
         return true;
       }
       if ((st.s === 'login' || st.s === 'check') && shown !== st.s) {
-        shown = st.s; reveal(w);
+        shown = st.s; reveal(w); if (st.s === 'login') forget();
         yield { wait: st.s === 'login'
           ? `Sign in to ${S.name} in the window that just opened. Lambda OS brings you back here and asks your question as soon as you're in.`
           : `${S.name} wants to check you're human. Finish that in the window that just opened; Lambda OS brings you back here and continues.` };
@@ -229,10 +229,44 @@ const LambdaWebChat = (() => {
   const beat = () => chrome.storage.session.set({ [LOCK]: { conv, at: Date.now() } });
   const unlock = async () => { const l = (await chrome.storage.session.get(LOCK))[LOCK]; if (l?.conv === conv) await chrome.storage.session.remove(LOCK); };
 
+  /* ---------- Automatic: use whichever chat you're already signed in to ---------- */
+  // A quiet yes/no per site, with your browser's own sign-in (nothing opens, nothing is kept but the yes/no):
+  // Claude lists your organizations, ChatGPT's session names a user, Gemini's page carries a signed-in token.
+  const ORDER = ['claude', 'chatgpt', 'gemini'], SEEN = 'webchatSignedIn';
+  async function signedIn(site) {
+    try {
+      const get = url => fetch(url, { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (site === 'claude') { const r = await get('https://claude.ai/api/organizations'); if (!r.ok) return false; const j = await r.json(); return Array.isArray(j) && j.length > 0; }
+      if (site === 'chatgpt') { const r = await get('https://chatgpt.com/api/auth/session'); if (!r.ok) return false; return !!(await r.json())?.user; }
+      if (site === 'gemini') { const r = await get('https://gemini.google.com/app'); if (!r.ok) return false; return /"SNlM0e":"/.test(await r.text()); }
+    } catch { return null; } // couldn't tell (offline, blocked)
+    return false;
+  }
+  // { claude: true/false/null, … }, remembered for 10 minutes (force = check again now).
+  async function detect(force = false) {
+    const c = (await chrome.storage.session.get(SEEN))[SEEN];
+    if (!force && c && Date.now() - c.at < 600000) return c.map;
+    const vals = await Promise.all(ORDER.map(signedIn));
+    const map = Object.fromEntries(ORDER.map((k, i) => [k, vals[i]]));
+    await chrome.storage.session.set({ [SEEN]: { at: Date.now(), map } });
+    return map;
+  }
+  const forget = () => chrome.storage.session.remove(SEEN);
+  // 'auto' → the chat already in use if you're still signed in to it, else the first you're signed in to
+  // (Claude, then ChatGPT, then Gemini), else Claude (and Ask AI walks you through signing in).
+  async function pick(pref) {
+    if (SITES[pref]) return pref;
+    const map = await detect(), w = await getW();
+    if (w && map[w.site]) return w.site;
+    return ORDER.find(k => map[k]) || ORDER.find(k => map[k] === null) || 'claude';
+  }
+
   // Same interface as the API providers: yields { text } / { full } / { note } chunks.
-  async function* stream({ site = 'claude', system, user, history = [], signal }) {
-    const S = SITES[site]; if (!S) throw new Error('Unknown chat site.');
+  async function* stream({ site = 'auto', system, user, history = [], signal }) {
     if (typeof chrome === 'undefined' || !chrome.scripting || !chrome.storage?.session) throw new Error('Asking through the browser chat works inside the extension only.');
+    site = await pick(site);
+    const S = SITES[site]; if (!S) throw new Error('Unknown chat site.');
+    yield { using: site };
     const l = (await chrome.storage.session.get(LOCK))[LOCK];
     if (l && l.conv !== conv && Date.now() - l.at < 120000) yield { note: 'Waiting for another Ask AI question to finish…' };
     if (!(await lock(signal))) return;
@@ -289,7 +323,7 @@ const LambdaWebChat = (() => {
   }
   function reset() { conv = Math.random().toString(36).slice(2); myUrl = ''; } // a new Ask AI conversation starts a new chat
 
-  return { SITES, stream, show, reset, chatUrl: () => worker?.url || '' };
+  return { SITES, ORDER, stream, show, reset, detect, pick };
 })();
 
 if (typeof self !== 'undefined') self.LambdaWebChat = LambdaWebChat;

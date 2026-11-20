@@ -188,9 +188,10 @@
     <fieldset>
       <legend>AI assistant</legend>
       <label for="aiWeb">Chat to use</label>
-      <select id="aiWeb"><option value="claude">Claude (claude.ai)</option><option value="chatgpt">ChatGPT (chatgpt.com)</option><option value="gemini">Gemini (gemini.google.com)</option></select>
+      <select id="aiWeb"><option value="auto">Automatic: whichever you're signed in to</option><option value="claude">Claude (claude.ai)</option><option value="chatgpt">ChatGPT (chatgpt.com)</option><option value="gemini">Gemini (gemini.google.com)</option></select>
       <div class="row" style="margin-top:10px"><button class="btn" id="aiTest" type="button">Test it</button><span class="hint" id="aiTestOut"></span></div>
-      <p class="hint">No API key needed: sign in to that site in this browser once. You keep using the <b>✨ Ask AI</b> box (top bar, or ⌘J): Lambda OS opens the chat in one minimized window (never in your tabs, reused for every question), sends your question with the masked dashboard data, and shows the answer here as it's written. Each Ask AI conversation becomes one chat in your history there. It reads the chat page itself, so if the site changes its layout it can stop working until Lambda OS is updated. To keep everything away from any AI, choose “Never send to an AI” under Privacy.</p>
+      <p class="hint" id="aiSeen">Checking which chats you're signed in to…</p>
+      <p class="hint">No API key needed. <b>Automatic</b> uses the chat you're already signed in to in this browser (Claude first, then ChatGPT, then Gemini); pick one to always use it. You keep using the <b>✨ Ask AI</b> box (top bar, or ⌘J): Lambda OS opens the chat in one minimized window (never in your tabs, reused for every question), sends your question with the masked dashboard data, and shows the answer here as it's written. Each Ask AI conversation becomes one chat in your history there. It reads the chat page itself, so if the site changes its layout it can stop working until Lambda OS is updated. To keep everything away from any AI, choose “Never send to an AI” under Privacy.</p>
     </fieldset>
 
     <fieldset>

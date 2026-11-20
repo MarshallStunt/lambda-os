@@ -51,10 +51,10 @@ const LambdaAI = (() => {
   }
 
 
-  // Always the browser chat; ai.web picks which one (older settings that named an API provider fall back to Claude).
+  // Always the browser chat; ai.web picks which one, or 'auto' (older settings that named an API provider become 'auto').
   function configured(ai) {
-    const w = WEB_NAMES[ai?.web] ? ai.web : 'claude';
-    return { ok: true, provider: 'web', web: w, model: 'your signed-in chat, no API key', label: `${WEB_NAMES[w]} in your browser` };
+    const w = WEB_NAMES[ai?.web] ? ai.web : 'auto'; // 'auto' (the default): whichever chat you're signed in to
+    return { ok: true, provider: 'web', web: w, model: 'your signed-in chat, no API key', label: w === 'auto' ? 'Your AI chat (automatic)' : `${WEB_NAMES[w]} in your browser` };
   }
 
   // Streams { text } / { full } / { note } chunks for one question.

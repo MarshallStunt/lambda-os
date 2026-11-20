@@ -38,9 +38,23 @@ $('lookAccent').addEventListener('click', e => { const b = e.target.closest('[da
 
 // ---------- AI: always the browser chat (no API key); just which chat ----------
 let ai = JSON.parse(JSON.stringify(LambdaLive.DEFAULTS.ai));
-function readAI() { ai = { provider: 'web', web: $('aiWeb').value || 'claude' }; return ai; }
+function readAI() { const web = $('aiWeb').value || 'auto'; ai = { provider: 'web', web, ...(web !== 'auto' ? { picked: true } : {}) }; return ai; }
+// Which chats this browser is signed in to (a quiet yes/no per site), and what Automatic would use.
+async function paintSeen(force) {
+  const el = $('aiSeen'); if (typeof LambdaWebChat === 'undefined' || !chrome.storage?.session) return (el.hidden = true);
+  el.textContent = 'Checking which chats you\'re signed in to…';
+  try {
+    const map = await LambdaWebChat.detect(force), names = LambdaAI.WEB_NAMES;
+    const pickAuto = LambdaWebChat.ORDER.find(k => map[k]);
+    el.innerHTML = 'Signed in here: ' + LambdaWebChat.ORDER.map(k => `${esc(names[k])} ${map[k] ? '<span class="st-good">✓</span>' : map[k] === null ? '<span class="muted">?</span>' : '<span class="muted">✕</span>'}`).join(' · ')
+      + ($('aiWeb').value === 'auto' ? ` — Automatic uses <b>${esc(pickAuto ? names[pickAuto] : 'Claude')}</b>${pickAuto ? '' : ' (sign in to one of them first)'}.` : '')
+      + ' <a href="#" id="aiSeenAgain">Check again</a>';
+    $('aiSeenAgain').onclick = e => { e.preventDefault(); paintSeen(true); };
+  } catch (e) { el.textContent = ''; }
+}
+$('aiWeb').addEventListener('change', () => paintSeen(false));
 $('aiTest').addEventListener('click', async () => {
-  const name = LambdaAI.WEB_NAMES[readAI().web];
+  const name = readAI().web === 'auto' ? LambdaAI.WEB_NAMES[await LambdaWebChat.pick('auto')] : LambdaAI.WEB_NAMES[ai.web];
   $('aiTestOut').textContent = `Asking ${name} in a minimized window…`;
   try { const r = await LambdaAI.test(readAI()); $('aiTestOut').innerHTML = `<span class="st-good">✓ Works</span> · ${esc(name)} replied “${esc(r.slice(0, 60))}”`; }
   catch (e) { $('aiTestOut').innerHTML = `<span class="st-critical">✕ ${esc(e.message)}</span>`; }
@@ -114,7 +128,7 @@ function fill(s) {
   $('refreshMinutes').value = String(s.refreshMinutes ?? 10);
   $('appTabs').checked = s.appTabs !== false;
   $('news').checked = s.news !== false;
-  ai = { provider: 'web', web: s.ai?.web || 'claude' }; $('aiWeb').value = ai.web;
+  ai = { ...s.ai }; $('aiWeb').value = ai.web || 'auto'; paintSeen(false);
   paintPrivacy(s.privacy);
   look = window.LambdaLook.current(); paintLook(); // theme.js keeps this in sync with the saved settings
   FIELDS.forEach(f => ($(f).value = s[f] || ''));
@@ -187,7 +201,7 @@ async function importBackup(file) {
   const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'news', 'smart']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
-  settings.ai = { provider: 'web', web: settings.ai?.web || current.ai?.web || 'claude' };
+  settings.ai = { ...(settings.ai?.picked ? settings.ai : current.ai), provider: 'web' };
   if (settings.look) await window.LambdaLook.save(settings.look);
   const tracked = Array.isArray(data.tracked) ? data.tracked.filter(k => typeof k === 'string' && /^[A-Z][A-Z0-9_]+-\d+$/.test(k)) : [];
   if (!(await ensureAccess({ ...LambdaLive.DEFAULTS, ...settings }))) return say('<p class="st-critical">Permission for an address in the backup was declined, so nothing was loaded.</p>');

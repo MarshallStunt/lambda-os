@@ -26,8 +26,8 @@ const LambdaLive = (() => {
     nsMovesSearch: '3152',                                 // ***Cloud: Material Transactions Full List
     calendarEmail: '',                                     // defaults to the Gmail / Jira account
     sources: { netbox: true, jira: true, slack: true, gmail: true, calendar: true, netsuite: true, atium: true, grafana: true, yard: true },
-    // AI assistant: always the chat you're signed in to in this browser, no API key. ai.web: 'claude' | 'chatgpt' | 'gemini'.
-    ai: { provider: 'web', web: 'claude' },
+    // AI assistant: always the chat you're signed in to in this browser, no API key. ai.web: 'auto' (whichever you're signed in to) | 'claude' | 'chatgpt' | 'gemini'.
+    ai: { provider: 'web', web: 'auto' },
     // What may reach the AI. mode: 'redact' (mask the items below) | 'off' (send as-is) | 'local' (never call an AI)
     privacy: { mode: 'redact', people: true, emails: true, network: true, serials: true, hostnames: false,
       messages: true, calendar: false, money: true, words: '' },
@@ -53,7 +53,10 @@ const LambdaLive = (() => {
   const trim = u => String(u || '').trim().replace(/\/+$/, '');
   async function settings() {
     const { settings: s } = await chrome.storage.local.get('settings');
-    const ai = { provider: 'web', web: ['claude', 'chatgpt', 'gemini'].includes(s?.ai?.web) ? s.ai.web : 'claude' }; // older API keys are dropped
+    // Older API keys are dropped. A chat only counts as chosen if you picked it in Settings (picked: true); before 0.14.9
+    // Claude was simply the default, so an unpicked one becomes 'auto'.
+    const chosen = s?.ai?.picked && ['claude', 'chatgpt', 'gemini'].includes(s.ai.web);
+    const ai = { provider: 'web', web: chosen ? s.ai.web : 'auto', ...(chosen ? { picked: true } : {}) };
     return { ...DEFAULTS, ...(s || {}), sources: { ...DEFAULTS.sources, ...(s?.sources || {}) }, ai,
       privacy: { ...DEFAULTS.privacy, ...(s?.privacy || {}) }, look: { ...DEFAULTS.look, ...(s?.look || {}) },
       alerts: { ...DEFAULTS.alerts, ...(s?.alerts || {}) }, brief: { ...DEFAULTS.brief, ...(s?.brief || {}) }, smart: { ...DEFAULTS.smart, ...(s?.smart || {}) } };

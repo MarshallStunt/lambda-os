@@ -18,8 +18,8 @@ async function installPlainClientRule() {
         { header: 'user-agent', operation: 'set', value: `lambda-os/${chrome.runtime.getManifest().version}` },
       ],
     },
-    // Google and NetSuite are signed-in web pages, not APIs: leave their requests looking like the browser so bot checks don't trip.
-    condition: { initiatorDomains: [chrome.runtime.id], resourceTypes: ['xmlhttprequest', 'other'], excludedRequestDomains: ['google.com', 'netsuite.com'] },
+    // Google, NetSuite and the AI chats are signed-in web pages, not APIs: leave their requests looking like the browser so bot checks don't trip.
+    condition: { initiatorDomains: [chrome.runtime.id], resourceTypes: ['xmlhttprequest', 'other'], excludedRequestDomains: ['google.com', 'netsuite.com', 'claude.ai', 'chatgpt.com'] },
   });
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [PLAIN_CLIENT_RULE_ID], addRules: [rule(BROWSER_HEADERS)] });
@@ -34,7 +34,8 @@ installPlainClientRule();
 // Ask AI no longer calls AI APIs (it uses the browser chat), so drop the old API header rule and any saved API keys.
 chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [2] }).catch(() => {});
 chrome.storage.local.get('settings').then(({ settings: s }) => {
-  if (s?.ai && (s.ai.keys || s.ai.models || s.ai.provider !== 'web')) chrome.storage.local.set({ settings: { ...s, ai: { provider: 'web', web: ['claude', 'chatgpt', 'gemini'].includes(s.ai.web) ? s.ai.web : 'claude' } } });
+  const chosen = s?.ai?.picked && ['claude', 'chatgpt', 'gemini'].includes(s.ai.web);
+  if (s?.ai && (s.ai.keys || s.ai.models || s.ai.provider !== 'web' || (!chosen && s.ai.web !== 'auto'))) chrome.storage.local.set({ settings: { ...s, ai: chosen ? { provider: 'web', web: s.ai.web, picked: true } : { provider: 'web', web: 'auto' } } });
 }).catch(() => {});
 
 const DASH = () => chrome.runtime.getURL('newtab.html');
