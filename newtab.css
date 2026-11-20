@@ -1064,3 +1064,4 @@ td .tr-btn, .inv .tr-btn { margin-left: 4px; vertical-align: middle; }
 .fp-ex button:hover { background: var(--panel-hi); }
 .fp-ex button span { color: var(--muted); font-size: 10.5px; }
 .fp-help { font-size: 11px; line-height: 1.7; padding: 8px; border-top: 1px solid var(--line); margin-top: 6px; }
+#fStar[hidden], #fClear[hidden] { display: none; } /* all: unset would otherwise override [hidden] */
