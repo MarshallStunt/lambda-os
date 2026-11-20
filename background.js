@@ -31,26 +31,11 @@ async function installPlainClientRule() {
 }
 installPlainClientRule();
 
-// AI providers get their own, stricter rule: the request carries nothing a browser would add (no cookies, no
-// Origin/Referer, no client hints, no Sec-Fetch-*, no Accept-Language) and identifies as Lambda OS, not Chrome.
-const AI_RULE_ID = 2;
-const AI_HOSTS = ['api.anthropic.com', 'api.openai.com', 'generativelanguage.googleapis.com', 'localhost', '127.0.0.1'];
-async function installAiRule() {
-  const strip = ['cookie', 'origin', 'referer', 'accept-language', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
-    'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'priority'];
-  const rule = headers => ({
-    id: AI_RULE_ID, priority: 2,
-    action: { type: 'modifyHeaders', requestHeaders: [...headers.map(header => ({ header, operation: 'remove' })),
-      { header: 'user-agent', operation: 'set', value: `lambda-os/${chrome.runtime.getManifest().version}` }] },
-    condition: { initiatorDomains: [chrome.runtime.id], requestDomains: AI_HOSTS, resourceTypes: ['xmlhttprequest', 'other'] },
-  });
-  try { await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [AI_RULE_ID], addRules: [rule(strip)] }); }
-  catch (e) {
-    console.warn('ai rule', e); // some Chrome versions refuse Sec-* edits: keep the essentials
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [AI_RULE_ID], addRules: [rule(['cookie', 'origin', 'referer', 'accept-language'])] }).catch(e2 => console.warn('ai rule', e2));
-  }
-}
-installAiRule();
+// Ask AI no longer calls AI APIs (it uses the browser chat), so drop the old API header rule and any saved API keys.
+chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [2] }).catch(() => {});
+chrome.storage.local.get('settings').then(({ settings: s }) => {
+  if (s?.ai && (s.ai.keys || s.ai.models || s.ai.provider !== 'web')) chrome.storage.local.set({ settings: { ...s, ai: { provider: 'web', web: ['claude', 'chatgpt', 'gemini'].includes(s.ai.web) ? s.ai.web : 'claude' } } });
+}).catch(() => {});
 
 const DASH = () => chrome.runtime.getURL('newtab.html');
 chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: DASH() }));

@@ -36,54 +36,13 @@ document.querySelectorAll('input[name=theme]').forEach(r => r.addEventListener('
 $('lookAccent').addEventListener('click', e => { const b = e.target.closest('[data-accent]'); if (b) setLook({ accent: b.dataset.accent }); });
 [['lookDensity', 'density'], ['lookText', 'text'], ['lookGlow', 'glow'], ['lookMotion', 'motion']].forEach(([id, k]) => $(id).addEventListener('change', () => setLook({ [k]: $(id).value })));
 
-// ---------- AI: one key + model per provider, kept while switching ----------
+// ---------- AI: always the browser chat (no API key); just which chat ----------
 let ai = JSON.parse(JSON.stringify(LambdaLive.DEFAULTS.ai));
-const KEY_HINT = { anthropic: 'sk-ant-…  (console.anthropic.com → API keys)', openai: 'sk-…  (platform.openai.com → API keys)', gemini: 'AIza…  (aistudio.google.com → API key)', local: 'Optional; most local servers need none' };
-function paintAI() {
-  const p = $('aiProvider').value;
-  $('aiFields').hidden = p === 'off';
-  $('aiLocalRow').hidden = p !== 'local';
-  $('aiEffortRow').hidden = p !== 'anthropic';
-  $('aiKeyLabel').textContent = p === 'local' ? 'API key (optional)' : `${LambdaAI.PROVIDERS[p]?.label || ''} API key`;
-  $('aiKey').placeholder = KEY_HINT[p] || ''; $('aiKey').value = ai.keys[p] || '';
-  $('aiModel').value = ai.models[p] || ''; $('aiModel').placeholder = p === 'anthropic' ? 'claude-opus-5-5' : p === 'gemini' ? 'gemini-flash-lite-latest' : 'Load models to choose';
-  $('aiLocalUrl').value = ai.localUrl || ''; $('aiEffort').value = ai.effort || 'medium';
-  $('aiModels').innerHTML = ''; $('aiTestOut').textContent = '';
-}
-function readAI() {
-  const p = $('aiProvider').value;
-  ai.provider = p;
-  if (p !== 'off') { ai.keys[p] = $('aiKey').value.trim(); ai.models[p] = $('aiModel').value.trim(); }
-  ai.localUrl = $('aiLocalUrl').value.trim() || LambdaAI.LOCAL_PRESETS.lmstudio; ai.effort = $('aiEffort').value;
-  return ai;
-}
-let shownProvider = null;
-$('aiProvider').addEventListener('focus', () => { shownProvider = $('aiProvider').value; });
-$('aiProvider').addEventListener('change', () => {
-  if (shownProvider && shownProvider !== 'off') { ai.keys[shownProvider] = $('aiKey').value.trim(); ai.models[shownProvider] = $('aiModel').value.trim(); }
-  shownProvider = $('aiProvider').value; paintAI();
-});
-$('aiKeyShow').addEventListener('click', () => { const k = $('aiKey'); k.type = k.type === 'password' ? 'text' : 'password'; $('aiKeyShow').textContent = k.type === 'password' ? 'Show' : 'Hide'; });
-document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => { $('aiLocalUrl').value = LambdaAI.LOCAL_PRESETS[b.dataset.preset]; }));
-async function aiAccess() { // the local server address is user-chosen, so ask for it; the cloud providers are in the manifest
-  if ($('aiProvider').value !== 'local') return true;
-  try { const o = new URL($('aiLocalUrl').value.trim() || LambdaAI.LOCAL_PRESETS.lmstudio).origin + '/*'; return (await chrome.permissions.contains({ origins: [o] })) || await chrome.permissions.request({ origins: [o] }); } catch { return false; }
-}
-$('aiLoadModels').addEventListener('click', async () => {
-  const p = $('aiProvider').value; if (p === 'off') return;
-  if (!(await aiAccess())) return ($('aiTestOut').textContent = 'Permission to reach the local server was declined.');
-  $('aiTestOut').textContent = 'Loading models…';
-  try {
-    const list = await LambdaAI.listModels(readAI(), p);
-    $('aiModels').innerHTML = list.map(m => `<option value="${esc(m)}">`).join('');
-    $('aiTestOut').textContent = list.length ? `${list.length} models available. Pick one in the Model box.` : 'No models found.';
-    if (!$('aiModel').value && list[0]) $('aiModel').value = p === 'anthropic' && list.includes('claude-opus-5-5') ? 'claude-opus-5-5' : list[0];
-  } catch (e) { $('aiTestOut').textContent = e.message; }
-});
+function readAI() { ai = { provider: 'web', web: $('aiWeb').value || 'claude' }; return ai; }
 $('aiTest').addEventListener('click', async () => {
-  if (!(await aiAccess())) return ($('aiTestOut').textContent = 'Permission to reach the local server was declined.');
-  $('aiTestOut').textContent = 'Testing…';
-  try { const r = await LambdaAI.test(readAI()); $('aiTestOut').innerHTML = `<span class="st-good">✓ Connected</span> · replied “${esc(r.slice(0, 60))}”`; }
+  const name = LambdaAI.WEB_NAMES[readAI().web];
+  $('aiTestOut').textContent = `Asking ${name} in a minimized window…`;
+  try { const r = await LambdaAI.test(readAI()); $('aiTestOut').innerHTML = `<span class="st-good">✓ Works</span> · ${esc(name)} replied “${esc(r.slice(0, 60))}”`; }
   catch (e) { $('aiTestOut').innerHTML = `<span class="st-critical">✕ ${esc(e.message)}</span>`; }
 });
 
@@ -155,34 +114,13 @@ function fill(s) {
   $('refreshMinutes').value = String(s.refreshMinutes ?? 10);
   $('appTabs').checked = s.appTabs !== false;
   $('news').checked = s.news !== false;
-  ai = JSON.parse(JSON.stringify(s.ai)); $('aiProvider').value = ai.provider; shownProvider = ai.provider; paintAI();
+  ai = { provider: 'web', web: s.ai?.web || 'claude' }; $('aiWeb').value = ai.web;
   paintPrivacy(s.privacy);
   look = window.LambdaLook.current(); paintLook(); // theme.js keeps this in sync with the saved settings
   FIELDS.forEach(f => ($(f).value = s[f] || ''));
   document.querySelector(`input[name=mode][value=${s.mode === 'demo' ? 'demo' : 'live'}]`).checked = true;
   document.querySelectorAll('[data-source]').forEach(c => (c.checked = s.sources?.[c.dataset.source] !== false));
-  const sm = s.smart || LambdaLive.DEFAULTS.smart;
-  document.querySelector(`input[name=smartMode][value=${sm.mode === 'ai' ? 'ai' : 'local'}]`).checked = true;
-  document.querySelectorAll('[data-smart]').forEach(c => (c.checked = sm[c.dataset.smart] !== false));
-  $('smartSlack').checked = !!sm.slack;
-  paintSmart();
 }
-// Smart processing: options only matter in AI mode; the status line says what the last refresh actually did.
-async function paintSmart() {
-  const ai = $('smartOpts'), on = document.querySelector('input[name=smartMode]:checked')?.value === 'ai';
-  ai.style.opacity = on ? '1' : '.5'; ai.querySelectorAll('input').forEach(i => (i.disabled = !on));
-  const { snapshot } = await chrome.storage.local.get('snapshot').catch(() => ({}));
-  const x = snapshot?.smart, c = LambdaAI.configured(readAI());
-  // Rules check: what the AI is filling in where a rule broke or couldn't decide (a hint that a rule needs a real fix).
-  const u = x?.used, parts = u ? [u.fields && `${u.fields} Jira field${u.fields > 1 ? 's' : ''} matched`, u.sites && `${u.sites} ticket site${u.sites > 1 ? 's' : ''}`, u.statuses && `${u.statuses} status${u.statuses > 1 ? 'es' : ''} as waiting on parts`, u.alerts && `${u.alerts} alert type${u.alerts > 1 ? 's' : ''} as hardware`, u.titles && `${u.titles} deployment title${u.titles > 1 ? 's' : ''}`].filter(Boolean) : [];
-  const check = on && x?.on ? `<br><span class="muted">Rules check: ${parts.length ? `AI is filling in ${esc(parts.join(', '))}.${u.fields ? ' A renamed Jira field is worth fixing in Settings → Jira.' : ''}` : 'every rule worked on its own last refresh.'}</span>` : '';
-  $('smartStatus').innerHTML = !on ? 'Local only: fixed rules, nothing is sent to an AI.'
-    : !c.ok ? `<span class="st-warning">AI isn't set up yet, so the local rules are used.</span> ${esc(c.why)}`
-    : !x?.on ? 'AI is on. It starts with the next refresh (click ↻ on the dashboard).'
-    : x.why ? `<span class="st-warning">Last refresh: ${esc(x.why)}</span>`
-    : `<span class="st-good">✓ Last refresh used ${esc(x.label || c.label)}</span>: ${x.calls ? `${x.calls} request${x.calls > 1 ? 's' : ''} for ${x.items} item${x.items > 1 ? 's' : ''}` : 'nothing new to ask'} · ${new Date(x.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` + check;
-}
-document.addEventListener('change', e => { if (e.target.name === 'smartMode' || e.target.id === 'aiProvider') setTimeout(paintSmart, 50); });
 function read() {
   const s = { mode: document.querySelector('input[name=mode]:checked').value, sources: {} };
   FIELDS.forEach(f => (s[f] = $(f).value.trim()));
@@ -192,8 +130,7 @@ function read() {
   s.refreshMinutes = Number($('refreshMinutes').value);
   s.appTabs = $('appTabs').checked;
   s.news = $('news').checked;
-  s.smart = { mode: document.querySelector('input[name=smartMode]:checked')?.value === 'ai' ? 'ai' : 'local', slack: $('smartSlack').checked };
-  document.querySelectorAll('[data-smart]').forEach(c => (s.smart[c.dataset.smart] = c.checked));
+  s.smart = { ...LambdaLive.DEFAULTS.smart, mode: 'local' };
   return s;
 }
 // A Jira / NetBox / NetSuite address outside the built-in ones needs the user's OK to reach it.
@@ -235,12 +172,12 @@ async function save(opts = {}) {
 async function exportBackup() {
   const { settings = {}, tracked = [] } = await chrome.storage.local.get(['settings', 'tracked']);
   const data = { app: 'lambda-os', version: chrome.runtime.getManifest().version, savedAt: new Date().toISOString(), settings, tracked };
-  // Never write secrets into a file: no NetBox token, no AI keys.
-  data.settings = { ...data.settings, netboxToken: '', ai: data.settings.ai ? { ...data.settings.ai, keys: {} } : undefined };
+  // Never write secrets into a file: no NetBox token.
+  data.settings = { ...data.settings, netboxToken: '' };
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: `lambda-os-backup-${new Date().toISOString().slice(0, 10)}.json` });
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-  say(`<p class="st-good">Backup saved: ${tracked.length} tracked deployments, your settings and appearance. API keys and tokens are never included.</p>`);
+  say(`<p class="st-good">Backup saved: ${tracked.length} tracked deployments, your settings and appearance. Tokens are never included.</p>`);
 }
 async function importBackup(file) {
   let data;
@@ -250,7 +187,7 @@ async function importBackup(file) {
   const allowed = new Set([...FIELDS, 'mode', 'sources', 'ai', 'privacy', 'look', 'alerts', 'brief', 'refreshMinutes', 'appTabs', 'news', 'smart']);
   const settings = Object.fromEntries(Object.entries(data.settings).filter(([k]) => allowed.has(k)));
   if (!settings.netboxToken && current.netboxToken) settings.netboxToken = current.netboxToken; // keep the token you already have
-  settings.ai = { ...(settings.ai || current.ai || {}), keys: { ...(current.ai?.keys || {}) } };     // and the AI keys already in this browser (even if the backup has no AI section)
+  settings.ai = { provider: 'web', web: settings.ai?.web || current.ai?.web || 'claude' };
   if (settings.look) await window.LambdaLook.save(settings.look);
   const tracked = Array.isArray(data.tracked) ? data.tracked.filter(k => typeof k === 'string' && /^[A-Z][A-Z0-9_]+-\d+$/.test(k)) : [];
   if (!(await ensureAccess({ ...LambdaLive.DEFAULTS, ...settings }))) return say('<p class="st-critical">Permission for an address in the backup was declined, so nothing was loaded.</p>');
@@ -261,7 +198,7 @@ async function importBackup(file) {
 }
 
 async function reset() {
-  if (!confirm('Reset every setting to its default, including appearance, AI provider and API keys? Tracked deployments are kept. Save a backup first if you want to undo this (keys are not in backups).')) return;
+  if (!confirm('Reset every setting to its default, including appearance and the AI chat choice? Tracked deployments are kept. Save a backup first if you want to undo this.')) return;
   await chrome.storage.local.remove(['settings', 'snapshot']);
   await window.LambdaLook.save(window.LambdaLook.DEFAULT);
   fill(await LambdaLive.settings());
@@ -281,7 +218,6 @@ document.body.appendChild(pill);
 const skip = el => !el.matches?.('input, select, textarea') || el.type === 'file' || el.closest('[data-nosave]') || el.name === 'theme' || /^look/.test(el.id);
 async function missingAccess(s) {
   const origins = LambdaLive.originsFor({ ...s, sources: { ...LambdaLive.DEFAULTS.sources, ...(s.sources || {}) } });
-  if (s.ai?.provider === 'local') try { origins.push(new URL(s.ai.localUrl).origin + '/*'); } catch { /* not a URL yet */ }
   const out = [];
   for (const o of origins) if (!(await chrome.permissions.contains({ origins: [o] }).catch(() => true))) out.push(o);
   return out;

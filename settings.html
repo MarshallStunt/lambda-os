@@ -87,27 +87,6 @@
       <p class="hint">Slack can only be read from an open Slack page. If you have Slack open, Lambda OS reads from your tab and never touches it. If not, it keeps its own small pinned Slack tab and keeps it healthy, so you don't have to. Google Calendar is read from its own pinned tab (Google blocks the automated agenda feed). Atium, like Slack, keeps its sign-in in the page, so it's read through an Atium tab; its sign-in token never leaves that tab. Gmail normally uses your Google sign-in directly and only gets a pinned tab when that doesn't work. If a pinned tab asks you to sign in, sign in there once. Turn this off to use only your own tabs.</p>
     </fieldset>
 
-    <fieldset id="smart">
-      <legend>Smart processing</legend>
-      <p class="hint" style="margin-top:0">Lambda OS always fetches your data itself, with your browser sign-ins, and sorts and matches it with fixed rules. Optionally, your AI provider (Settings → AI) can settle the cases the rules can't. It only ever sees those few items, masked like Ask AI, and each one only once.</p>
-      <div class="radio">
-        <label><input type="radio" name="smartMode" value="local"><span>Local only</span></label>
-        <label><input type="radio" name="smartMode" value="ai"><span>✨ AI when available</span></label>
-      </div>
-      <p class="hint">With "AI when available", the local rules still run first and take over whenever no AI provider is set up, it can't be reached or a request fails.</p>
-      <div id="smartOpts">
-        <label>Let the AI help with</label>
-        <div class="checks">
-          <label><input type="checkbox" data-smart="volunteer"><span>Volunteer requests: which Slack messages are real calls for help, plus dates and head-count</span></label>
-          <label><input type="checkbox" data-smart="matching"><span>Matching: Atium builds, NetSuite shipments and meetings the rules couldn't link to a deployment</span></label>
-          <label><input type="checkbox" data-smart="priority"><span>Ticket order: which of your tickets to work on first (at most once an hour)</span></label>
-          <label><input type="checkbox" data-smart="backup"><span>Backup when a rule breaks: renamed Jira fields, tickets with no site, new ticket statuses, new Grafana alert names, deployment titles the rules can't read. Each is asked once and remembered.</span></label>
-        </div>
-        <div class="checks" style="margin-top:8px"><label><input type="checkbox" id="smartSlack"><span>Let the AI read Slack messages that might be volunteer requests (needed for the first option; Privacy keeps all other Slack text away from the AI)</span></label></div>
-        <p class="hint">Only what the rules couldn't settle is sent, each item once; usually nothing at all. Settings → Privacy → "Never send to an AI" turns all of this off.</p>
-      </div>
-      <p class="note" id="smartStatus">Status appears after the next refresh.</p>
-    </fieldset>
 
     <fieldset>
       <legend>Jira</legend>
@@ -203,31 +182,15 @@
         <div><label for="brTime">Time</label><input type="time" id="brTime"></div>
         <div><label for="brDays">Days</label><select id="brDays"><option value="weekdays">Weekdays</option><option value="daily">Every day</option></select></div>
       </div>
-      <div class="row" style="margin-top:10px"><button class="btn" id="brTest" type="button">Show the brief notification now</button><span class="hint">Meetings, your breached and due tickets, tracked deployments with progress since yesterday, new tickets and low spares at your sites, parts arrived, mentions. With an AI provider set, the brief can also summarize itself.</span></div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="brTest" type="button">Show the brief notification now</button><span class="hint">Meetings, your breached and due tickets, tracked deployments with progress since yesterday, new tickets and low spares at your sites, parts arrived, mentions. Ask AI can also summarize the brief.</span></div>
     </fieldset>
 
     <fieldset>
       <legend>AI assistant</legend>
-      <label for="aiProvider">Provider</label>
-      <select id="aiProvider">
-        <option value="off">Off: local answers only</option>
-        <option value="anthropic">Claude (Anthropic)</option>
-        <option value="openai">OpenAI</option>
-        <option value="gemini">Google Gemini</option>
-        <option value="local">Local model (LM Studio / Ollama)</option>
-      </select>
-      <div id="aiFields">
-        <div id="aiLocalRow"><label for="aiLocalUrl">Local server (OpenAI-compatible)</label>
-          <div class="keyrow"><input type="url" id="aiLocalUrl" placeholder="http://localhost:1234/v1"><button class="btn" data-preset="lmstudio">LM Studio</button><button class="btn" data-preset="ollama">Ollama</button></div></div>
-        <label for="aiKey" id="aiKeyLabel">API key</label>
-        <div class="keyrow"><input type="password" id="aiKey" autocomplete="off"><button class="btn" id="aiKeyShow" type="button">Show</button></div>
-        <label for="aiModel">Model</label>
-        <div class="keyrow"><input type="text" id="aiModel" list="aiModels" placeholder="e.g. claude-opus-5-5"><datalist id="aiModels"></datalist><button class="btn" id="aiLoadModels" type="button">Load models</button></div>
-        <div id="aiEffortRow"><label for="aiEffort">Effort (Claude)</label>
-          <select id="aiEffort"><option value="low">Low: fastest, cheapest</option><option value="medium">Medium: balanced (default)</option><option value="high">High: most thorough</option></select></div>
-        <div class="row" style="margin-top:10px"><button class="btn" id="aiTest" type="button">Test AI connection</button><span class="hint" id="aiTestOut"></span></div>
-      </div>
-      <p class="hint">Ask with <b>✨ Ask AI</b> in the top bar or from the search bar: answers are grounded in the dashboard's loaded data and link straight to tickets, deployments and sites. Your key stays in this browser, is sent only to the provider you pick, and is never written to backups.</p>
+      <label for="aiWeb">Chat to use</label>
+      <select id="aiWeb"><option value="claude">Claude (claude.ai)</option><option value="chatgpt">ChatGPT (chatgpt.com)</option><option value="gemini">Gemini (gemini.google.com)</option></select>
+      <div class="row" style="margin-top:10px"><button class="btn" id="aiTest" type="button">Test it</button><span class="hint" id="aiTestOut"></span></div>
+      <p class="hint">No API key needed: sign in to that site in this browser once. You keep using the <b>✨ Ask AI</b> box (top bar, or ⌘J): Lambda OS opens the chat in one minimized window (never in your tabs, reused for every question), sends your question with the masked dashboard data, and shows the answer here as it's written. Each Ask AI conversation becomes one chat in your history there. It reads the chat page itself, so if the site changes its layout it can stop working until Lambda OS is updated. To keep everything away from any AI, choose “Never send to an AI” under Privacy.</p>
     </fieldset>
 
     <fieldset>
@@ -306,6 +269,7 @@
   <script src="apptabs.js"></script>
   <script src="live.js"></script>
   <script src="ai.js"></script>
+  <script src="webchat.js"></script>
   <script src="updates.js"></script>
   <script src="settings.js"></script>
 </body>

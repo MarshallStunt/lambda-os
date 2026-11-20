@@ -48,9 +48,8 @@ Only **Jira and NetBox** are required. An app you don't have stays out of the wa
 - **Views**: Fleet (**F**), Second brain (**B**, 2D/3D graph of everything linked, including Yard clusters), Deployments (**D**, timeline by project), Health (**H**, every site's leaks, breakers, PDUs, power shelves, hardware faults, heat, network), Trace (**T**, one item's history). **E** enlarges the middle panel.
 - **📍 Site picker**: all sites, your sites (from your Jira history, deployments and ★ stars) or any you tick. Each view also has its own All sites / Your sites switch.
 - **Live feed**: Jira, NetBox, Grafana, Atium, NetSuite, Slack and Gmail events; click one for its details and links.
-- **⌘K search** (or **/**) for sites, hosts, tickets, deployments, parts and questions; **✨ Ask AI** (⌘J) with Claude, OpenAI, Gemini or a local model, using your key and privacy masking (names, hosts, serials… hidden before sending). No key? **Ask in Claude ↗ / Ask in ChatGPT ↗** copies the question and the same masked data, opens claude.ai or chatgpt.com for you to paste and send, and pasting the answer back shows real names and links.
+- **⌘K search** (or **/**) for sites, hosts, tickets, deployments, parts and questions; **✨ Ask AI** (⌘J) answers through the **Claude, ChatGPT or Gemini you're already signed in to in this browser**, with no API key (Settings → AI picks which). You only type in Ask AI: Lambda OS sends the question with privacy masking (names, hosts, serials… hidden before sending) through that chat in one minimized window, reused for every question, and shows the answer here as it's written. Follow-ups stay in the same chat, and **Open in Claude ↗** shows it. If the chat needs you (signed out, a "verify you're human" check), its window comes up and Ask AI says so; once you're in, Lambda OS minimizes it, brings you back and asks your question. If it fails (usage limit, window closed, the site changed), the answer shows the site's message with **Try again**, **Show** and **Ask ChatGPT / Gemini instead**. It reads the chat page, so a site redesign can break it until Lambda OS is updated.
 - **Alerts and daily brief**: SLA, new assignments, tracked deployments, parts on hand, Atium milestones and late POs, Grafana hardware alerts, leaks and breakers, Yard warnings (host still in production, locked by someone else, still locked by you), and apps that stop updating.
-- **Smart processing** (optional AI): fills in only what the rules can't decide (volunteer requests, unmatched builds/shipments/meetings, renamed Jira fields, new statuses and alert names), once, and remembers the answer.
 - **Lambda Rackside**: open a ticket in Rackside from its details, and Rackside can open tickets here.
 
 ## How it loads
@@ -80,8 +79,9 @@ To release:
 | `data.js` | Turns the snapshot (or demo data) into sites, tickets, devices, KPIs, feed; first-load screen |
 | `apptabs.js` | Pinned and temporary app tabs, kept healthy |
 | `alerts.js` | Alert rules, daily history, the brief, Yard checks |
-| `smart.js` | Optional AI step for what the rules can't decide |
-| `ai.js` | AI providers, privacy masking, model lists |
+| `smart.js` | Rule helpers (the old API-based AI step is off; Ask AI uses the browser chat) |
+| `ai.js` | Ask AI setup and privacy masking |
+| `webchat.js` | Sends Ask AI questions through the signed-in Claude / ChatGPT / Gemini chat and reads the answers back |
 | `background.js` | Background refresh, alerts, the brief, fresh-install cleanup, Rackside link |
 | `settings.html/.js` | Settings: sources, appearance, AI, privacy, alerts, backup |
 | `updates.js` | New-version check |

@@ -3470,8 +3470,7 @@ LambdaData.ready.then(D => {
         ? [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask ${st.label}: “${qt}”`, sub: `${st.model} · grounded in your loaded data${SET?.privacy?.mode === 'redact' ? ' · private values masked' : ''}`, run: () => askAI(q) },
            { group: 'Ask', icon: '⌁', color: C.accent, title: `Quick answer: “${qt}”`, sub: 'Instant, from local data only (nothing leaves your browser)', run: () => ask(q) }]
         : [{ group: 'Ask', icon: 'λ', color: C['accent-2'], title: `Ask: “${qt}”`, sub: `Answered from local data · ${st.why}`, run: () => ask(q) },
-           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) },
-           ...(SET?.privacy?.mode === 'local' ? [] : [['claude', 'Claude'], ['chatgpt', 'ChatGPT']].map(([k, n]) => ({ group: 'Ask', icon: '↗', color: C['accent-2'], title: `Ask in ${n}: “${qt}”`, sub: `Copies the question and dashboard data (masked), opens ${n}: you paste and send`, run: () => { closePalette(); AIPanel.handoff(k, qt); } })))];
+           { group: 'Ask', icon: '✨', color: C['accent-2'], title: 'Open the AI assistant', sub: `Chat panel (${KEY('J')})`, run: () => askAI(q) }];
       const lq = q.toLowerCase(), go = apps().filter(a => `${a[0]} ${a[1]}`.toLowerCase().includes(lq) || (lq.length >= 3 && a[0].toLowerCase().startsWith(lq))).map(goRow);
       const hits = q.startsWith('?') ? [] : [...search(q), ...go];
       results = looksLikeQuestion(q) || !hits.length ? [...askRows, ...hits] : [...hits, ...askRows];
@@ -3709,7 +3708,7 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const st = aiState();
       msgs.innerHTML = `<div class="aip-hello"><div class="brand-mark">λ</div><h3>Ask about anything on this dashboard</h3>
         <p class="muted small">Sites, tickets, deployments, spares, shipments, meetings. Answers link straight to what they mention.</p>
-        ${st.ok ? '' : `<p class="note small">${esc(st.why)}${isExt ? ' Until then, answers come from local data only.' : ''}</p>${SET?.privacy?.mode === 'local' ? '' : `<p class="small">No API key? Type your question below, then send it to the chat you already use:</p><div class="aip-tools aip-hand-row">${handoffChips()}</div>`}${isExt ? '<button class="btn" data-aip-setup>Set up an API key</button>' : ''}`}
+        ${st.ok ? `<p class="muted small">Answers come from ${esc(st.label.replace(' in your browser', ''))}, signed in as you in this browser (no API key). Change it in <a class="linkish" data-aip-setup>Settings → AI</a>.</p>` : `<p class="note small">${esc(st.why)}</p>`}
         <div class="aip-suggest">${SUGGEST.map(s => `<button class="chip" data-aip-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
     }
     function open(prefill) {
@@ -3722,52 +3721,20 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     const bubble = (role, html) => { msgs.querySelector('.aip-hello')?.remove(); const d = document.createElement('div'); d.className = `aip-msg ${role}`; d.innerHTML = html; msgs.appendChild(d); scroll(); return d; };
     function busyUI(on) { busy = on; sendBtn.textContent = on ? 'Stop' : 'Ask'; sendBtn.classList.toggle('stop', on); }
 
-    /* Continue in Claude / ChatGPT: no API key needed. The question and the same dashboard data Ask AI would send
-       (masked the same way) go to the clipboard, and claude.ai or chatgpt.com opens; you paste and send it yourself,
-       on your own account. Pasting its answer back here turns the placeholders back into real names and adds links. */
-    const HANDOFF = { claude: { name: 'Claude', url: 'https://claude.ai/new' }, chatgpt: { name: 'ChatGPT', url: 'https://chatgpt.com/' } };
-    const HANDOFF_MAX = 60000; // characters of data: big enough for the context, small enough to paste into either chat
-    const handoffChips = () => Object.entries(HANDOFF).map(([k, h]) => `<button class="chip" data-aip-hand="${k}" title="Copy this question and the dashboard data, then open ${h.name} to paste it">Ask in ${h.name} ↗</button>`).join('');
-    async function handoff(where, q, shown = false) {
-      const h = HANDOFF[where]; q = String(q || '').trim();
-      if (!q) { toast(`Type your question first, then click “Ask in ${h.name}”.`); return ta.focus(); }
-      if (SET?.privacy?.mode === 'local') return toast('Privacy is set to “Never send to AI” (Settings → Privacy), so nothing is copied for an AI.');
-      const priv = SET?.privacy || LambdaLive.DEFAULTS.privacy;
-      R ||= redactorFor(priv);
-      let data = buildContext(q, priv); if (data.length > HANDOFF_MAX) data = data.slice(0, HANDOFF_MAX) + '\n… (more data trimmed to fit)';
-      const text = R.redact(`${AI_SYSTEM}\n\nQUESTION: ${q}\n\nDATA:\n${data}`);
-      try { await navigator.clipboard.writeText(text); } catch { return toast("Couldn't copy to the clipboard. Click the page and try again."); }
-      if (isExt) chrome.tabs.create({ url: h.url }); else window.open(h.url, '_blank', 'noopener');
-      if (box.hidden) open();
-      if (!shown) { ta.value = ''; bubble('user', esc(q)); }
-      const masked = priv.mode === 'redact' && R.count() ? `${R.count()} private values are masked (${esc(R.summary())}).` : priv.mode === 'redact' ? 'Private values are masked.' : 'Masking is off (Settings → Privacy).';
-      const el = bubble('assistant', `<div class="ai-text"><p>📋 Copied your question and the dashboard data. In the <b>${h.name}</b> tab that just opened, paste (${KEY('V')}) and press Enter.</p>
-        <p class="muted small">${masked} It goes to your own ${h.name} account, so it may be kept in your chat history there.</p></div>
-        <textarea class="aip-paste" rows="2" placeholder="Optional: paste ${h.name}'s answer here to see real names and links to the dashboard"></textarea>`);
-      const pa = el.querySelector('.aip-paste');
-      const show = raw => {
-        raw = String(raw || '').trim(); if (!raw) return;
-        const out = document.createElement('div'); out.className = 'ai-text';
-        out.innerHTML = md(R.restore(raw)) + `<div class="aip-meta muted small">${h.name}'s answer · names restored here only</div>`;
-        pa.replaceWith(out); turns.push({ q, raw, local: true }); scroll();
-      };
-      pa.addEventListener('paste', e => { e.preventDefault(); show(e.clipboardData.getData('text')); });
-      pa.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); show(pa.value); } });
-      scroll();
-    }
-
-    async function ask(q) {
+    // opt.web asks a different chat for this one question; opt.again re-asks without repeating the question bubble.
+    async function ask(q, opt = {}) {
       q = String(q || '').trim(); if (!q) return;
       if (box.hidden) open();
       if (busy) return;
       head();
       ta.value = '';
-      bubble('user', esc(q));
-      const st = aiState();
+      if (!opt.again) bubble('user', esc(q));
+      const base = aiState(), aiCfg = { ...(SET?.ai || {}), ...(opt.web ? { web: opt.web } : {}) };
+      const st = base.ok ? LambdaAI.configured(aiCfg) : base, NAME = st.ok ? LambdaAI.WEB_NAMES[st.web] : '';
       if (!st.ok) { // no provider: answer from local data
         const a = answerFor(q);
         const t = a.table && a.table.rows.length ? `<table><tr>${a.table.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr>${a.table.rows.slice(0, 12).map(r => `<tr>${r.map(c => `<td>${linkify(esc(c))}</td>`).join('')}</tr>`).join('')}</table>` : '';
-        bubble('assistant', `<div class="ai-text">${md(a.text)}${t}</div><div class="aip-meta muted small">Local answer · ${esc(st.why)}</div>${SET?.privacy?.mode === 'local' ? '' : `<div class="aip-tools" data-hq="${esc(q)}"><span class="muted small">Better answer:</span>${handoffChips()}</div>`}`);
+        bubble('assistant', `<div class="ai-text">${md(a.text)}${t}</div><div class="aip-meta muted small">Local answer · ${esc(st.why)}</div>`);
         turns.push({ q, raw: a.text, local: true });
         return;
       }
@@ -3777,9 +3744,16 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const el = bubble('assistant', `<div class="ai-text"><span class="caret"></span></div><div class="aip-meta muted small"><span>Thinking…</span></div>`);
       const text = el.querySelector('.ai-text'), meta = el.querySelector('.aip-meta span');
       ctrl = new AbortController(); busyUI(true);
-      let raw = '', t0 = performance.now();
+      let raw = '', t0 = performance.now(), failed = false;
       try {
-        for await (const c of LambdaAI.stream(SET.ai, { system: AI_SYSTEM, user: userMsg, history, signal: ctrl.signal })) {
+        for await (const c of LambdaAI.stream(aiCfg, { system: AI_SYSTEM, user: userMsg, history, signal: ctrl.signal })) {
+          if (c.wait !== undefined) { // the chat needs the person (sign in, a human check): say so, then carry on by itself
+            el.querySelector('.aip-wait')?.remove();
+            if (c.wait) { el.insertAdjacentHTML('afterbegin', `<div class="aip-wait"><p>⏳ ${esc(c.wait)}</p><button class="chip" data-aip-chat>Show ${esc(NAME)} again</button></div>`); meta.textContent = 'Waiting for you…'; }
+            else meta.textContent = `Back from ${NAME}, asking now…`;
+            scroll();
+          }
+          if (c.full != null) { raw = c.full; text.innerHTML = md(R.restore(raw)) + '<span class="caret"></span>'; scroll(); }
           if (c.text) { raw += c.text; meta.textContent = 'Writing…'; text.innerHTML = md(R.restore(raw)) + '<span class="caret"></span>'; scroll(); }
           if (c.refusal) raw += `\n\n${c.refusal}`;
           if (c.note) meta.textContent = c.note;
@@ -3788,12 +3762,25 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
         meta.textContent = `${st.label} · ${((performance.now() - t0) / 1000).toFixed(1)}s${SET.privacy.mode === 'redact' ? ` · ${R.count()} private values masked` : ''}`;
       } catch (e) {
         if (ctrl.signal.aborted) { text.innerHTML = (raw ? md(R.restore(raw)) : '') + '<p class="muted small">Stopped.</p>'; meta.textContent = ''; }
-        else { text.innerHTML = `<p class="st-critical">${esc(e.message)}</p>`; meta.textContent = ''; }
-      } finally { busyUI(false); }
+        else {
+          // Something went wrong in the chat: say what, and offer the ways out (look at it, try again, use another chat).
+          const others = Object.keys(LambdaAI.WEB_NAMES).filter(k => k !== st.web);
+          text.innerHTML = `<p class="st-critical">${esc(e.message)}</p><div class="aip-tools aip-fix">
+            <button class="chip" data-aip-retry>↻ Try again</button><button class="chip" data-aip-chat>Show ${esc(NAME)}</button>
+            ${others.map(k => `<button class="chip" data-aip-other="${k}">Ask ${esc(LambdaAI.WEB_NAMES[k])} instead</button>`).join('')}</div>`;
+          meta.textContent = '';
+          text.querySelector('[data-aip-retry]').onclick = () => ask(q, { again: true, web: opt.web });
+          text.querySelectorAll('[data-aip-other]').forEach(b => (b.onclick = () => ask(q, { again: true, web: b.dataset.aipOther })));
+          failed = true;
+        }
+      } finally { busyUI(false); el.querySelector('.aip-wait')?.remove(); }
       const sent = `SYSTEM PROMPT\n${AI_SYSTEM}\n\n${history.length ? `—— EARLIER TURNS (${history.length / 2}) ——\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : ''}—— THIS MESSAGE (exactly as sent${SET.privacy.mode === 'redact' ? `; masked so far: ${R.summary() || 'none'}` : ''}) ——\n${userMsg}`;
-      el.insertAdjacentHTML('beforeend', `<div class="aip-tools" data-hq="${esc(q)}"><button class="chip" data-aip-sent>What was sent</button><button class="chip" data-aip-copy>Copy</button>${handoffChips()}</div><pre class="ai-sent" hidden></pre>`);
+      el.querySelectorAll('[data-aip-chat]').forEach(b => (b.onclick = () => LambdaWebChat.show()));
+      if (failed) { scroll(); return; }
+      el.insertAdjacentHTML('beforeend', `<div class="aip-tools" data-hq="${esc(q)}"><button class="chip" data-aip-sent>What was sent</button><button class="chip" data-aip-copy>Copy</button><button class="chip" data-aip-chat title="Show the hidden ${esc(NAME)} chat this answer came from">Open in ${esc(NAME)} ↗</button></div><pre class="ai-sent" hidden></pre>`);
       el.querySelector('.ai-sent').textContent = sent;
       el.querySelector('[data-aip-copy]').onclick = () => navigator.clipboard?.writeText(R.restore(raw)).then(() => toast('Copied.'));
+      const oc = el.querySelector('[data-aip-chat]'); if (oc) oc.onclick = () => LambdaWebChat.show();
       el.querySelector('[data-aip-sent]').onclick = () => { const p = el.querySelector('.ai-sent'); p.hidden = !p.hidden; };
       if (raw) turns.push({ q, raw });
       scroll();
@@ -3803,12 +3790,11 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
     box.addEventListener('click', e => {
       const q = e.target.closest('[data-aip-q]'); if (q) return ask(q.dataset.aipQ);
       if (e.target.closest('[data-aip-close]')) return close();
-      const hd = e.target.closest('[data-aip-hand]'); if (hd) { const tq = hd.closest('[data-hq]')?.dataset.hq; return handoff(hd.dataset.aipHand, tq || ta.value, !!tq); }
-      if (e.target.closest('[data-aip-new]')) { ctrl?.abort(); turns = []; R = null; empty(); head(); return; }
+      if (e.target.closest('[data-aip-new]')) { ctrl?.abort(); turns = []; R = null; if (typeof LambdaWebChat !== 'undefined') LambdaWebChat.reset(); empty(); head(); return; }
       if (e.target.closest('[data-aip-setup]')) return chrome.runtime.openOptionsPage();
     });
     $('#aiBtn').addEventListener('click', () => (box.hidden ? open() : close()));
-    return { open, close, ask, handoff, toggle: () => (box.hidden ? open() : close()), isOpen: () => !box.hidden };
+    return { open, close, ask, toggle: () => (box.hidden ? open() : close()), isOpen: () => !box.hidden };
   })();
   window.__lambdaOS.setAISettings = s => { SET = s; }; // preview/testing hook
 

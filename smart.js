@@ -173,7 +173,8 @@ Reply with JSON only: {"deployments":{"KEY-1":{"gpus":number|null,"model":"…"|
     const cache = { vol: { ...(pc.vol || {}) }, link: { ...(pc.link || {}) }, prio: pc.prio || null,
       fields: { ...(pc.fields || {}) }, site: { ...(pc.site || {}) }, status: { ...(pc.status || {}) }, alert: { ...(pc.alert || {}) }, dep: { ...(pc.dep || {}) } };
     const out = { at: Date.now(), on: cfg.mode === 'ai', live: false, label: '', why: '', calls: 0, items: 0, cache };
-    if (cfg.mode !== 'ai') return { ...out, why: 'Local only (Settings → Data → Smart processing).' };
+    // Smart processing ran on an API key; Ask AI now uses the browser chat only, so the local rules always decide.
+    if (cfg.mode !== 'ai' || typeof LambdaAI === 'undefined' || LambdaAI.configured(s.ai).provider === 'web') return { ...out, on: false, why: 'Local rules.' };
     if (s.privacy?.mode === 'local') return { ...out, on: false, why: 'Settings → Privacy is set to never send anything to an AI.' };
     if (typeof LambdaAI === 'undefined' || typeof LambdaData === 'undefined') return { ...out, why: 'AI isn\'t loaded here; using earlier answers.' };
     const c = LambdaAI.configured(s.ai);

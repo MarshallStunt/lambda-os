@@ -563,7 +563,6 @@ h3 .star { font-size: 18px; vertical-align: 2px; }
 .aip-msg .aih { font-weight: 600; margin: 8px 0 4px; }
 .aip-meta { margin-top: 4px; }
 .aip-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; } .aip-tools .chip { cursor: pointer; }
-.aip-hand-row { justify-content: center; margin: 4px 0 12px; }
 .aip-paste { width: 100%; margin-top: 8px; resize: vertical; min-height: 40px; padding: 8px 10px; border-radius: 10px; border: 1px dashed var(--line-hi); background: var(--field); color: var(--text); font: 12.5px var(--font); outline: none; }
 .aip-paste:focus { border-color: var(--accent); border-style: solid; }
 .aip-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
@@ -1090,3 +1089,7 @@ td .tr-btn, .inv .tr-btn { margin-left: 4px; vertical-align: middle; }
 .mrow2 .m-title { white-space: normal; line-height: 1.35; }
 .mrow2 .m-meta { font-size: 11px; color: var(--muted); }
 .mrow2 .m-meta .status { font-size: 10.5px; }
+/* Ask AI waiting on the person (sign in / human check in the chat window) */
+.aip-wait { border: 1px solid var(--warning, #e0a43a); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: color-mix(in srgb, var(--warning, #e0a43a) 10%, transparent); }
+.aip-wait p { margin: 0 0 6px; } .aip-wait .chip { cursor: pointer; }
+.aip-fix { margin-top: 8px; }

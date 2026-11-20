@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lambda OS",
-  "version": "0.14.7",
+  "version": "0.14.8",
   "description": "Ops command center for Lambda: sites, inventory, tickets, projects and deployments from NetBox, Jira, NetSuite, Slack, Gmail and Calendar.",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
@@ -36,9 +36,9 @@
     "https://kelsier.aws.lambdalabs.cloud/*",
     "https://grafana.aws.lambdalabs.cloud/*",
     "https://yard-central.aws.lambdalabs.cloud/*",
-    "https://api.anthropic.com/*",
-    "https://api.openai.com/*",
-    "https://generativelanguage.googleapis.com/*",
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
     "https://github.com/*",
     "https://raw.githubusercontent.com/*",
     "https://lambda.com/*"
