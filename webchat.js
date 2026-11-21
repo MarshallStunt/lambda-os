@@ -15,7 +15,7 @@ const LambdaWebChat = (() => {
   // What state the chat page is in: ready for a question, signed out, showing a "verify you're human" check,
   // or showing a usage-limit / error banner.
   function pageProbe(site) {
-    const vis = e => !!(e && (e.offsetParent || e.getClientRects().length));
+    const vis = e => !!(e && (e.offsetParent || e.getClientRects().length || (document.hidden && e.isConnected && getComputedStyle(e).display !== 'none'))); // a minimized window may report no layout
     const COMPOSER = { claude: '[data-testid="chat-input"], div.ProseMirror[contenteditable="true"]', chatgpt: '#prompt-textarea, div.ProseMirror[contenteditable="true"]', gemini: '.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]' };
     const ed = [...document.querySelectorAll(COMPOSER[site])].find(vis);
     const check = /just a moment|verify you are human|are you a robot|unusual traffic|attention required/i.test(document.title) // titles only: chat names in the sidebar can say anything
@@ -32,11 +32,13 @@ const LambdaWebChat = (() => {
 
   async function pageSend(site, text) {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const vis = e => !!(e && (e.offsetParent || e.getClientRects().length));
+    const vis = e => !!(e && (e.offsetParent || e.getClientRects().length || (document.hidden && e.isConnected && getComputedStyle(e).display !== 'none'))); // a minimized window may report no layout
     const COMPOSER = { claude: '[data-testid="chat-input"], div.ProseMirror[contenteditable="true"]', chatgpt: '#prompt-textarea, div.ProseMirror[contenteditable="true"]', gemini: '.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]' };
     const SEND = { claude: 'button[aria-label="Send message"], button[aria-label="Send Message"]', chatgpt: '#composer-submit-button, button[data-testid="send-button"], button[aria-label="Send"], button[aria-label="Send prompt"]', gemini: 'button[aria-label="Send message"], button.send-button' };
     const REPLY = { claude: '[data-testid="assistant-message"]', chatgpt: '[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"]', gemini: 'model-response' };
-    const ed = [...document.querySelectorAll(COMPOSER[site])].find(vis);
+    // The page can redraw its message box right after loading (ChatGPT's temporary chat does): wait for it.
+    let ed = null;
+    for (let i = 0; i < 30 && !(ed = [...document.querySelectorAll(COMPOSER[site])].find(vis)); i++) await sleep(500);
     if (!ed) return { ok: false, why: 'no-composer' };
     const before = document.querySelectorAll(REPLY[site]).length;
     ed.focus();
@@ -340,6 +342,8 @@ const LambdaWebChat = (() => {
       // A follow-up continues the same chat, unless that chat was already deleted from your history (then it starts a new one with the earlier turns).
       const follow = w && w.site === site && w.conv === conv && !w.gone && history.length && w.turns === history.length / 2;
       let text;
+      // The whole conversation in one message (a new chat, or a retry after the chat page was reloaded).
+      const full = () => `${system}\n\n${history.length ? `EARLIER IN THIS CONVERSATION:\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : ''}${user}`;
       if (follow) text = user;
       else {
         yield { note: `Opening ${S.name}…` };
@@ -347,13 +351,17 @@ const LambdaWebChat = (() => {
         if (!(yield* ready(site, w, signal))) return;
         try { w.private = !!(await run(w.tabId, pagePrivate))?.on; } catch { w.private = false; }
         await setW(w);
-        const earlier = history.length ? `EARLIER IN THIS CONVERSATION:\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : '';
-        text = `${system}\n\n${earlier}${user}`;
+        text = full();
       }
       if (signal?.aborted) return;
       if (follow && !(yield* ready(site, w, signal))) return; // still signed in? (it may have expired since)
       yield { note: `Sending to ${S.name}…` };
-      const sent = await run(w.tabId, pageSend, [site, text]);
+      let sent = await run(w.tabId, pageSend, [site, text]).catch(() => null);
+      if (!sent?.ok) { // reload the chat page once and try again before giving up
+        await chrome.tabs.reload(w.tabId).catch(() => {}); await sleep(400); await waitLoaded(w.tabId);
+        if (!(yield* ready(site, w, signal))) return;
+        sent = await run(w.tabId, pageSend, [site, full()]).catch(() => null); // the reload started a fresh chat
+      }
       if (!sent?.ok) throw fail('layout', `Couldn't find the ${S.name} message box. ${S.name} may have changed its page; try another chat below, or update Lambda OS.`);
       w.turns++; await setW(w);
       yield { note: `${S.name} is thinking…` };

@@ -245,13 +245,18 @@ LambdaData.ready.then(D => {
   renderSources();
   const allowAccess = async () => {
     // Must be the first await after the click so Chrome treats it as a user gesture.
-    const ok = await chrome.permissions.request({ origins: [...new Set(D.SOURCES.filter(x => x.access).flatMap(x => x.access))] });
+    const needing = D.SOURCES.filter(x => x.access);
+    const ok = await chrome.permissions.request({ origins: [...new Set(needing.flatMap(x => x.access))] });
     if (!ok) return toast('Access not granted, so those sources stay off.');
     toast('Access granted. Loading…'); updated.hidden = false; updated.textContent = 'Refreshing…';
-    await LambdaLive.refresh(m => (updated.textContent = m));
-    location.reload();
+    await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true, only: needing.map(x => x.key) }); // just those apps
+    showNow();
   };
-  const checkAgain = async () => { updated.hidden = false; updated.textContent = 'Checking…'; await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }); location.reload(); };
+  // Retry / sign-in checks read only the app(s) in question; everything else keeps its data (no full reload of every app).
+  const checkAgain = async keys => { updated.hidden = false; updated.textContent = 'Checking…'; await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true, ...(keys?.length ? { only: keys } : {}) }); showNow(); };
+  // Show newly loaded data: right away, unless you're in the middle of something (a card, search, Ask AI…): then as
+  // soon as you pause, like any other update.
+  const showNow = () => { if (busyNow()) { pendingReload = true; paintUpdated(true); tryReload(); } else location.reload(); };
   // Coming back to the dashboard while an app needs a sign-in checks again by itself (at most once a minute), whether
   // you used "Sign in" here or signed in some other way. Right away after using "Sign in".
   let signingIn = false, lastAuthCheck = Date.now();
@@ -262,8 +267,8 @@ LambdaData.ready.then(D => {
     if (watching || LambdaLive.busy?.()) return; // a sign-in watch or a load is already on it
     signingIn = false; lastAuthCheck = Date.now();
     updated.hidden = false; updated.textContent = 'Checking sign-ins…';
-    LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).then(snap => {
-      if (waiting.some(x => snap?.sources?.[x.key]?.ok)) return location.reload(); // signed in now: show it
+    LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true, only: waiting.map(x => x.key) }).then(snap => {
+      if (waiting.some(x => snap?.sources?.[x.key]?.ok)) return showNow(); // signed in now: show it
       paintUpdated(); toast(`Still not signed in to ${waiting.map(x => x.name).join(', ')}.`);
     }).catch(() => paintUpdated());
   };
@@ -284,8 +289,8 @@ LambdaData.ready.then(D => {
         updated.hidden = false; updated.innerHTML = `<span class="spin-dot"></span> loading ${esc(s.name)}…`;
         // A load already running here may have read the app before you signed in: let it finish, then read again.
         while (LambdaLive.busy()) await new Promise(r => setTimeout(r, 1000));
-        await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true }).catch(() => {});
-        return location.reload();
+        await LambdaLive.refresh(m => (updated.textContent = m), { retryAll: true, only: [s.key] }).catch(() => {}); // just this app
+        return showNow();
       }
     }
     watching = null;
@@ -306,7 +311,7 @@ LambdaData.ready.then(D => {
     if (a === 'later') { setLater(k, true); shown.delete(k); return renderSources(); }
     if (!isExt) return toast('Only in the extension (this is a preview).');
     if (a === 'signin') { signingIn = true; window.open(s.url, '_blank'); watchSignIn(s); return toast(`Sign in to ${s.name} there. Lambda OS notices when you're in and loads it by itself.`); }
-    if (a === 'retry') return checkAgain();
+    if (a === 'retry') return checkAgain(s?.key ? [s.key] : null);
     if (a === 'off') {
       const { settings: st = {} } = await chrome.storage.local.get('settings');
       await chrome.storage.local.set({ settings: { ...st, sources: { ...(st.sources || {}), [k]: false } } });

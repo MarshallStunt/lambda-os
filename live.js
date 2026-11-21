@@ -1052,26 +1052,27 @@ const LambdaLive = (() => {
         await new Promise(r => setTimeout(r, 2500)); return f(); } };
       // opts.onApp hears each app start and finish (the first-load screen shows them as a checklist).
       const tell = (k, state, why) => { try { opts.onApp?.({ key: k, name: NAMES[k], state, why }); } catch { /* display only */ } };
-      const go = (k, f) => { if (!on(k)) return off; if (resting(k)) return Promise.resolve(SKIP);
+      // opts.only = [app keys]: read just those (e.g. the app you just signed in to); every other app keeps its saved data.
+      const go = (k, f) => { if (!on(k)) return off; if (resting(k) || (opts.only && !opts.only.includes(k))) return Promise.resolve(SKIP);
         tell(k, 'loading');
         const p = once(f); p.then(() => tell(k, 'ready'), e => tell(k, e?.auth ? 'signin' : e?.access ? 'allow' : 'failed', String(e?.message || e))); return p; };
-      const val = v => v === SKIP ? null : v;
+      const val = (k, v) => v === SKIP ? prev?.[KEYS[k]] ?? null : v; // an app not read this time: its last saved data
       const nbP = go('netbox', () => netbox(s, progress));
       const jrP = go('jira', () => jira(s, progress));
       const gmP = go('gmail', () => gmail());
-      const calP = go('calendar', () => Promise.allSettled([gmP, jrP]).then(([g, j]) => calendar(s, val(g.value)?.email || val(j.value)?.me?.email)));
+      const calP = go('calendar', () => Promise.allSettled([gmP, jrP]).then(([g, j]) => calendar(s, val('gmail', g.value)?.email || val('jira', j.value)?.me?.email)));
       const results = {
         netbox: nbP, jira: jrP, gmail: gmP, calendar: calP,
         slack: go('slack', () => slack()),
         netsuite: go('netsuite', () => netsuite(s, progress)),
         atium: go('atium', () => atium(s)),
         grafana: go('grafana', () => grafana(s)),
-        yard: go('yard', () => jrP.catch(() => null).then(j => yard(s, val(j)))), // needs the ticket hosts first
+        yard: go('yard', () => jrP.catch(() => null).then(j => yard(s, val('jira', j)))), // needs the ticket hosts first
       };
       // Records one source's outcome in a snapshot (shared by the early core snapshot and the full one).
       const record = (snapshot, k, r) => {
         const key = KEYS[k];
-        if (r.status === 'fulfilled' && r.value === SKIP) { snapshot.sources[k] = prev.sources[k]; snapshot[key] = prev?.[key] || null; return; } // resting quiet source
+        if (r.status === 'fulfilled' && r.value === SKIP) { if (prev?.sources?.[k]) snapshot.sources[k] = prev.sources[k]; snapshot[key] = prev?.[key] || null; return; } // not read this time (resting, or not in opts.only)
         if (r.status === 'fulfilled' && r.value === undefined) { snapshot.sources[k] = { off: true, name: NAMES[k] }; snapshot[key] = null; return; }
         if (r.status === 'fulfilled') { snapshot.sources[k] = { ok: true, at: Date.now(), name: NAMES[k], everOk: true }; snapshot[key] = r.value; return; }
         const was = prev?.sources?.[k];
