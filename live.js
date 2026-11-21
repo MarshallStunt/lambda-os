@@ -404,13 +404,22 @@ const LambdaLive = (() => {
     await LambdaTabs.checkPaused(appKey, name); // backing off after a bot check: don't send anything
     const why = [];
     let res;
-    try {
-      const r = await fetch(url, { credentials: 'include' });
-      res = { ok: r.ok, status: r.status, type: r.headers.get('content-type') || '', url: r.url, text: await r.text() };
-      if (good(res)) return res;
-      await LambdaTabs.botCheck(appKey, name, res);
-      why.push(`direct: HTTP ${res.status}${/login|signin|ServiceLogin|accounts\.google/i.test(res.url) ? ', sent to sign-in' : ''}`);
-    } catch (e) { if (e.paused) throw e; why.push(`direct: ${e.message}`); }
+    // Once a direct request has been sent to a sign-in page, go straight to the app's tab for 30 minutes instead of
+    // asking again every refresh. NetSuite's direct request doesn't follow redirects: its "sign in" answer is a jump to
+    // Okta, which Chrome would block and log as a CORS error; a manual redirect is recognized quietly instead.
+    const SKIP_KEY = 'directSkip', skipFor = 30 * 60e3;
+    const skip = (await chrome.storage.session?.get(SKIP_KEY).catch(() => ({})) || {})[SKIP_KEY] || {};
+    if (Date.now() - (skip[appKey] || 0) > skipFor) {
+      try {
+        const r = await fetch(url, { credentials: 'include', ...(appKey === 'netsuite' ? { redirect: 'manual' } : {}) });
+        if (r.type === 'opaqueredirect') res = { ok: false, status: 302, type: '', url: 'sign-in redirect', text: '' };
+        else res = { ok: r.ok, status: r.status, type: r.headers.get('content-type') || '', url: r.url, text: await r.text() };
+        if (good(res)) return res;
+        await LambdaTabs.botCheck(appKey, name, res);
+        why.push(`direct: HTTP ${res.status}${/login|signin|sign-in|ServiceLogin|accounts\.google/i.test(res.url) ? ', sent to sign-in' : ''}`);
+      } catch (e) { if (e.paused) throw e; why.push(`direct: ${e.message}`); }
+      chrome.storage.session?.set({ [SKIP_KEY]: { ...skip, [appKey]: Date.now() } }).catch(() => {});
+    } else why.push('direct: skipped (sent to sign-in recently)');
     const s = await settings(), app = LambdaTabs.apps(s)[appKey];
     if (!app) throw new AuthError(`Not signed in to ${name} (${why.join('; ')}).`, login);
     let out;
