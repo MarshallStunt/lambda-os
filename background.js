@@ -226,4 +226,4 @@ chrome.runtime.onInstalled.addListener(d => { chrome.storage.local.get('installI
   if (d.reason === 'install') chrome.storage.local.set({ installId: String(Date.now()), freshInstall: true, adoptPinned: true });
   else if (!installId) chrome.storage.local.set({ installId: String(Date.now()) }); }).catch(() => {}); });
 chrome.runtime.onInstalled.addListener(d => { helloRackside(); scheduleBrief(); scheduleRefresh(); updateCheck(true).catch(() => {}); if (d.reason === 'install') chrome.tabs.create({ url: DASH() }); });
-chrome.runtime.onStartup.addListener(() => { helloRackside(); scheduleBrief(); scheduleRefresh(); });
+chrome.runtime.onStartup.addListener(() => { helloRackside(); scheduleBrief(); scheduleRefresh(); LambdaTabs.hiddenWindow().catch(() => {}); }); // after a restart: find the restored hidden window (merges any copies)

@@ -6,7 +6,7 @@
 const LambdaWebChat = (() => {
   const SITES = {
     claude: { name: 'Claude', url: 'https://claude.ai/new', host: 'claude.ai' },
-    chatgpt: { name: 'ChatGPT', url: 'https://chatgpt.com/', host: 'chatgpt.com' },
+    chatgpt: { name: 'ChatGPT', url: 'https://chatgpt.com/?temporary-chat=true', host: 'chatgpt.com' }, // temporary chat: kept out of your history
     gemini: { name: 'Gemini', url: 'https://gemini.google.com/app', host: 'gemini.google.com' },
   };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -118,6 +118,49 @@ const LambdaWebChat = (() => {
     return { started: true, busy: stopBtn || streaming, text, url: location.href };
   }
 
+  // Keeps Lambda OS questions out of your chat history: turns on the site's temporary / incognito chat when it has one
+  // (ChatGPT's link already asks for it; Gemini has a button). Returns { on } — whether the chat is temporary now.
+  async function pagePrivate() {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const vis = e => !!(e && (e.offsetParent || e.getClientRects().length));
+    const label = b => b.getAttribute('aria-label') || '';
+    const btns = () => [...document.querySelectorAll('button[aria-label]')].filter(vis);
+    const on = () => btns().some(b => /^(turn off|exit|leave|stop) (temporary|incognito)/i.test(label(b)));
+    if (on()) return { on: true };
+    const toggle = btns().find(b => /^(turn on|start|use|enable|open) (a )?(temporary|incognito)/i.test(label(b)) || /^(temporary|incognito)( chat)?$/i.test(label(b)));
+    if (!toggle) return { on: false };
+    toggle.click();
+    for (let i = 0; i < 12 && !on(); i++) await sleep(250);
+    return { on: on() };
+  }
+
+  // Fallback when there's no temporary chat: deletes (Claude) or hides (ChatGPT) the chat Lambda OS just used,
+  // with your own sign-in, from inside the chat page. Returns { ok }.
+  async function pageForget(site, expect) {
+    // Only ever the chat Lambda OS itself started for this answer: if the tab is now on any other chat (you opened one
+    // of yours in that window), nothing is touched.
+    const same = re => { const a = location.pathname.match(re)?.[1], b = String(expect || '').match(re)?.[1]; return !!a && a === b; };
+    if (!same(/\/(?:chat|c)\/([0-9a-f-]{8,})/)) return { ok: false, why: 'not-our-chat' };
+    try {
+      if (site === 'claude') {
+        const id = location.pathname.match(/\/chat\/([0-9a-f-]{36})/)?.[1]; if (!id) return { ok: false, why: 'no-id' };
+        let org = decodeURIComponent((document.cookie.match(/(?:^|;\s*)lastActiveOrg=([^;]+)/) || [])[1] || '');
+        if (!org) { const r = await fetch('/api/organizations', { credentials: 'include' }); org = (await r.json())?.[0]?.uuid; }
+        if (!org) return { ok: false, why: 'no-org' };
+        const r = await fetch(`/api/organizations/${org}/chat_conversations/${id}`, { method: 'DELETE', credentials: 'include' });
+        return { ok: r.ok, status: r.status };
+      }
+      if (site === 'chatgpt') {
+        const id = location.pathname.match(/\/c\/([0-9a-f-]{8,})/)?.[1]; if (!id) return { ok: false, why: 'no-id' };
+        const token = (await (await fetch('/api/auth/session', { credentials: 'include' })).json())?.accessToken;
+        if (!token) return { ok: false, why: 'no-token' };
+        const r = await fetch(`/backend-api/conversation/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ is_visible: false }) });
+        return { ok: r.ok, status: r.status };
+      }
+    } catch (e) { return { ok: false, why: String(e?.message || e) }; }
+    return { ok: false, why: 'unsupported' };
+  }
+
   function pageStop() {
     const b = [...document.querySelectorAll('button[aria-label]')].find(x => /^stop/i.test(x.getAttribute('aria-label')) && x.offsetParent);
     if (b) b.click();
@@ -147,6 +190,10 @@ const LambdaWebChat = (() => {
     });
   }
   async function hiddenWindow(url) {
+    // Shares Lambda OS's one hidden window with the app tabs (apptabs.js), so there's never more than one.
+    if (typeof LambdaTabs !== 'undefined' && LambdaTabs.openHidden) {
+      try { const tab = await LambdaTabs.openHidden(url); return { tabId: tab.id, windowId: tab.windowId }; } catch { /* fall back to a window of its own */ }
+    }
     let win;
     try { win = await chrome.windows.create({ url, focused: false, state: 'minimized' }); }
     catch { win = await chrome.windows.create({ url, focused: false, width: 900, height: 700 }); chrome.windows.update(win.id, { state: 'minimized' }).catch(() => {}); }
@@ -157,8 +204,12 @@ const LambdaWebChat = (() => {
     const S = SITES[site];
     let w = await worker();
     if (w) {
+      let tab = await alive(w.tabId);
+      if (tab && typeof LambdaTabs !== 'undefined' && LambdaTabs.moveHidden) tab = await LambdaTabs.moveHidden(tab); // the old Ask AI window → the shared one
       await chrome.tabs.update(w.tabId, { url: S.url });
-      chrome.windows.get(w.windowId).then(win => { if (!win.focused && win.state !== 'minimized') chrome.windows.update(w.windowId, { state: 'minimized' }); }).catch(() => {});
+      w.windowId = tab?.windowId ?? w.windowId;
+      if (typeof LambdaTabs !== 'undefined' && LambdaTabs.hideAgain) await LambdaTabs.hideAgain(w.windowId);
+      else chrome.windows.get(w.windowId).then(win => { if (!win.focused && win.state !== 'minimized') chrome.windows.update(w.windowId, { state: 'minimized' }); }).catch(() => {});
     } else w = await hiddenWindow(S.url);
     w = { tabId: w.tabId, windowId: w.windowId, site, conv, turns: 0 };
     await setW(w);
@@ -175,12 +226,14 @@ const LambdaWebChat = (() => {
     return { s: p.check ? 'check' : p.login ? 'login' : p.ready ? 'ready' : 'loading', limit: p.limit };
   }
   // Brings the chat window up for the person to act on…
-  function reveal(w) {
+  async function reveal(w) {
+    const t = await alive(w.tabId); if (t) w.windowId = t.windowId;
     chrome.windows.update(w.windowId, { state: 'normal', focused: true }).catch(() => {});
     chrome.tabs.update(w.tabId, { active: true }).catch(() => {});
   }
   // …and puts things back: chat window minimized, the Lambda OS tab in front again.
-  function comeBack(w, home) {
+  async function comeBack(w, home) {
+    const t = await alive(w.tabId); if (t) w.windowId = t.windowId;
     chrome.windows.update(w.windowId, { state: 'minimized' }).catch(() => {});
     if (home) { chrome.windows.update(home.windowId, { focused: true }).catch(() => {}); chrome.tabs.update(home.id, { active: true }).catch(() => {}); }
   }
@@ -198,17 +251,17 @@ const LambdaWebChat = (() => {
       if (st.s === 'closed') throw fail('closed', `The ${S.name} window was closed.`);
       if (st.limit) throw fail('limit', `${S.name} says: “${st.limit.slice(0, 200)}”`);
       if (st.s === 'ready') {
-        if (shown) { comeBack(w, home); yield { wait: null }; await sleep(800); }
+        if (shown) { await comeBack(w, home); yield { wait: null }; await sleep(800); }
         return true;
       }
       if ((st.s === 'login' || st.s === 'check') && shown !== st.s) {
-        shown = st.s; reveal(w); if (st.s === 'login') forget();
+        shown = st.s; await reveal(w); if (st.s === 'login') forget();
         yield { wait: st.s === 'login'
           ? `Sign in to ${S.name} in the window that just opened. Lambda OS brings you back here and asks your question as soon as you're in.`
           : `${S.name} wants to check you're human. Finish that in the window that just opened; Lambda OS brings you back here and continues.` };
       }
       if (!shown && st.s === 'loading' && Date.now() - t0 > 20000) { // neither ready nor asking for anything: let the person look
-        shown = 'stuck'; reveal(w);
+        shown = 'stuck'; await reveal(w);
         yield { wait: `${S.name} hasn't finished loading. Have a look in the window that just opened (sign in, or close any pop-up); Lambda OS continues as soon as the chat box shows.` };
       }
       if (Date.now() - t0 > 600000) throw fail('timeout', `Gave up waiting for ${S.name} after 10 minutes.`);
@@ -217,17 +270,29 @@ const LambdaWebChat = (() => {
   }
 
   // Only one question at a time goes through the shared window; a second Lambda OS tab waits its turn.
+  // The marker names this page (not the conversation), so a new chat, Stop, or a reload never makes Ask AI wait for
+  // itself; a closed tab, an earlier load of the same tab, or a marker not renewed for 15 seconds counts as free.
+  const PAGE = Math.random().toString(36).slice(2);
+  let myTab = null;
+  const tabId = async () => myTab ??= (chrome.tabs.getCurrent ? (await chrome.tabs.getCurrent().catch(() => null))?.id ?? null : null);
+  async function held() { // another page's marker, if that page is really still asking
+    const l = (await chrome.storage.session.get(LOCK))[LOCK];
+    if (!l || l.page === PAGE || Date.now() - l.at > 15000) return null;
+    if (l.tab != null && l.tab === await tabId()) return null;            // an earlier load of this same tab
+    if (l.tab != null && !(await alive(l.tab))) return null;              // that tab was closed mid-question
+    return l;
+  }
   async function lock(signal) {
     for (let i = 0; i < 300; i++) {
-      const l = (await chrome.storage.session.get(LOCK))[LOCK];
-      if (!l || l.conv === conv || Date.now() - l.at > 120000) { await chrome.storage.session.set({ [LOCK]: { conv, at: Date.now() } }); return true; }
+      if (!(await held())) { await beat(); return true; }
       if (signal?.aborted) return false;
       await sleep(1000);
     }
     return true;
   }
-  const beat = () => chrome.storage.session.set({ [LOCK]: { conv, at: Date.now() } });
-  const unlock = async () => { const l = (await chrome.storage.session.get(LOCK))[LOCK]; if (l?.conv === conv) await chrome.storage.session.remove(LOCK); };
+  const beat = async () => chrome.storage.session.set({ [LOCK]: { page: PAGE, at: Date.now(), tab: await tabId() } });
+  const unlock = async () => { const l = (await chrome.storage.session.get(LOCK))[LOCK]; if (l?.page === PAGE) await chrome.storage.session.remove(LOCK); };
+  if (typeof addEventListener === 'function') addEventListener('pagehide', () => { unlock(); }); // closing or leaving the tab frees the window
 
   /* ---------- Automatic: use whichever chat you're already signed in to ---------- */
   // A quiet yes/no per site, with your browser's own sign-in (nothing opens, nothing is kept but the yes/no):
@@ -267,18 +332,21 @@ const LambdaWebChat = (() => {
     site = await pick(site);
     const S = SITES[site]; if (!S) throw new Error('Unknown chat site.');
     yield { using: site };
-    const l = (await chrome.storage.session.get(LOCK))[LOCK];
-    if (l && l.conv !== conv && Date.now() - l.at < 120000) yield { note: 'Waiting for another Ask AI question to finish…' };
+    if (await held()) yield { note: 'Waiting for an Ask AI question in another Lambda OS tab to finish…' };
     if (!(await lock(signal))) return;
+    const keepAlive = setInterval(() => beat().catch(() => {}), 3000); // renewed the whole time, even during a long paste
     try {
       let w = await worker();
-      const follow = w && w.site === site && w.conv === conv && history.length && w.turns === history.length / 2;
+      // A follow-up continues the same chat, unless that chat was already deleted from your history (then it starts a new one with the earlier turns).
+      const follow = w && w.site === site && w.conv === conv && !w.gone && history.length && w.turns === history.length / 2;
       let text;
       if (follow) text = user;
       else {
         yield { note: `Opening ${S.name}…` };
         w = await openChat(site);
         if (!(yield* ready(site, w, signal))) return;
+        try { w.private = !!(await run(w.tabId, pagePrivate))?.on; } catch { w.private = false; }
+        await setW(w);
         const earlier = history.length ? `EARLIER IN THIS CONVERSATION:\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : '';
         text = `${system}\n\n${earlier}${user}`;
       }
@@ -289,7 +357,7 @@ const LambdaWebChat = (() => {
       if (!sent?.ok) throw fail('layout', `Couldn't find the ${S.name} message box. ${S.name} may have changed its page; try another chat below, or update Lambda OS.`);
       w.turns++; await setW(w);
       yield { note: `${S.name} is thinking…` };
-      let last = '', same = 0, started = false, idle = 0;
+      let last = '', same = 0, started = false, idle = 0, ourChat = '';
       const t0 = Date.now();
       while (true) {
         if (signal?.aborted) { run(w.tabId, pageStop).catch(() => {}); return; }
@@ -302,7 +370,7 @@ const LambdaWebChat = (() => {
           if (Date.now() - t0 > 120000) throw fail('timeout', `${S.name} hasn't answered after 2 minutes. Click “Show ${S.name}” to see what it's doing.`);
           continue;
         }
-        if (!started) { started = true; yield { note: `${S.name} is writing…` }; }
+        if (!started) { started = true; ourChat = r.url; yield { note: `${S.name} is writing…` }; } // the chat Lambda OS started
         myUrl = r.url || myUrl;
         if (r.text !== last) {
           if (r.text.startsWith(last)) yield { text: r.text.slice(last.length) }; else yield { full: r.text };
@@ -312,7 +380,13 @@ const LambdaWebChat = (() => {
         if (!r.busy && !last && same >= 6) break;
         if (Date.now() - t0 > 600000) break;
       }
-    } finally { await unlock(); }
+      // Keep it out of your chat history: a temporary chat already is; otherwise delete/hide it now that the answer is in.
+      if (w.private) myUrl = '';
+      else if (last) {
+        let f = null; try { f = await run(w.tabId, pageForget, [site, ourChat]); } catch { /* page busy or gone */ }
+        if (f?.ok) { w.gone = true; myUrl = ''; await setW(w); }
+      }
+    } finally { clearInterval(keepAlive); await unlock(); }
   }
 
   // "Open in Claude": brings up the hidden window if it's still on this conversation, otherwise opens the chat in a tab.

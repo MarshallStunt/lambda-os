@@ -108,6 +108,108 @@ const LambdaTabs = (() => {
     });
   }
 
+  /* ---------------- the hidden window ---------------- */
+  // Lambda OS keeps its own tabs (app tabs, temporary tabs, the Ask AI chat) in ONE minimized window, so none of them
+  // show up in your tab bar. The window is marked by a small Lambda OS page (hidden.html) pinned first in it, so any
+  // part of Lambda OS (the background worker, every open dashboard) finds the same window, even after Chrome restarts
+  // and restores it with new ids. If two ever exist (two parts made one at the same moment), everything moves into the
+  // older one and the other closes.
+  const HIDDEN_KEY = 'hiddenWindow', MAKING_KEY = 'hiddenMaking';
+  const MARKER = () => chrome.runtime.getURL('hidden.html');
+  const isMarker = t => urlOf(t) === MARKER();
+  let making = null;
+  async function hiddenWindow() {
+    const marks = await chrome.tabs.query({ url: MARKER() }).catch(() => []);
+    const legacyId = (await chrome.storage.session.get(HIDDEN_KEY).catch(() => ({})))[HIDDEN_KEY];
+    const legacy = legacyId != null ? await chrome.windows.get(legacyId).catch(() => null) : null; // made before the marker page
+    const ids = [...new Set(marks.map(t => t.windowId))].sort((x, y) => x - y);
+    if (!ids.length) return legacy?.id ?? null;
+    const main = ids[0];
+    for (const wid of [...ids.slice(1), ...(legacy && !ids.includes(legacy.id) ? [legacy.id] : [])]) await mergeInto(main, wid);
+    if (legacyId !== main) await chrome.storage.session.set({ [HIDDEN_KEY]: main }).catch(() => {});
+    return main;
+  }
+  // Moves every tab of window `from` into `main` (pinned ones stay pinned), then closes what's left of `from`.
+  async function mergeInto(main, from) {
+    const tabs = await chrome.tabs.query({ windowId: from }).catch(() => []);
+    for (const t of tabs) {
+      if (isMarker(t)) continue;
+      try { await chrome.tabs.move(t.id, { windowId: main, index: -1 }); if (t.pinned) await chrome.tabs.update(t.id, { pinned: true }); } catch { /* busy: next sweep */ }
+    }
+    for (const t of tabs.filter(isMarker)) await chrome.tabs.remove(t.id).catch(() => {}); // the window closes once empty
+  }
+  // Another part of Lambda OS may be making the window right now: wait for theirs instead of making a second one.
+  async function waitForOthers() {
+    const m = (await chrome.storage.session.get(MAKING_KEY).catch(() => ({})))[MAKING_KEY];
+    if (!m || Date.now() - m > 8000) return null;
+    for (let i = 0; i < 16; i++) { await sleep(500); const w = await hiddenWindow(); if (w != null) return w; }
+    return null;
+  }
+  // A new minimized window that never steals focus, holding the marker page (and `tabId`, when moving one in).
+  function makeWindow(opts = {}) {
+    return making ??= (async () => {
+      let wid = await waitForOthers();
+      if (wid == null) {
+        await chrome.storage.session.set({ [MAKING_KEY]: Date.now() }).catch(() => {});
+        try {
+          let win;
+          try { win = await chrome.windows.create({ url: MARKER(), focused: false, state: 'minimized' }); }
+          catch { win = await chrome.windows.create({ url: MARKER(), focused: false, width: 900, height: 700 }); chrome.windows.update(win.id, { state: 'minimized' }).catch(() => {}); }
+          const mark = win.tabs?.[0]; if (mark) await chrome.tabs.update(mark.id, { pinned: true }).catch(() => {});
+          wid = (await hiddenWindow()) ?? win.id; // if someone else made one at the same moment, this merges the two
+        } finally { await chrome.storage.session.remove(MAKING_KEY).catch(() => {}); }
+      }
+      if (opts.tabId != null) await chrome.tabs.move(opts.tabId, { windowId: wid, index: -1 }).catch(() => {});
+      return { id: wid };
+    })().finally(() => { making = null; });
+  }
+  // Opens url as a background tab in the hidden window (pinned ones right after the marker, so they're found again).
+  async function openHidden(url, { pinned = false } = {}) {
+    const wid = (await hiddenWindow()) ?? (await makeWindow()).id;
+    const tab = await chrome.tabs.create({ windowId: wid, url, active: false, pinned, ...(pinned ? { index: 1 } : {}) });
+    await hideAgain(wid);
+    return tab;
+  }
+  // The window was brought up (for a sign-in, or by you) and you've moved on: minimize it again. Left alone while you're
+  // in it, or while the tab in front is still a sign-in page (you may be fetching a code in another window).
+  async function hideAgain(wid) {
+    if (wid == null) return;
+    const w = await chrome.windows.get(wid, { populate: true }).catch(() => null);
+    if (!w || w.state === 'minimized' || w.focused) return;
+    if ((w.tabs || []).some(t => t.active && pageKind(urlOf(t), t.title) === 'signin')) return; // the sign-in you were shown
+    await chrome.windows.update(wid, { state: 'minimized' }).catch(() => {});
+  }
+  // Moves one of our tabs (an old pinned tab in your window, the old Ask AI window's tab) into the hidden window.
+  async function moveHidden(tab) {
+    const wid = await hiddenWindow();
+    if (tab.windowId === wid) return tab;
+    try {
+      if (wid != null) await chrome.tabs.move(tab.id, { windowId: wid, index: tab.pinned ? 1 : -1 });
+      else await makeWindow({ tabId: tab.id });
+      if (tab.pinned) await chrome.tabs.update(tab.id, { pinned: true });
+      return (await chrome.tabs.get(tab.id).catch(() => null)) || tab;
+    } catch { return tab; } // couldn't move it (dragging, a dialog): leave it where it is
+  }
+  // One part of Lambda OS at a time for a given job (opening an app's tab): the background worker and every open
+  // dashboard share this through session storage, so they don't each open a copy.
+  async function xlock(name, fn) {
+    const k = 'tabLock:' + name;
+    for (let i = 0; i < 60; i++) {
+      const v = (await chrome.storage.session.get(k).catch(() => ({})))[k];
+      if (!v || Date.now() - v > 45000) break;
+      await sleep(500);
+    }
+    await chrome.storage.session.set({ [k]: Date.now() }).catch(() => {});
+    try { return await fn(); } finally { await chrome.storage.session.remove(k).catch(() => {}); }
+  }
+  // Is the person looking at this tab? A tab in the hidden window only counts while that window is up and focused.
+  async function looking(tab) {
+    if (!tab?.active) return false;
+    if (tab.windowId !== await hiddenWindow()) return true;
+    const w = await chrome.windows.get(tab.windowId).catch(() => null);
+    return !!w && w.state !== 'minimized' && w.focused;
+  }
+
   /* ---------------- our pinned tabs ---------------- */
   // Pinned tabs at exactly the address we opened, or last saw our tab on (?query and #hash ignored). After a restart
   // these are the candidates to adopt; a pinned tab of yours elsewhere in the app (another Slack channel) never counts.
@@ -120,7 +222,7 @@ const LambdaTabs = (() => {
   function ownTab(app, { create = true } = {}) {
     const lockKey = `${app.key}:${create}`;
     if (!locks.has(lockKey)) {
-      locks.set(lockKey, (async () => {
+      locks.set(lockKey, xlock(app.key, async () => {
         const rec = (await load(OWN_KEY))[app.key];
         let tab = rec?.id != null ? await chrome.tabs.get(rec.id).catch(() => null) : null;
         if (tab && !tab.pinned) { await saveOwn(app.key, null); tab = null; } // the user unpinned it: it's theirs now
@@ -131,14 +233,15 @@ const LambdaTabs = (() => {
         if (tab) {
           // Other pinned tabs at the same address are left alone: they may be your own (e.g. your pinned Gmail).
           if (tab.id !== rec?.id) await saveOwn(app.key, { ...rec, id: tab.id });
+          if (!(await looking(tab))) tab = await moveHidden(tab); // older versions pinned it in your window
           return { tab, rec: { ...rec, id: tab.id } };
         }
         if (!create) return null;
-        tab = await chrome.tabs.create({ url: app.url, active: false, pinned: true });
+        tab = await openHidden(app.url, { pinned: true });
         const fresh = { id: tab.id, refreshedAt: Date.now(), createdAt: Date.now() };
         await saveOwn(app.key, fresh);
         return { tab, rec: fresh };
-      })().finally(() => locks.delete(lockKey)));
+      }).finally(() => locks.delete(lockKey)));
     }
     return locks.get(lockKey);
   }
@@ -151,10 +254,10 @@ const LambdaTabs = (() => {
     if (kind) {
       // Stuck on a sign-in or bot-check page. Every 30 minutes (and after a pause ends) look once more at the app,
       // in case you signed in elsewhere; otherwise stop here. Never while you're looking at the tab.
-      if (!depth && stale && !tab.active) action = 'navigate';
+      if (!depth && stale && !(await looking(tab))) action = 'navigate';
       else if (kind === 'bot') throw pausedError(app.name, await pause(app.key));
       else throw signInError(app);
-    } else if (tab.active) return remember(app, tab.status === 'complete' || app.busyOk ? tab : (await waitComplete(tab.id)) || tab, rec);
+    } else if (await looking(tab)) return remember(app, tab.status === 'complete' || app.busyOk ? tab : (await waitComplete(tab.id)) || tab, rec);
     else if (!atHome(app, u)) {
       if (depth) throw new TabError(`${app.name}: the pinned tab keeps leaving ${app.url} (now at ${originOf(u) || 'an unknown page'}).`);
       action = 'navigate';
@@ -190,22 +293,22 @@ const LambdaTabs = (() => {
     for (const [id, t] of Object.entries(all)) {
       const tab = await chrome.tabs.get(Number(id)).catch(() => null);
       if (!tab) delete all[id];
-      else if (tab.active) all[id].at = now;
+      else if (await looking(tab)) all[id].at = now;
       else if (now - t.at > TEMP_IDLE_MS) { await chrome.tabs.remove(tab.id).catch(() => {}); delete all[id]; }
     }
     await chrome.storage[area].set({ [TEMP_KEY]: all });
   }
-  async function tempTab(app) {
+  const tempTab = app => xlock('temp:' + app.key, async () => {
     const area = tempArea(), all = await load(TEMP_KEY, area);
     for (const [id, t] of Object.entries(all)) {
       if (t.app !== app.key) continue;
       const tab = await chrome.tabs.get(Number(id)).catch(() => null);
       if (tab) { await markTemp(tab.id, app.key); return tab; }
     }
-    const tab = await chrome.tabs.create({ url: app.url, active: false });
+    const tab = await openHidden(app.url);
     await markTemp(tab.id, app.key);
     return tab;
-  }
+  });
 
   /* ---------------- choosing the tab to read from ---------------- */
   async function mine() {
@@ -229,6 +332,7 @@ const LambdaTabs = (() => {
     if (!useOwn) throw new TabError(`Open ${app.name} in a Chrome tab to connect it (or turn on "Keep pinned tabs" in Settings → Data).`, { signIn: true, login: app.url });
     if (!app.pinned) return { tab: await heal(app, await tempTab(app)), own: true };
     const o = await ownTab(app);
+    if (!app.always) saveOwn(app.key, { ...((await load(OWN_KEY))[app.key] || o.rec), usedAt: Date.now() }).catch(() => {});
     return { tab: await heal(app, o.tab, o.rec), own: true };
   }
 
@@ -244,7 +348,7 @@ const LambdaTabs = (() => {
         ({ tab, own } = await appTab(app, { ...opts, skipUser: true }));
         return { result: await exec(tab), own, tab };
       }
-      if (tab.active) throw e; // don't reload a tab the user is looking at
+      if (await looking(tab)) throw e; // don't reload a tab the user is looking at
       await chrome.tabs.reload(tab.id);
       const loaded = await waitComplete(tab.id, app.busyOk ? 12e3 : LOAD_TIMEOUT_MS);
       if (!loaded) throw e;
@@ -256,7 +360,7 @@ const LambdaTabs = (() => {
 
   // Reload our own tab once (e.g. Slack still starting) and check it again. Never used on the user's tabs.
   async function reload(app, tab) {
-    if (tab.active) return tab;
+    if (await looking(tab)) return tab;
     await chrome.tabs.reload(tab.id);
     const loaded = await waitComplete(tab.id, app.busyOk ? 12e3 : LOAD_TIMEOUT_MS);
     if (!loaded) throw new TabError(`${app.name}: the tab closed while reloading.`);
@@ -291,10 +395,45 @@ const LambdaTabs = (() => {
       catch (e) { status[app.key] = e.message; }
     }
     await closeTempTabs();
+    await sweep(A).catch(e => console.warn('sweep', e));
     return status;
   }
 
-  return { apps, appTab, ownTab, pinnedCopies, heal, reload, run, markTemp, closeTempTabs, tick, closeOwn, checkPaused, botCheck, pause, pageKind, TabError };
+  // Keeps the hidden window to the minimum: one marker page, our tabs, nothing else of ours. Closes stray copies of our
+  // apps' pages (from two parts of Lambda OS opening the same tab at once, or an old restored session), Gmail/Yard tabs
+  // nobody has read from for an hour, and the whole window once nothing in it is needed. Never touches a tab you're
+  // looking at, or a page that isn't one of our apps (if you dragged a tab of yours in there).
+  const UNUSED_MS = 60 * 60e3;
+  const CHAT_ORIGINS = ['https://claude.ai', 'https://chatgpt.com', 'https://gemini.google.com'];
+  async function sweep(A) {
+    const wid = await hiddenWindow(); if (wid == null) return;
+    const recs = await load(OWN_KEY);
+    for (const [key, rec] of Object.entries(recs)) { // pinned tabs that are only opened when needed close again after an hour unused
+      const app = A[key]; if (!app || app.always) continue;
+      if (!rec.usedAt) { await saveOwn(key, { ...rec, usedAt: Date.now() }); continue; }
+      const tab = rec.id != null ? await chrome.tabs.get(rec.id).catch(() => null) : null;
+      if (tab && Date.now() - rec.usedAt > UNUSED_MS && !(await looking(tab))) await closeOwn(key);
+    }
+    const own = new Set(Object.values(await load(OWN_KEY)).map(r => r.id));
+    const temp = new Set(Object.keys(await load(TEMP_KEY, tempArea())).map(Number));
+    const chat = (await chrome.storage.session.get('webchatWorker').catch(() => ({}))).webchatWorker?.tabId;
+    const ours = new Set([...Object.values(A).map(a => originOf(a.url)), ...CHAT_ORIGINS]);
+    const tabs = await chrome.tabs.query({ windowId: wid });
+    const marks = tabs.filter(isMarker);
+    for (const m of marks.slice(1)) await chrome.tabs.remove(m.id).catch(() => {}); // one marker is enough
+    let keep = 0;
+    for (const t of tabs) {
+      if (isMarker(t)) continue;
+      if (own.has(t.id) || temp.has(t.id) || t.id === chat || await looking(t)) { keep++; continue; }
+      const u = urlOf(t);
+      if (!u || u === 'about:blank' || ours.has(originOf(u))) await chrome.tabs.remove(t.id).catch(() => {});
+      else keep++; // not one of ours: leave it
+    }
+    if (!keep) for (const m of marks) await chrome.tabs.remove(m.id).catch(() => {}); // nothing needed: close the window
+    else await hideAgain(wid);
+  }
+
+  return { hiddenWindow, openHidden, moveHidden, hideAgain, looking, apps, appTab, ownTab, pinnedCopies, heal, reload, run, markTemp, closeTempTabs, tick, closeOwn, checkPaused, botCheck, pause, pageKind, TabError };
 })();
 
 if (typeof self !== 'undefined') self.LambdaTabs = LambdaTabs;

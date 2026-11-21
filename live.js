@@ -65,7 +65,12 @@ const LambdaLive = (() => {
   class AuthError extends Error { constructor(msg, login) { super(msg); this.auth = true; this.login = login; } }
   const decode = s => String(s || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
 
+  // Server use (the hosted web version): service credentials per app, e.g. { Jira: 'Basic …', Grafana: 'Bearer …' }.
+  // Empty in the extension, which always uses your browser sign-ins.
+  const SERVER_AUTH = {};
+  const setServerAuth = a => Object.assign(SERVER_AUTH, a || {});
   async function getJson(url, { headers = {}, login, name }) {
+    if (SERVER_AUTH[name] && !headers.Authorization) headers = { ...headers, Authorization: SERVER_AUTH[name] };
     let res;
     try {
       res = await fetch(url, { headers: { Accept: 'application/json', ...headers }, credentials: headers.Authorization ? 'omit' : 'include' });
@@ -83,7 +88,7 @@ const LambdaLive = (() => {
   /* ---------------- NetBox ---------------- */
   // ~97% of NetBox changes come from automation accounts (podcrawler, nexus…); the feed shows people only.
   const isPerson = c => /@/.test(c.user_name || '');
-  const nbHeaders = s => { const t = (s.netboxToken || '').trim(); return t ? { Authorization: t.startsWith('nbt_') ? `Bearer ${t}` : `Token ${t}` } : {}; };
+  const nbHeaders = s => { const t = (s.netboxToken || '').trim().replace(/^(Bearer|Token)\s+/i, ''); /* pasted with or without the scheme */ return t ? { Authorization: t.startsWith('nbt_') ? `Bearer ${t}` : `Token ${t}` } : {}; };
   async function netbox(s, progress) {
     const base = trim(s.netboxUrl), headers = nbHeaders(s);
     const get = path => getJson(base + path, { headers, login: `${base}/login/`, name: 'NetBox' });
@@ -310,8 +315,8 @@ const LambdaLive = (() => {
     if (!names.length) return null;
     const scope = stripOrder(s.fleetJql).replace(/\s+AND\s+statusCategory\s*!=\s*Done/i, '').replace(/statusCategory\s*!=\s*Done\s+AND\s+/i, '');
     const count = async day => {
-      const r = await fetch(`${base}/rest/api/3/search/approximate-count`, { method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Atlassian-Token': 'no-check' },
+      const r = await fetch(`${base}/rest/api/3/search/approximate-count`, { method: 'POST', credentials: SERVER_AUTH.Jira ? 'omit' : 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Atlassian-Token': 'no-check', ...(SERVER_AUTH.Jira ? { Authorization: SERVER_AUTH.Jira } : {}) },
         body: JSON.stringify({ jql: `(${scope}) AND status WAS IN (${names.map(n => JSON.stringify(n)).join(', ')}) ON "${day}"` }) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return (await r.json()).count;
@@ -494,7 +499,7 @@ const LambdaLive = (() => {
       ({ result, own, tab } = await read());
       // Still starting up, or the stored session looks stale: reload our own tab once and look again before deciding
       // anything (a tab you're using is never reloaded). Only a real sign-in page counts as signed out.
-      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
+      if (!result?.ok && own && !(await LambdaTabs.looking(tab))) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
     } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Slack: couldn't read through the Slack tab (${e.message}).`); }
     if (result?.error === 'LOADING') throw new Error('Slack is still loading in its tab; trying again next refresh.');
     if (!result?.ok && own && /not signed in/i.test(result?.error || '')) throw new AuthError('SIGN_IN: sign in once in the pinned Slack tab', app.url);
@@ -717,7 +722,7 @@ const LambdaLive = (() => {
     try {
       ({ result, own, tab } = await read());
       // Still loading, or its sign-in just expired: reload our own tab once (Atium renews its sign-in on load).
-      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
+      if (!result?.ok && own && !(await LambdaTabs.looking(tab))) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); }
     } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Atium: couldn't read through the Atium tab (${e.message}).`); }
     if (result?.error === 'LOADING') throw new Error('Atium is still loading in its tab; trying again next refresh.');
     if (!result?.ok && (result?.auth || /not signed in/i.test(result?.error || ''))) throw new AuthError(own ? 'SIGN_IN: sign in once in the pinned Atium tab' : 'Not signed in to Atium.', app.url);
@@ -759,7 +764,7 @@ const LambdaLive = (() => {
     try {
       base = base || location.origin;
       const get = async p => {
-        const r = await fetch(base + p, { credentials: 'include', headers: { Accept: 'application/json' } });
+        const r = await fetch(base + p, { credentials: SERVER_AUTH.Grafana ? 'omit' : 'include', headers: { Accept: 'application/json', ...(SERVER_AUTH.Grafana ? { Authorization: SERVER_AUTH.Grafana } : {}) } });
         const type = r.headers.get('content-type') || '';
         if (r.status === 401 || r.status === 403 || /\/login/.test(r.url) || type.includes('text/html')) throw Object.assign(new Error('Not signed in to Grafana.'), { auth: true });
         if (!r.ok) throw new Error(`${p.split('?')[0]}: HTTP ${r.status}`);
@@ -948,7 +953,7 @@ const LambdaLive = (() => {
     let result, own, tab;
     try {
       ({ result, own, tab } = await read());
-      if (!result?.ok && own && !tab.active) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); } // its sign-in renews on load
+      if (!result?.ok && own && !(await LambdaTabs.looking(tab))) { await LambdaTabs.reload(app, tab); ({ result, own, tab } = await read()); } // its sign-in renews on load
     } catch (e) { if (e.auth || e.paused) throw e; throw new Error(`Yard: couldn't read through the Yard Central tab (${e.message}).`); }
     if (result?.error === 'LOADING') throw new Error('Yard Central is still loading in its tab; trying again next refresh.');
     if (!result?.ok && result?.auth) throw new AuthError(own ? 'SIGN_IN: sign in once in the pinned Yard Central tab' : 'Not signed in to Yard Central.', app.url);
@@ -1314,7 +1319,7 @@ const LambdaLive = (() => {
     return [on('jira') && o('jiraUrl'), on('netbox') && o('netboxUrl'), on('netsuite') && o('netsuiteUrl'), on('atium') && o('atiumUrl'), on('grafana') && o('grafanaUrl'), on('yard') && o('yardUrl'),
       on('slack') && 'https://app.slack.com/*', on('gmail') && 'https://mail.google.com/*', on('calendar') && 'https://calendar.google.com/*'].filter(Boolean);
   }
-  return { DEFAULTS, NAMES, settings, refresh, busy, probe, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup, linkedJira, linkedNetbox, linkedSlack, traceJira, traceNetbox };
+  return { DEFAULTS, NAMES, settings, refresh, setServerAuth, busy, probe, pollFeed, originsFor, atiumPOs, atiumOnsite, yardLookup, linkedJira, linkedNetbox, linkedSlack, traceJira, traceNetbox };
 })();
 
 if (typeof self !== 'undefined') self.LambdaLive = LambdaLive;

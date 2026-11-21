@@ -3779,10 +3779,8 @@ Values like [PERSON_2] or [IP_1] are privacy placeholders: use them as-is and ne
       const sent = `SYSTEM PROMPT\n${AI_SYSTEM}\n\n${history.length ? `—— EARLIER TURNS (${history.length / 2}) ——\n${history.map(h => `[${h.role}] ${h.content}`).join('\n\n')}\n\n` : ''}—— THIS MESSAGE (exactly as sent${SET.privacy.mode === 'redact' ? `; masked so far: ${R.summary() || 'none'}` : ''}) ——\n${userMsg}`;
       el.querySelectorAll('[data-aip-chat]').forEach(b => (b.onclick = () => LambdaWebChat.show()));
       if (failed) { scroll(); return; }
-      el.insertAdjacentHTML('beforeend', `<div class="aip-tools" data-hq="${esc(q)}"><button class="chip" data-aip-sent>What was sent</button><button class="chip" data-aip-copy>Copy</button><button class="chip" data-aip-chat title="Show the hidden ${esc(NAME)} chat this answer came from">Open in ${esc(NAME)} ↗</button></div><pre class="ai-sent" hidden></pre>`);
+      el.insertAdjacentHTML('beforeend', `<div class="aip-tools" data-hq="${esc(q)}"><button class="chip" data-aip-sent>What was sent</button></div><pre class="ai-sent" hidden></pre>`);
       el.querySelector('.ai-sent').textContent = sent;
-      el.querySelector('[data-aip-copy]').onclick = () => navigator.clipboard?.writeText(R.restore(raw)).then(() => toast('Copied.'));
-      const oc = el.querySelector('[data-aip-chat]'); if (oc) oc.onclick = () => LambdaWebChat.show();
       el.querySelector('[data-aip-sent]').onclick = () => { const p = el.querySelector('.ai-sent'); p.hidden = !p.hidden; };
       if (raw) turns.push({ q, raw });
       scroll();
