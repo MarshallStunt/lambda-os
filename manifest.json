@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Lambda OS",
   "version": "0.15.2",
-  "description": "Ops command center for Lambda: sites, inventory, tickets, projects and deployments from NetBox, Jira, NetSuite, Slack, Gmail and Calendar.",
+  "description": "DC Ops command center for Lambda: sites, tickets, deployments, inventory and alerts from NetBox, Jira, Slack, Grafana and more.",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
@@ -47,9 +47,7 @@
     "management"
   ],
   "optional_host_permissions": [
-    "https://*/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://*/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

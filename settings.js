@@ -276,6 +276,10 @@ async function showUpdate(force) {
   let u;
   try { u = await chrome.runtime.sendMessage({ type: 'update-check', force }); } catch { u = null; }
   u ||= await LambdaUpdates.check(force);
+  if (u.store) { // updates come from the Chrome Web Store by themselves
+    $('updStatus').innerHTML = `✓ You have version ${esc(u.current)}. Installed from Lambda's Chrome Web Store listing, so new versions arrive automatically.`;
+    $('updCheck').hidden = true; $('updHow').hidden = true; $('updLater').hidden = true; return;
+  }
   $('updStatus').innerHTML = !u.ok ? `You have ${esc(u.current)}. <span class="st-critical">Couldn't check: ${esc(u.error)}.</span>`
     : u.available ? `<b class="st-good">🆕 Version ${esc(u.latest)} is available</b> (you have ${esc(u.current)}).` : `✓ You have the latest version (${esc(u.current)}).`;
   if (u.latest) $('updZipName').textContent = `lambda-os-${u.latest}.zip`;

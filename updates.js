@@ -21,9 +21,13 @@ const LambdaUpdates = (() => {
     return false;
   };
 
-  // → { ok, latest, current, available, error, at }
+  // Installed from the Chrome Web Store (Lambda's private listing): Chrome adds an update_url and updates it by itself,
+  // so there's nothing to check on GitHub and no banner to show.
+  const fromStore = () => !!chrome.runtime.getManifest().update_url;
+  // → { ok, latest, current, available, error, at, store }
   async function check(force = false) {
     const current = chrome.runtime.getManifest().version;
+    if (fromStore()) return { ok: true, store: true, latest: current, current, available: false, at: Date.now() };
     const { updateCheck: cached } = await chrome.storage.local.get('updateCheck');
     let r = cached;
     if (force || !r || Date.now() - r.at > EVERY_MS) {
@@ -66,7 +70,7 @@ const LambdaUpdates = (() => {
       `if [ -z "$d" ]; then echo "lambda-os folder not found"; elif [ -d "$d/.git" ]; then git -C "$d" pull; else open "${LINKS.zip}"; open "$d"; echo "${note}"; fi`;
   }
 
-  return { REPO, LINKS, HELP, check, command, newer };
+  return { REPO, LINKS, HELP, check, command, newer, fromStore };
 })();
 
 if (typeof self !== 'undefined') self.LambdaUpdates = LambdaUpdates;
